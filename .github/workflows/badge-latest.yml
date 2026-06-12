@@ -9,6 +9,7 @@ on:
       - Examples - Unsloth
       - Examples - RAG
       - Examples - Claude Code
+      - Examples - Image Restoration Multi-Agent
       - GPU Test
     types: [completed]
 
@@ -36,6 +37,7 @@ jobs:
               { workflow: 'examples-unsloth.yml', label: 'unsloth.latest', variants: ['latest'] },
               { workflow: 'examples-claude-code.yml', label: 'claude-code.latest', variants: ['latest'] },
               { workflow: 'examples-rag.yml', label: 'rag.latest', variants: ['latest'] },
+              { workflow: 'examples-image-restoration-multi-agent.yml', label: 'image-restoration-multi-agent.latest', variants: ['latest'] },
               { workflow: 'tests-full.yml', label: 'tests-full.latest', variants: ['latest'] },
             ];
             await badgeAggregation({ github, context, core, dependencies });

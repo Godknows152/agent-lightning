@@ -1,0 +1,20 @@
+workflow:
+  max_steps: 6
+  max_consecutive_failures: 2
+  no_improvement_limit: 3
+  improvement_epsilon: 0.000001
+  tool_call_cost: 0.01
+  invalid_action_penalty: 1.0
+  failure_penalty: 0.25
+
+tools_config: tools.yaml
+
+experts:
+  fog_expert:
+    tool_registry: all_restoration_tools
+  snow_expert:
+    tool_registry: all_restoration_tools
+  rain_expert:
+    tool_registry: all_restoration_tools
+  low_light_expert:
+    tool_registry: all_restoration_tools

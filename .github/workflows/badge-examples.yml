@@ -12,6 +12,7 @@ on:
       - Examples - Claude Code
       - Examples - RAG
       - Examples - ChartQA
+      - Examples - Image Restoration Multi-Agent
     types: [completed]
 
   workflow_dispatch:
@@ -41,5 +42,6 @@ jobs:
               { workflow: 'examples-claude-code.yml', label: 'examples-claude-code.stable', variants: ['stable'] },
               { workflow: 'examples-rag.yml', label: 'examples-rag.stable', variants: ['stable'] },
               { workflow: 'examples-chartqa.yml', label: 'examples-chartqa.stable', variants: ['stable'] },
+              { workflow: 'examples-image-restoration-multi-agent.yml', label: 'examples-image-restoration-multi-agent.stable', variants: ['stable'] },
             ];
             await badgeAggregation({ github, context, core, dependencies });

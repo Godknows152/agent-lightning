@@ -1,0 +1,67 @@
+name: Examples - Image Restoration Multi-Agent
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # Every day at 7 AM UTC+8
+    - cron: "0 23 * * *"
+
+  workflow_dispatch:
+
+  repository_dispatch:
+    types: [ci-image-restoration-multi-agent, ci-all]
+
+run-name: >-
+  ${{ github.event_name == 'repository_dispatch'
+      && format(
+        'Image Restoration Multi-Agent - PR #{0} - {1} - {2}',
+        github.event.client_payload.pull_number,
+        github.event.client_payload.ci_label,
+        github.event.client_payload.correlation_id
+      )
+      || format('Image Restoration Multi-Agent - {0}', github.event_name) }}
+
+jobs:
+  image-restoration-multi-agent:
+    if: >
+      github.event_name != 'repository_dispatch' ||
+      github.event.action == 'ci-image-restoration-multi-agent' ||
+      github.event.action == 'ci-all'
+    name: Image restoration multi-agent (Python ${{ matrix.python-version }}, ${{ matrix.setup-script }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - python-version: "3.12"
+            setup-script: stable
+          - python-version: "3.13"
+            setup-script: latest
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.pr_ref || (github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number)) || github.ref }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Upgrade dependencies (latest)
+        run: uv lock --upgrade
+        if: matrix.setup-script == 'latest'
+      - name: Sync dependencies
+        run: |
+          uv sync --frozen --no-default-groups \
+            --group dev --group core-stable
+      - name: Check formatting
+        run: uv run --no-sync black --check examples/image_restoration_multi_agent
+      - name: Check types
+        run: uv run --no-sync pyright examples/image_restoration_multi_agent
+      - name: Run unit tests
+        run: uv run --no-sync pytest -q examples/image_restoration_multi_agent/tests
+      - name: Run traced smoke test
+        run: |
+          uv run --no-sync python examples/image_restoration_multi_agent/smoke_test.py \
+            --output-dir /tmp/image-restoration-multi-agent-smoke

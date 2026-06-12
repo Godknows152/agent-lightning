@@ -5,6 +5,8 @@ meta-llama/**
 **/debug/**/*.json
 requirements-freeze*.txt
 /playground
+# Paper PDF (not part of the source)
+agent_lightning_paper.pdf
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

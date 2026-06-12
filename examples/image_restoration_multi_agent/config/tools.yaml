@@ -1,0 +1,8 @@
+registry_name: all_restoration_tools
+tools:
+  - name: restoration_model_a
+    description: Placeholder restoration model used by the deterministic scaffold.
+  - name: restoration_model_b
+    description: Second placeholder restoration model used by the deterministic scaffold.
+  - name: restoration_model_c
+    description: Third placeholder restoration model used by the deterministic scaffold.
