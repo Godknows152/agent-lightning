@@ -215,12 +215,14 @@ class VLMRestorationExpertAgent:
         tool_registry: ToolRegistry,
         *,
         max_steps: int,
+        resource_name: str | None = None,
         client: object | None = None,
     ) -> None:
         self.settings = settings
         self.expert_name = expert_name
         self.tool_registry = tool_registry
         self.max_steps = max_steps
+        self.resource_name = resource_name or expert_name.value
         self.client = cast(
             _OpenAICompatibleClient,
             client
@@ -312,6 +314,7 @@ class VLMRestorationExpertAgent:
             step_index=step_index,
             action=action,
             decision_source=ExpertDecisionSource.VLM,
+            resource_name=self.resource_name,
             parse_status=parse_status,
             api_succeeded=True,
             tool_call_id=tool_call_id,
@@ -344,6 +347,7 @@ class VLMRestorationExpertAgent:
             step_index=step_index,
             action=None,
             decision_source=ExpertDecisionSource.VLM,
+            resource_name=self.resource_name,
             parse_status=status,
             api_succeeded=False,
             validation_status=ValidationStatus.INVALID_TOOL_CALL,

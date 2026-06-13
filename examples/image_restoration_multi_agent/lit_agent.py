@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from agents import ReplayExpertAgent, VLMDegradationDiagnosisAgent, VLMRestorationExpertAgent
-from config import StageEExampleConfig, StageFExampleConfig
+from config import ExpertVLMSettings, StageEExampleConfig, StageFExampleConfig, StageGExampleConfig
 from controller import ExpertAgent
 from factory import DeterministicControllerFactory, RealControllerFactory
 from schemas import (
@@ -219,12 +219,14 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         diagnosis_agent: VLMDegradationDiagnosisAgent,
         *,
         expert_client: object | None = None,
+        result_filename: str = "stage_f_result.json",
     ) -> None:
         super().__init__()
         self.config = config
         self.factory = factory
         self.diagnosis_agent = diagnosis_agent
         self.expert_client = expert_client
+        self.result_filename = result_filename
         self.results: dict[str, StageFWorkflowResult] = {}
 
     def rollout(
@@ -298,7 +300,7 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         )
         if workflow_result.state.final_reward is None:
             raise RuntimeError("controller completed without a final reward")
-        result_path = output_dir / "stage_f_result.json"
+        result_path = output_dir / self.result_filename
         result = StageFWorkflowResult(
             trajectory_id=rollout.rollout_id,
             routing_mode=routing_mode,
@@ -322,7 +324,12 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         expert_mode: ExpertDecisionMode,
     ) -> dict[ExpertName, ExpertAgent]:
         experts: dict[ExpertName, ExpertAgent] = {
-            expert_name: ReplayExpertAgent.from_actions(expert_name, ["stop"], self.factory.tool_registry)
+            expert_name: ReplayExpertAgent.from_actions(
+                expert_name,
+                ["stop"],
+                self.factory.tool_registry,
+                resource_name=self._resource_name(expert_name),
+            )
             for expert_name in ExpertName
         }
         if expert_mode == ExpertDecisionMode.REPLAY:
@@ -330,16 +337,25 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
                 routed_expert,
                 task.scripted_actions,
                 self.factory.tool_registry,
+                resource_name=self._resource_name(routed_expert),
             )
         else:
             experts[routed_expert] = VLMRestorationExpertAgent(
-                self.config.expert_vlm,
+                self._expert_settings(routed_expert),
                 routed_expert,
                 self.factory.tool_registry,
                 max_steps=self.config.workflow.max_steps,
+                resource_name=self._resource_name(routed_expert),
                 client=self.expert_client,
             )
         return experts
+
+    def _resource_name(self, expert_name: ExpertName) -> str:
+        return expert_name.value
+
+    def _expert_settings(self, expert_name: ExpertName) -> ExpertVLMSettings:
+        del expert_name
+        return self.config.expert_vlm
 
     def _finish_diagnosis_failure(
         self,
@@ -360,7 +376,7 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         with agl.operation(name="routing.rejected") as operation:
             operation.set_output(rejection_payload)
             agl.emit_object(rejection_payload, attributes={"restoration.record_type": "routing_decision"})
-        result_path = output_dir / "stage_f_result.json"
+        result_path = output_dir / self.result_filename
         result = StageFWorkflowResult(
             trajectory_id=trajectory_id,
             routing_mode=routing_mode,
@@ -376,3 +392,31 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         result_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
         self.results[trajectory_id] = result
         return final_reward
+
+
+class StageGImageRestorationAgent(StageFImageRestorationAgent):
+    """Run the shared workflow with four independently named expert resources."""
+
+    def __init__(
+        self,
+        config: StageGExampleConfig,
+        factory: RealControllerFactory,
+        diagnosis_agent: VLMDegradationDiagnosisAgent,
+        *,
+        expert_client: object | None = None,
+    ) -> None:
+        super().__init__(
+            config,
+            factory,
+            diagnosis_agent,
+            expert_client=expert_client,
+            result_filename="stage_g_result.json",
+        )
+        self.stage_g_config = config
+
+    def _resource_name(self, expert_name: ExpertName) -> str:
+        return self.stage_g_config.expert_resources[expert_name].resource_name
+
+    def _expert_settings(self, expert_name: ExpertName) -> ExpertVLMSettings:
+        resource = self.stage_g_config.expert_resources[expert_name]
+        return self.stage_g_config.expert_vlm.model_copy(update={"model": resource.served_model_name})

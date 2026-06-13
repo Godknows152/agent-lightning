@@ -20,10 +20,18 @@ from .vlm_expert import parse_expert_response
 class ReplayExpertAgent:
     """Return preconfigured raw Hermes responses after strict parsing."""
 
-    def __init__(self, expert_name: ExpertName, responses: list[str], tool_registry: ToolRegistry) -> None:
+    def __init__(
+        self,
+        expert_name: ExpertName,
+        responses: list[str],
+        tool_registry: ToolRegistry,
+        *,
+        resource_name: str | None = None,
+    ) -> None:
         self.expert_name = expert_name
         self.responses = list(responses)
         self.tool_registry = tool_registry
+        self.resource_name = resource_name or expert_name.value
         self.call_count = 0
 
     @classmethod
@@ -32,10 +40,17 @@ class ReplayExpertAgent:
         expert_name: ExpertName,
         actions: list[str],
         tool_registry: ToolRegistry,
+        *,
+        resource_name: str | None = None,
     ) -> ReplayExpertAgent:
         """Encode actions as raw Hermes calls that still pass through strict parsing."""
 
-        return cls(expert_name, [cls.hermes_response(action) for action in actions], tool_registry)
+        return cls(
+            expert_name,
+            [cls.hermes_response(action) for action in actions],
+            tool_registry,
+            resource_name=resource_name,
+        )
 
     @staticmethod
     def hermes_response(action: str) -> str:
@@ -61,6 +76,7 @@ class ReplayExpertAgent:
             step_index=step_index,
             action=action,
             decision_source=ExpertDecisionSource.REPLAY,
+            resource_name=self.resource_name,
             parse_status=parse_status,
             api_succeeded=True,
             tool_call_id=f"replay-call-{step_index}" if parse_status == ExpertParseStatus.VALID else None,

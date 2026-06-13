@@ -1,6 +1,6 @@
 # Hierarchical Multi-Agent Image Restoration
 
-This example implements stages A-F of the design in `分层多智能体图像修复系统设计草案.md`. It provides validated protocols, a deterministic workflow, Agent Lightning tracing, a real restoration/IQA path isolated in the `verl` conda environment, and GLM-4.1V diagnosis/expert inference served by vLLM.
+This example implements stages A-G of the design in `分层多智能体图像修复系统设计草案.md`. It provides validated protocols, a deterministic workflow, Agent Lightning tracing, a real restoration/IQA path isolated in the `verl` conda environment, and four parallel GLM-4.1V expert interfaces served by vLLM.
 
 ## Current Scope
 
@@ -17,10 +17,12 @@ This example implements stages A-F of the design in `分层多智能体图像修
 - Strict restoration-expert Hermes parsing with raw response, reasoning, token, latency, and error retention.
 - Independent `replay` and `vlm_strict` expert decision modes using the same parser and Controller path.
 - Replay-driven multi-turn tool execution for pre-training feasibility validation.
+- Four unique expert resource names with independent future policy paths and one shared tool schema.
+- Four-category Replay and strict-VLM validation matrices with isolated output directories and traces.
 - Best-image rollback, stop handling, failure limits, and trajectory JSON export.
 - Agent Lightning operation/object spans and exactly one final rollout reward.
 
-SFT, RL, and trained-model task-quality validation remain deferred to later stages. The untrained expert VLM is not expected to select or sequence tools correctly during stage F.
+SFT, RL, and trained-model task-quality validation remain deferred to later stages. The four stage G resource slots currently use the same untrained served model and have `policy_path: null`; they become independent trained policies in stage H.
 
 All four experts receive the same 16 restoration actions: the 12 copied `verl` tools plus NAFNet denoising, FocalNet dehazing/desnowing, and MB-TaylorFormer dehazing. No expert-specific action filtering is applied.
 
@@ -112,6 +114,38 @@ conda run --no-capture-output -n agent-lightning \
 
 Both paths use the same strict parser and Controller. Replay proves that valid Hermes decisions can execute the multi-turn tool/IQA loop; `vlm_strict` records the untrained model's actual response and stops before the Worker when the response is invalid.
 
+## Stage G Four-Expert Matrix
+
+With the vLLM service still running, validate all four Oracle routes with real restoration and IQA models:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 conda run --no-capture-output -n agent-lightning \
+  python examples/image_restoration_multi_agent/stage_g_smoke_test.py \
+  --expert-decision-mode replay \
+  --output-root examples/image_restoration_multi_agent/artifacts/stage_g_replay_real
+```
+
+The default matrix executes:
+
+```text
+fog       -> focalnet_dehaze -> IQA -> stop
+snow      -> focalnet_desnow -> IQA -> stop
+rain      -> turbo_rain      -> IQA -> stop
+low_light -> hvicidnet       -> IQA -> stop
+```
+
+Validate the four real expert interfaces separately from task quality:
+
+```bash
+conda run --no-capture-output -n agent-lightning \
+  python examples/image_restoration_multi_agent/stage_g_smoke_test.py \
+  --expert-decision-mode vlm_strict \
+  --max-tokens 256 \
+  --output-root examples/image_restoration_multi_agent/artifacts/stage_g_vlm_strict
+```
+
+`--max-tokens 256` is a smoke-test override that shortens the known untrained thinking loop. It does not change the checked-in stage G generation setting.
+
 ## Unit Tests
 
 ```bash
@@ -127,6 +161,7 @@ conda run -n agent-lightning \
 | `config/real.yaml` | Stage D subprocess paths, timeouts, devices, IQA normalization ranges, and weights |
 | `config/stage_e.yaml` | vLLM endpoint, generation settings, routing mode, and stage D runtime configuration |
 | `config/stage_f.yaml` | Diagnosis/expert vLLM endpoints, expert decision mode, and real tool runtime configuration |
+| `config/stage_g.yaml` | Four unique expert resources, shared tool/runtime settings, and future policy-path slots |
 | `config/tools.yaml` | Complete real restoration action registry shared by all four experts |
 | `schemas.py` | Strict Pydantic task, decision, result, step, and trajectory contracts |
 | `config.py` | YAML configuration loading and cross-expert consistency validation |
@@ -152,6 +187,7 @@ conda run -n agent-lightning \
 | `serve_glm4v.sh` | vLLM launch command for the local GLM-4.1V checkpoint |
 | `stage_e_smoke_test.py` | Traced real-VLM smoke test for both routing modes |
 | `stage_f_smoke_test.py` | Traced replay/real-VLM expert smoke test with real restoration and IQA components |
+| `stage_g_smoke_test.py` | Four-category Replay or strict-VLM validation matrix with isolated outputs |
 | `tests/` | Protocol, controller, subprocess, IQA, failure-path, VLM parsing, and trace tests |
 
 ## Output Contract
@@ -159,3 +195,5 @@ conda run -n agent-lightning \
 Each stage E run writes `stage_e_result.json`, including the raw diagnosis response, full API response payload, response/model IDs, finish reason, latency, token IDs, parse status, routing source, and optional downstream `WorkflowResult`.
 
 Each stage F run writes `stage_f_result.json`. Every expert turn is retained inside `trajectory.json` with its decision source, parse status, raw response, reasoning content, full response payload, token IDs, selected action, and error. Successful replay runs also create intermediate images. Image content is referenced by path and is never embedded in a trajectory.
+
+Each stage G category writes `stage_g_result.json` and `trajectory.json` under its own `fog/`, `snow/`, `rain/`, or `low_light/` directory. The matrix root also contains `stage_g_replay_matrix.json` or `stage_g_vlm_strict_matrix.json`, including the four expert resource names and per-route results.

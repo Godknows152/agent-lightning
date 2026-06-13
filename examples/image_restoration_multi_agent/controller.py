@@ -312,6 +312,7 @@ class ImageRestorationController:
         ) as operation:
             decision = expert.decide(state)
             if operation is not None:
+                operation.set_input(resource_name=decision.resource_name)
                 payload = decision.model_dump(mode="json")
                 operation.set_output(payload)
                 agl.emit_object(payload, attributes={"restoration.record_type": "expert_decision"})

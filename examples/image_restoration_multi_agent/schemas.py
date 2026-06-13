@@ -166,6 +166,7 @@ class ExpertDecisionRecord(StrictModel):
     step_index: int = Field(ge=0)
     action: str | None = Field(default=None, min_length=1)
     decision_source: ExpertDecisionSource = ExpertDecisionSource.SCRIPTED
+    resource_name: str | None = None
     parse_status: ExpertParseStatus = ExpertParseStatus.VALID
     api_succeeded: bool = True
     tool_call_id: str | None = None

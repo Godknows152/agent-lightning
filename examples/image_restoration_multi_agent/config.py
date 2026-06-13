@@ -132,6 +132,14 @@ class ExpertVLMSettings(VLMEndpointSettings):
     decision_mode: ExpertDecisionMode = ExpertDecisionMode.REPLAY
 
 
+class ExpertResourceConfig(StrictModel):
+    """Independent policy resource reserved for one restoration expert."""
+
+    resource_name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_.-]*$")
+    served_model_name: str = Field(min_length=1)
+    policy_path: str | None = None
+
+
 class StageEExampleConfig(RealExampleConfig):
     """Top-level configuration for real VLM diagnosis and stage D tools."""
 
@@ -142,6 +150,26 @@ class StageFExampleConfig(StageEExampleConfig):
     """Top-level configuration for stage F diagnosis and expert inference."""
 
     expert_vlm: ExpertVLMSettings
+
+
+class StageGExampleConfig(StageFExampleConfig):
+    """Top-level configuration for four parallel restoration experts."""
+
+    expert_resources: dict[ExpertName, ExpertResourceConfig]
+
+    @model_validator(mode="after")
+    def validate_expert_resources(self) -> StageGExampleConfig:
+        expected = set(ExpertName)
+        if set(self.expert_resources) != expected:
+            missing = sorted(item.value for item in expected - set(self.expert_resources))
+            extra = sorted(str(item) for item in set(self.expert_resources) - expected)
+            raise ValueError(
+                f"expert_resources must define exactly four stable experts; missing={missing}, extra={extra}"
+            )
+        resource_names = [resource.resource_name for resource in self.expert_resources.values()]
+        if len(resource_names) != len(set(resource_names)):
+            raise ValueError("each expert must use a unique resource_name")
+        return self
 
 
 def _resolve_runtime_path(config_path: Path, value: str) -> str:
@@ -229,4 +257,29 @@ def load_stage_f_example_config(path: str | Path) -> StageFExampleConfig:
         config_path, config.runtime.evaluator.external_tools_root
     )
     config.runtime.evaluator.iqa_repo = _resolve_runtime_path(config_path, config.runtime.evaluator.iqa_repo)
+    return config
+
+
+def load_stage_g_example_config(path: str | Path) -> StageGExampleConfig:
+    """Load stage G four-expert configuration and resolve local paths."""
+
+    config_path = Path(path).expanduser().resolve()
+    with config_path.open("r", encoding="utf-8") as config_file:
+        payload = yaml.safe_load(config_file)
+    if not isinstance(payload, dict):
+        raise ValueError(f"configuration must be a mapping: {config_path}")
+    config = StageGExampleConfig.model_validate(payload)
+    config.tools_config = _resolve_runtime_path(config_path, config.tools_config)
+    config.runtime.restoration.entrypoint = _resolve_runtime_path(config_path, config.runtime.restoration.entrypoint)
+    config.runtime.restoration.external_tools_root = _resolve_runtime_path(
+        config_path, config.runtime.restoration.external_tools_root
+    )
+    config.runtime.evaluator.entrypoint = _resolve_runtime_path(config_path, config.runtime.evaluator.entrypoint)
+    config.runtime.evaluator.external_tools_root = _resolve_runtime_path(
+        config_path, config.runtime.evaluator.external_tools_root
+    )
+    config.runtime.evaluator.iqa_repo = _resolve_runtime_path(config_path, config.runtime.evaluator.iqa_repo)
+    for resource in config.expert_resources.values():
+        if resource.policy_path is not None:
+            resource.policy_path = _resolve_runtime_path(config_path, resource.policy_path)
     return config
