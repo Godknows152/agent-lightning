@@ -1,0 +1,51 @@
+workflow:
+  max_steps: 6
+  max_consecutive_failures: 2
+  no_improvement_limit: 3
+  improvement_epsilon: 0.000001
+  tool_call_cost: 0.01
+  invalid_action_penalty: 1.0
+  failure_penalty: 0.25
+
+tools_config: tools.yaml
+
+experts:
+  fog_expert:
+    tool_registry: all_restoration_tools
+  snow_expert:
+    tool_registry: all_restoration_tools
+  rain_expert:
+    tool_registry: all_restoration_tools
+  low_light_expert:
+    tool_registry: all_restoration_tools
+
+runtime:
+  restoration:
+    environment_name: verl
+    entrypoint: ../tool_runtime/restoration_entrypoint.py
+    external_tools_root: ../../../External_Tools
+    device: cuda:0
+    timeout_seconds: 600
+  evaluator:
+    environment_name: verl
+    entrypoint: ../tool_runtime/iqa_entrypoint.py
+    external_tools_root: ../../../External_Tools
+    iqa_repo: ../../../External_Tools/iqa_repos/IQA-PyTorch
+    device: cuda:0
+    timeout_seconds: 300
+    metrics:
+      - name: topiq_nr
+        weight: 0.45
+        minimum: 0.0
+        maximum: 1.0
+        higher_is_better: true
+      - name: musiq
+        weight: 0.35
+        minimum: 0.0
+        maximum: 100.0
+        higher_is_better: true
+      - name: niqe
+        weight: 0.20
+        minimum: 0.0
+        maximum: 10.0
+        higher_is_better: false

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from exceptions import UnknownActionError
@@ -14,12 +14,28 @@ STOP_ACTION = "stop"
 RESTORE_FUNCTION_NAME = "restore_image"
 
 
+class ToolRuntime(StrictModel):
+    """Runtime information required by the isolated restoration process."""
+
+    adapter: Literal["verl_toolkit", "candidate"]
+    model: str = Field(min_length=1)
+    repo: str | None = None
+    checkpoint: str | None = None
+
+    @model_validator(mode="after")
+    def validate_candidate_paths(self) -> ToolRuntime:
+        if self.adapter == "candidate" and (not self.repo or not self.checkpoint):
+            raise ValueError("candidate tools require repo and checkpoint paths")
+        return self
+
+
 class ToolDefinition(StrictModel):
     """One registered restoration action."""
 
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     description: str = Field(min_length=1)
     enabled: bool = True
+    runtime: ToolRuntime | None = None
 
     @model_validator(mode="after")
     def reject_reserved_stop(self) -> ToolDefinition:
@@ -83,6 +99,14 @@ class ToolRegistry:
 
         if action not in self.actions:
             raise UnknownActionError(f"unknown restoration action: {action}")
+
+    def get_tool(self, action: str) -> ToolDefinition:
+        """Return one enabled tool definition after validating its action."""
+
+        self.validate_action(action)
+        if action == STOP_ACTION:
+            raise UnknownActionError("stop does not have a restoration runtime")
+        return self._tools[action]
 
     def build_tool_schema(self) -> dict[str, Any]:
         """Build the canonical OpenAI-compatible restore_image tool definition."""

@@ -30,7 +30,7 @@ async def test_lit_agent_records_operations_and_one_final_reward(tmp_path: Path)
     task = {
         "image_path": str(input_path),
         "degradation_type": "fog",
-        "scripted_actions": ["restoration_model_a", "stop"],
+        "scripted_actions": ["scunet", "stop"],
         "score_sequence": [0.4, 0.6],
         "output_dir": str(tmp_path / "run"),
     }
@@ -60,7 +60,7 @@ async def test_lit_agent_records_operations_and_one_final_reward(tmp_path: Path)
     assert {
         "diagnosis_agent.decision",
         "fog_expert.decision",
-        "restoration_worker.restoration_model_a",
+        "restoration_worker.scunet",
         "iqa_evaluator.original",
         "iqa_evaluator.score",
     }.issubset(operation_names)

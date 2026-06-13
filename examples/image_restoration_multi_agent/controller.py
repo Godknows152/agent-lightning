@@ -17,7 +17,7 @@ from schemas import (
     ExpertName,
     RestorationResult,
     RestorationStep,
-    RestorationTask,
+    RestorationTaskBase,
     RestorationTrajectoryState,
     ValidationStatus,
     WorkflowResult,
@@ -95,8 +95,23 @@ class ImageRestorationController:
         self.worker = worker
         self.evaluator = evaluator
 
-    def run(self, task: RestorationTask, *, trajectory_id: str, trace: bool = False) -> WorkflowResult:
-        """Execute one deterministic restoration trajectory and export its state."""
+    def run(
+        self,
+        task: RestorationTaskBase,
+        *,
+        trajectory_id: str,
+        trace: bool = False,
+        diagnosis_override: DiagnosisResult | None = None,
+    ) -> WorkflowResult:
+        """Execute one restoration trajectory and export its state.
+
+        Args:
+            task: Input image and scripted expert actions.
+            trajectory_id: Stable rollout identifier.
+            trace: Whether to emit Agent Lightning operations.
+            diagnosis_override: Precomputed diagnosis, used when stage E has
+                already made and traced the single allowed VLM request.
+        """
 
         input_path = Path(task.image_path).expanduser().resolve()
         if not input_path.is_file():
@@ -104,7 +119,7 @@ class ImageRestorationController:
         output_dir = Path(task.output_dir).expanduser().resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        diagnosis = self._diagnose(str(input_path), trace=trace)
+        diagnosis = diagnosis_override or self._diagnose(str(input_path), trace=trace)
         expert_name = diagnosis.route_to
         expert = self.experts.get(expert_name)
         if expert is None:
@@ -136,7 +151,7 @@ class ImageRestorationController:
         for _ in range(self.settings.max_steps):
             decision = self._decide(expert, state, trace=trace)
             try:
-                self._validate_decision(decision, state)
+                action = self._validate_decision(decision, state)
             except UnknownActionError as error:
                 decision.validation_status = ValidationStatus.UNKNOWN_ACTION
                 state.invalid_action_count += 1
@@ -150,7 +165,7 @@ class ImageRestorationController:
                 self._terminate(state, "invalid_tool_call")
                 break
 
-            if decision.action == STOP_ACTION:
+            if action == STOP_ACTION:
                 state.steps.append(
                     RestorationStep(
                         step_index=decision.step_index,
@@ -168,7 +183,7 @@ class ImageRestorationController:
                 break
 
             state.tool_call_count += 1
-            restoration = self._restore(decision, state, str(output_dir), trace=trace)
+            restoration = self._restore(action, decision, state, str(output_dir), trace=trace)
             if restoration.status != ExecutionStatus.SUCCESS or restoration.output_path is None:
                 state.consecutive_failures += 1
                 state.steps.append(
@@ -176,7 +191,7 @@ class ImageRestorationController:
                         step_index=decision.step_index,
                         expert_name=state.expert_name,
                         expert_decision=decision,
-                        tool_name=decision.action,
+                        tool_name=action,
                         input_image=state.current_image,
                         output_image=None,
                         restoration=restoration,
@@ -206,7 +221,7 @@ class ImageRestorationController:
                         step_index=decision.step_index,
                         expert_name=state.expert_name,
                         expert_decision=decision,
-                        tool_name=decision.action,
+                        tool_name=action,
                         input_image=state.current_image,
                         output_image=restoration.output_path,
                         restoration=restoration,
@@ -238,7 +253,7 @@ class ImageRestorationController:
                     step_index=decision.step_index,
                     expert_name=state.expert_name,
                     expert_decision=decision,
-                    tool_name=decision.action,
+                    tool_name=action,
                     input_image=previous_image,
                     output_image=restoration.output_path,
                     restoration=restoration,
@@ -304,15 +319,16 @@ class ImageRestorationController:
 
     def _restore(
         self,
+        action: str,
         decision: ExpertDecisionRecord,
         state: RestorationTrajectoryState,
         output_dir: str,
         *,
         trace: bool,
     ) -> RestorationResult:
-        with _optional_operation(trace, f"restoration_worker.{decision.action}") as operation:
+        with _optional_operation(trace, f"restoration_worker.{action}") as operation:
             result = self.worker.restore(
-                decision.action,
+                action,
                 state.current_image,
                 output_dir,
                 decision.step_index,
@@ -346,7 +362,11 @@ class ImageRestorationController:
                 agl.emit_object(payload, attributes={"restoration.record_type": "evaluation"})
             return result
 
-    def _validate_decision(self, decision: ExpertDecisionRecord, state: RestorationTrajectoryState) -> None:
+    def _validate_decision(self, decision: ExpertDecisionRecord, state: RestorationTrajectoryState) -> str:
+        if decision.validation_status == ValidationStatus.UNKNOWN_ACTION:
+            raise UnknownActionError(decision.error or "expert selected an unknown action")
+        if decision.validation_status != ValidationStatus.VALID or decision.action is None:
+            raise InvalidToolCallError(decision.error or f"expert response is {decision.parse_status.value}")
         if decision.expert_name != state.expert_name:
             raise InvalidToolCallError(
                 f"expert switched from {state.expert_name.value} to {decision.expert_name.value}"
@@ -356,6 +376,7 @@ class ImageRestorationController:
                 f"decision step_index={decision.step_index} does not match expected {len(state.steps)}"
             )
         self.tool_registry.validate_action(decision.action)
+        return decision.action
 
     def _append_decision_failure(
         self,

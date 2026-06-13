@@ -31,6 +31,25 @@ def test_tool_schema_contains_all_actions_and_stop() -> None:
     assert action_schema["enum"] == list(registry.actions)
     assert action_schema["enum"][-1] == STOP_ACTION
     assert schema["function"]["parameters"]["additionalProperties"] is False
+    assert set(registry.actions[:-1]) == {
+        "real_esrgan",
+        "scunet",
+        "retinexformer_fivek",
+        "hvicidnet",
+        "lightdiff",
+        "turbo_rain",
+        "s2former",
+        "idt",
+        "ridcp",
+        "kanet",
+        "turbo_snow",
+        "snowmaster",
+        "nafnet_denoise",
+        "focalnet_dehaze",
+        "focalnet_desnow",
+        "mb_taylorformer_dehaze",
+    }
+    assert all(registry.get_tool(action).runtime is not None for action in registry.actions[:-1])
 
 
 def test_diagnosis_rejects_mismatched_route() -> None:

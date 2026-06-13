@@ -43,7 +43,7 @@ async def run_smoke_test(output_dir: Path) -> dict[str, Any]:
     task = {
         "image_path": str(input_path),
         "degradation_type": "fog",
-        "scripted_actions": ["restoration_model_a", "restoration_model_b", "stop"],
+        "scripted_actions": ["scunet", "s2former", "stop"],
         "score_sequence": [0.40, 0.55, 0.52],
         "output_dir": str(output_dir / "trajectory"),
     }

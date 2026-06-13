@@ -27,7 +27,7 @@ def test_complete_fixed_expert_workflow_returns_historical_best(tmp_path: Path) 
     task = RestorationTask(
         image_path=str(_input_image(tmp_path)),
         degradation_type=DegradationType.FOG,
-        scripted_actions=["restoration_model_a", "restoration_model_b", "stop"],
+        scripted_actions=["scunet", "s2former", "stop"],
         score_sequence=[0.4, 0.7, 0.5],
         output_dir=str(tmp_path / "run"),
     )
@@ -43,7 +43,7 @@ def test_complete_fixed_expert_workflow_returns_historical_best(tmp_path: Path) 
     assert state.tool_call_count == 2
     assert state.current_evaluation.aggregate_score == 0.5
     assert state.best_evaluation.aggregate_score == 0.7
-    assert state.best_image.endswith("step_000_restoration_model_a.png")
+    assert state.best_image.endswith("step_000_scunet.png")
     assert Path(result.trajectory_path).is_file()
 
 
@@ -71,9 +71,9 @@ def test_consecutive_worker_failures_terminate_without_changing_current_image(tm
     task = RestorationTask(
         image_path=str(input_path),
         degradation_type=DegradationType.SNOW,
-        scripted_actions=["restoration_model_a", "restoration_model_a", "stop"],
+        scripted_actions=["scunet", "scunet", "stop"],
         score_sequence=[0.4],
-        fail_actions=["restoration_model_a"],
+        fail_actions=["scunet"],
         output_dir=str(tmp_path / "run"),
     )
 
@@ -91,7 +91,7 @@ def test_no_improvement_limit_stops_the_loop(tmp_path: Path) -> None:
     task = RestorationTask(
         image_path=str(_input_image(tmp_path)),
         degradation_type=DegradationType.LOW_LIGHT,
-        scripted_actions=["restoration_model_a"] * 5,
+        scripted_actions=["scunet"] * 5,
         score_sequence=[0.5, 0.49, 0.48, 0.47, 0.46],
         output_dir=str(tmp_path / "run"),
     )
@@ -110,7 +110,7 @@ def test_consecutive_evaluation_failures_do_not_replace_current_image(tmp_path: 
     task = RestorationTask(
         image_path=str(input_path),
         degradation_type=DegradationType.RAIN,
-        scripted_actions=["restoration_model_a", "restoration_model_b", "stop"],
+        scripted_actions=["scunet", "s2former", "stop"],
         score_sequence=[0.5],
         fail_evaluation_indices=[1, 2],
         output_dir=str(tmp_path / "run"),
