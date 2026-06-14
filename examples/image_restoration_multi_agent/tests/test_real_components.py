@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import sys
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 
+import evaluators.pyiqa_evaluator as evaluator_module
+import workers.subprocess_worker as worker_module
 from config import EvaluatorSettings, IQAMetricConfig, SubprocessSettings
 from evaluators.pyiqa_evaluator import PyiqaSubprocessEvaluator
 from PIL import Image
 from schemas import ExecutionStatus
 from tool_registry import ToolDefinition, ToolRegistry, ToolRegistryConfig, ToolRuntime
+from tool_runtime.persistent_tool_server import JsonlWorker, JsonlWorkerPool, _handler
+from tool_runtime.service_client import post_json
 from workers import SubprocessRestorationWorker
 
 
@@ -30,6 +36,85 @@ def _registry() -> ToolRegistry:
             ],
         )
     )
+
+
+def test_jsonl_worker_reuses_one_long_lived_process(tmp_path: Path) -> None:
+    worker_script = tmp_path / "persistent_worker.py"
+    worker_script.write_text(
+        "import json, os, sys\n"
+        "print('READY_JSON='+json.dumps({'status':'ready','pid':os.getpid()}), flush=True)\n"
+        "for line in sys.stdin:\n"
+        "    request=json.loads(line)\n"
+        "    print('RESULT_JSON='+json.dumps({'status':'success','request_id':request['request_id'],"
+        "'pid':os.getpid(),'value':request['value']}), flush=True)\n",
+        encoding="utf-8",
+    )
+    worker = JsonlWorker("test", [sys.executable, str(worker_script)])
+    try:
+        first = worker.request({"value": 1})
+        second = worker.request({"value": 2})
+    finally:
+        worker.close()
+
+    assert first["pid"] == worker.ready["pid"]
+    assert second["pid"] == worker.ready["pid"]
+    assert (first["value"], second["value"]) == (1, 2)
+
+
+def test_jsonl_worker_pool_runs_requests_concurrently() -> None:
+    barrier = threading.Barrier(2)
+
+    class FakeWorker:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def request(self, payload: dict[str, object]) -> dict[str, object]:
+            barrier.wait(timeout=2)
+            return {"worker": self.name, **payload}
+
+    workers = [FakeWorker("worker-0"), FakeWorker("worker-1")]
+    pool = JsonlWorkerPool(workers)
+    results: list[dict[str, object]] = []
+
+    def request(value: int) -> None:
+        results.append(pool.request({"value": value}))
+
+    threads = [threading.Thread(target=request, args=(value,)) for value in (1, 2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert {result["worker"] for result in results} == {"worker-0", "worker-1"}
+    assert {result["value"] for result in results} == {1, 2}
+
+
+def test_persistent_service_http_protocol() -> None:
+    class FakeRuntime:
+        def restore(self, payload):
+            return {"status": "success", "action": payload["action"]}
+
+        def evaluate(self, payload):
+            return {"status": "success", "image_path": payload["image_path"]}
+
+        def health(self):
+            return {"status": "ready"}
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(FakeRuntime()))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        restoration = post_json(base_url, "/restore", {"action": "scunet"}, 2)
+        evaluation = post_json(base_url, "/evaluate", {"image_path": "/tmp/image.png"}, 2)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert restoration == {"status": "success", "action": "scunet"}
+    assert evaluation == {"status": "success", "image_path": "/tmp/image.png"}
 
 
 def test_subprocess_worker_publishes_only_valid_images(tmp_path: Path) -> None:
@@ -93,6 +178,40 @@ def test_subprocess_worker_rejects_and_cleans_corrupt_output(tmp_path: Path) -> 
     assert not list((tmp_path / "output").glob("*.partial.png"))
 
 
+def test_restoration_worker_uses_persistent_service(monkeypatch, tmp_path: Path) -> None:
+    input_path = tmp_path / "input.png"
+    entrypoint = tmp_path / "worker.py"
+    _write_image(input_path)
+    entrypoint.touch()
+
+    def fake_post_json(base_url: str, endpoint: str, payload: dict[str, object], timeout: float):
+        assert base_url == "http://127.0.0.1:8767"
+        assert endpoint == "/restore"
+        assert payload["action"] == "test_tool"
+        assert timeout == 5
+        Path(str(payload["output_path"])).write_bytes(input_path.read_bytes())
+        return {"status": "success", "model": "test_model", "persistent": True}
+
+    monkeypatch.setattr(worker_module, "post_json", fake_post_json)
+    settings = SubprocessSettings(
+        python_executable=sys.executable,
+        service_url="http://127.0.0.1:8767",
+        entrypoint=str(entrypoint),
+        external_tools_root=str(tmp_path),
+        device="cuda:1",
+        timeout_seconds=5,
+    )
+
+    result = SubprocessRestorationWorker(settings, _registry()).restore(
+        "test_tool", str(input_path), str(tmp_path / "output"), 0
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.metadata["persistent"] is True
+    assert result.metadata["device"] == "cuda:1"
+    assert result.metadata["service_url"] == "http://127.0.0.1:8767"
+
+
 def test_pyiqa_evaluator_normalizes_and_aggregates_metrics(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     _write_image(input_path)
@@ -127,6 +246,42 @@ def test_pyiqa_evaluator_normalizes_and_aggregates_metrics(tmp_path: Path) -> No
     assert result.is_new_best is True
 
 
+def test_pyiqa_evaluator_uses_persistent_service(monkeypatch, tmp_path: Path) -> None:
+    input_path = tmp_path / "input.png"
+    entrypoint = tmp_path / "iqa.py"
+    _write_image(input_path)
+    entrypoint.touch()
+
+    def fake_post_json(base_url: str, endpoint: str, payload: dict[str, object], timeout: float):
+        assert base_url == "http://127.0.0.1:8767"
+        assert endpoint == "/evaluate"
+        assert payload["image_path"] == str(input_path.resolve())
+        assert timeout == 5
+        return {"status": "success", "raw_scores": {"maniqa": 0.75}, "persistent": True}
+
+    monkeypatch.setattr(evaluator_module, "post_json", fake_post_json)
+    settings = EvaluatorSettings(
+        python_executable=sys.executable,
+        service_url="http://127.0.0.1:8767",
+        entrypoint=str(entrypoint),
+        external_tools_root=str(tmp_path),
+        iqa_repo=str(tmp_path),
+        device="cuda:0",
+        timeout_seconds=5,
+        metrics=[IQAMetricConfig(name="maniqa", weight=1, minimum=0, maximum=1)],
+    )
+
+    result = PyiqaSubprocessEvaluator(settings, improvement_epsilon=1e-6).evaluate(
+        str(input_path), previous_score=0.5, original_score=0.5, best_score=0.5
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    assert result.aggregate_score == 0.75
+    assert result.metadata["persistent"] is True
+    assert result.metadata["device"] == "cuda:0"
+    assert result.metadata["service_url"] == "http://127.0.0.1:8767"
+
+
 def test_pyiqa_evaluator_failure_has_zero_gain(tmp_path: Path) -> None:
     input_path = tmp_path / "input.png"
     _write_image(input_path)
@@ -146,3 +301,42 @@ def test_pyiqa_evaluator_failure_has_zero_gain(tmp_path: Path) -> None:
     assert result.aggregate_score == 0.6
     assert result.delta_from_previous == 0.0
     assert result.is_new_best is False
+
+
+def test_pyiqa_evaluator_applies_calibrated_direction_and_zscore(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.png"
+    _write_image(input_path)
+    entrypoint = tmp_path / "iqa.py"
+    entrypoint.write_text(
+        "import json\n"
+        "print('RESULT_JSON='+json.dumps({'status':'success','raw_scores':"
+        "{'maniqa':0.6,'niqe':2.0}}))\n",
+        encoding="utf-8",
+    )
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(
+        '{"metrics":{'
+        '"maniqa":{"raw_transform":"identity","mean":0.5,"std":0.1,"weight":0.25},'
+        '"niqe":{"raw_transform":"negate","mean":-4.0,"std":2.0,"weight":0.75}'
+        "}}",
+        encoding="utf-8",
+    )
+    settings = EvaluatorSettings(
+        python_executable=sys.executable,
+        entrypoint=str(entrypoint),
+        external_tools_root=str(tmp_path),
+        iqa_repo=str(tmp_path),
+        device="cpu",
+        timeout_seconds=5,
+        reward_calibration_path=str(calibration),
+    )
+
+    result = PyiqaSubprocessEvaluator(settings, improvement_epsilon=1e-6).evaluate(
+        str(input_path), previous_score=0.0, original_score=0.0, best_score=0.0
+    )
+
+    assert result.status == ExecutionStatus.SUCCESS
+    assert abs(result.normalized_scores["maniqa"] - 1.0) < 1e-9
+    assert abs(result.normalized_scores["niqe"] - 1.0) < 1e-9
+    assert abs(result.aggregate_score - 1.0) < 1e-9
+    assert result.metadata["normalization_mode"] == "zscore"

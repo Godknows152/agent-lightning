@@ -72,6 +72,10 @@ def run_ppo(
                 "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
             },
             num_cpus=num_cpus,
+            # Agent Lightning already exposes training metrics through the
+            # configured experiment logger. Avoid starting Ray's optional
+            # dashboard and MetricsHead subprocesses on training nodes.
+            include_dashboard=False,
         )
 
     runner = TaskRunner.remote()
@@ -125,13 +129,19 @@ class TaskRunner:
         if config.actor_rollout_ref.actor.strategy in ["fsdp", "fsdp2"]:
             assert config.critic.strategy in ["fsdp", "fsdp2"]
             from verl.single_controller.ray import RayWorkerGroup
-            from verl.workers.fsdp_workers import ActorRolloutRefWorker, AsyncActorRolloutRefWorker, CriticWorker
+            from verl.workers.fsdp_workers import CriticWorker
+
+            from .compat import (
+                AgentLightningActorRolloutRefWorker,
+                AgentLightningAsyncActorRolloutRefWorker,
+            )
 
             actor_rollout_cls = (
-                AsyncActorRolloutRefWorker
+                AgentLightningAsyncActorRolloutRefWorker
                 if config.actor_rollout_ref.rollout.mode == "async"
-                else ActorRolloutRefWorker
+                else AgentLightningActorRolloutRefWorker
             )
+            reference_policy_cls = AgentLightningActorRolloutRefWorker
             ray_worker_group_cls = RayWorkerGroup
 
         elif config.actor_rollout_ref.actor.strategy == "megatron":
@@ -141,6 +151,7 @@ class TaskRunner:
             from verl.workers.megatron_workers import ActorRolloutRefWorker, CriticWorker
 
             actor_rollout_cls = ActorRolloutRefWorker
+            reference_policy_cls = ActorRolloutRefWorker
             ray_worker_group_cls = NVMegatronRayWorkerGroup
 
         else:
@@ -187,7 +198,7 @@ class TaskRunner:
 
         # use reference model
         if config.algorithm.use_kl_in_reward or config.actor_rollout_ref.actor.use_kl_loss:
-            role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
+            role_worker_mapping[Role.RefPolicy] = ray.remote(reference_policy_cls)
             mapping[Role.RefPolicy] = global_pool_id
 
         reward_fn = load_reward_manager(

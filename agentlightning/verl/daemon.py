@@ -298,7 +298,7 @@ class AgentModeDaemon:
         if self.processor is None or not hasattr(self.processor, "image_processor"):
             return False
         name = self.processor.image_processor.__class__.__name__
-        return "Qwen2VLImageProcessor" in name or "Qwen3VLImageProcessor" in name
+        return "Qwen2VLImageProcessor" in name or "Qwen3VLImageProcessor" in name or "Glm4vImageProcessor" in name
 
     def _resolve_image_path(self, path: str) -> str:
         """Resolve relative image path with base directory."""
@@ -310,8 +310,8 @@ class AgentModeDaemon:
             raise ValueError(f"Relative path '{path}' requires 'image_base_dir' to be set.")
         return os.path.join(self.image_base_dir, path)
 
-    def _get_image_grid_thw(self, image_urls: List[str]) -> Optional[torch.Tensor]:
-        """Compute image_grid_thw from image URLs for M-RoPE computation.
+    def _get_multi_modal_inputs(self, image_urls: List[str]) -> Optional[Dict[str, torch.Tensor]]:
+        """Build the vision tensors required by the actor/ref forward pass.
 
         Args:
             image_urls: List of image URLs extracted from triplet prompt payload.
@@ -332,8 +332,8 @@ class AgentModeDaemon:
             return f"file://{resolved}"
 
         images: List[Image.Image] = [process_image({"image": to_image_uri(url)}) for url in image_urls]
-        model_inputs = self.processor(text=["dummy"], images=images, return_tensors="pt")
-        return model_inputs.get("image_grid_thw")
+        model_inputs = self.processor.image_processor(images=images, return_tensors="pt")
+        return {key: value for key, value in dict(model_inputs).items() if isinstance(value, torch.Tensor)}
 
     def _compute_mrope_position_ids(
         self,
@@ -347,6 +347,8 @@ class AgentModeDaemon:
         get_rope_index: Callable[..., torch.Tensor]
         if "Qwen3VL" in self.processor.__class__.__name__:
             from verl.models.transformers.qwen3_vl import get_rope_index  # pyright: ignore[reportUnknownVariableType]
+        elif "Glm4v" in self.processor.__class__.__name__:
+            from verl.models.transformers.glm4v import get_rope_index  # pyright: ignore[reportUnknownVariableType]
         else:
             from verl.models.transformers.qwen2_vl import get_rope_index  # pyright: ignore[reportUnknownVariableType]
 
@@ -672,6 +674,7 @@ class AgentModeDaemon:
 
     async def _async_run_until_finished(self, verbose: bool = True):
         """Async helper to wait for all tasks to complete."""
+        last_reported_completed = -1
         while len(self._completed_rollouts_v0) < self._total_tasks_queued:
             if self.mode == "v0":
                 completed_batch = await self.server.retrieve_completed_rollouts()
@@ -691,10 +694,14 @@ class AgentModeDaemon:
                     print(f"Warning: Received unknown rollout ID {rollout.rollout_id}, skipping.")
                 else:
                     self._completed_rollouts_v0[rollout.rollout_id] = rollout
-            if verbose:
+            completed_count = len(self._completed_rollouts_v0)
+            if verbose and completed_count != last_reported_completed:
                 print(f"Completed {len(self._completed_rollouts_v0)}/{self._total_tasks_queued} tasks...")
+                last_reported_completed = completed_count
             await asyncio.sleep(5)
 
+        if verbose and last_reported_completed != self._total_tasks_queued:
+            print(f"Completed {self._total_tasks_queued}/{self._total_tasks_queued} tasks...")
         print("All tasks finished.")
 
     def run_until_all_finished(self, verbose: bool = True):
@@ -870,9 +877,12 @@ class AgentModeDaemon:
         turn_index_list: List[int] = []
         is_drop_list: List[bool] = []
         image_grid_thw_list: List[Optional[torch.Tensor]] = []  # For Qwen2-VL mrope
+        multi_modal_inputs_list: List[Dict[str, torch.Tensor]] = []
+        image_count_list: List[int] = []
         n_trunc_sample_because_of_response = 0
 
-        if self.trace_aggregator.get("level", "transition") == "transition":
+        aggregation_level = self.trace_aggregator.get("level", "transition")
+        if aggregation_level in {"transition", "trajectory_transition"}:
             for rollout_id, sample_info in finished_id_to_sample_info.items():
                 for turn_index, trace in enumerate(sample_info["trace_list"]):
 
@@ -907,14 +917,16 @@ class AgentModeDaemon:
                     rollout_id_list.append(rollout_id)
                     turn_index_list.append(turn_index)
 
-                    # Compute image_grid_thw for this triplet using image_urls from prompt
+                    image_urls = trace.get("image_urls", [])
+                    image_count_list.append(len(image_urls))
+                    multi_modal_inputs = self._get_multi_modal_inputs(image_urls)
+                    multi_modal_inputs_list.append(multi_modal_inputs or {})
                     if self._use_mrope:
-                        image_urls = trace.get("image_urls", [])
-                        image_grid_thw_list.append(self._get_image_grid_thw(image_urls))
+                        image_grid_thw_list.append(
+                            multi_modal_inputs.get("image_grid_thw") if multi_modal_inputs else None
+                        )
 
-        elif self.trace_aggregator.get("level", "transition") == "trajectory":
-            assert not self._use_mrope, "M-RoPE is not supported in trajectory level yet."
-
+        elif aggregation_level == "trajectory":
             response_mask_list: List[List[int]] = []
             unmerged_count: int = 0
             template_mismatch_count, retoken_mismatch_count, others_mismatch_count = 0, 0, 0
@@ -1019,9 +1031,17 @@ class AgentModeDaemon:
                     response_mask_list.append(one_response_mask)
                     data_id_list.append(sample_info["data_id"])
                     rollout_id_list.append(rollout_id)
+                    image_urls = sample_info["trace_list"][current_merged_trace_idx[-1]].get("image_urls", [])
+                    image_count_list.append(len(image_urls))
+                    multi_modal_inputs = self._get_multi_modal_inputs(image_urls)
+                    multi_modal_inputs_list.append(multi_modal_inputs or {})
+                    if self._use_mrope:
+                        image_grid_thw_list.append(
+                            multi_modal_inputs.get("image_grid_thw") if multi_modal_inputs else None
+                        )
                     # turn_index_list.append(current_merged_trace_idx)
         else:
-            raise ValueError(f"Unknown trace_aggregator level: {self.trace_aggregator.get('level')}")
+            raise ValueError(f"Unknown trace_aggregator level: {aggregation_level}")
 
         n_transition = len(input_ids_list)
         batch_input_ids = torch.LongTensor(input_ids_list).to(device)
@@ -1029,7 +1049,7 @@ class AgentModeDaemon:
         batch_response_ids = torch.LongTensor(response_ids_list).to(device)
         response_attention_mask = torch.LongTensor(response_attention_mask_list).to(device)
         response_mask = (
-            torch.LongTensor(response_mask_list).to(device) if self.trace_aggregator.get("level", "transition") == "trajectory" else None  # type: ignore
+            torch.LongTensor(response_mask_list).to(device) if aggregation_level == "trajectory" else None  # type: ignore
         )
 
         # Concatenate prompts and responses to form the full sequence
@@ -1081,11 +1101,7 @@ class AgentModeDaemon:
                 "position_ids": position_ids,
                 "is_drop_mask": is_drop_mask,
                 "token_level_scores": token_level_scores.contiguous(),
-                **(
-                    {"response_mask": response_mask}
-                    if self.trace_aggregator.get("level", "transition") == "trajectory"
-                    else {}
-                ),
+                **({"response_mask": response_mask} if aggregation_level == "trajectory" else {}),
             },  # type: ignore
             batch_size=n_transition,
         )
@@ -1107,7 +1123,20 @@ class AgentModeDaemon:
                     "training/max_response_length_by_turn": np.max(response_per_turn_list),  # type: ignore
                     "training/min_response_length_by_turn": np.min(response_per_turn_list),  # type: ignore
                 }
-                if self.trace_aggregator.get("level", "transition") == "trajectory"
+                if aggregation_level == "trajectory"
+                else {}
+            ),
+            **(
+                {
+                    "training/n_trajectory_transition_rollouts": len(finished_id_to_sample_info),
+                    "training/n_triplets_by_turn": n_transition,
+                    "training/avg_turns_per_rollout": (
+                        n_transition / len(finished_id_to_sample_info) if finished_id_to_sample_info else 0.0
+                    ),
+                    "training/avg_images_per_transition": np.mean(image_count_list) if image_count_list else 0.0,
+                    "training/max_images_per_transition": max(image_count_list, default=0),
+                }
+                if aggregation_level == "trajectory_transition"
                 else {}
             ),
             **(
@@ -1119,8 +1148,7 @@ class AgentModeDaemon:
                     "training/retoken_mismatch_ratio": retoken_mismatch_count / len(response_per_turn_list),  # type: ignore
                     "training/others_mismatch_ratio": others_mismatch_count / len(response_per_turn_list),  # type: ignore
                 }
-                if self.trace_aggregator.get("level", "transition") == "trajectory"
-                and self.trace_aggregator.get("debug", False)
+                if aggregation_level == "trajectory" and self.trace_aggregator.get("debug", False)
                 else {}
             ),
         }
@@ -1128,7 +1156,12 @@ class AgentModeDaemon:
         # Add non-tensor data for advantage calculation and logging
         data_proto.non_tensor_batch["data_id_list"] = np.array(data_id_list)  # type: ignore
         data_proto.non_tensor_batch["rollout_id_list"] = np.array(rollout_id_list)  # type: ignore
-        if self.trace_aggregator.get("level", "transition") == "transition":
+        if any(multi_modal_inputs_list):
+            data_proto.non_tensor_batch["multi_modal_inputs"] = np.array(
+                multi_modal_inputs_list,
+                dtype=object,
+            )
+        if aggregation_level in {"transition", "trajectory_transition"}:
             data_proto.non_tensor_batch["turn_index_list"] = np.array(turn_index_list)  # type: ignore
 
         return data_proto, data_metrics

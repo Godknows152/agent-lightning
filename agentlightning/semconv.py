@@ -104,6 +104,9 @@ class LightningSpanAttributes(Enum):
     OPERATION_OUTPUT = "agentlightning.operation.output"
     """Attribute name for operation output in operation spans."""
 
+    PROMPT_IMAGE_URLS = "agentlightning.prompt.image_urls"
+    """Image URLs associated with the next model prompt in a rollout."""
+
 
 class RewardAttributes(Enum):
     """Multi-dimensional reward attributes will look like:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -188,11 +189,13 @@ def test_parse_expert_response_statuses(raw_response: str, expected_status: Expe
     assert (action is not None) is (expected_status == ExpertParseStatus.VALID)
 
 
-def test_vlm_expert_calls_once_and_includes_history_and_iqa(tmp_path: Path) -> None:
+def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path) -> None:
     config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
     client = _FakeClient(None, _parsed_tool_call("scunet"))
-    image_path = tmp_path / "current.png"
-    image_path.write_bytes(b"image-bytes")
+    history_image_path = tmp_path / "history.png"
+    history_image_path.write_bytes(b"history-image")
+    latest_image_path = tmp_path / "latest.png"
+    latest_image_path.write_bytes(b"latest-image")
     agent = VLMRestorationExpertAgent(
         config.expert_vlm,
         ExpertName.FOG,
@@ -201,7 +204,9 @@ def test_vlm_expert_calls_once_and_includes_history_and_iqa(tmp_path: Path) -> N
         client=client,
     )
 
-    decision = agent.decide(_state(image_path, with_history=True))
+    state = _state(history_image_path, with_history=True)
+    state.current_image = str(latest_image_path)
+    decision = agent.decide(state)
 
     assert client.completions.call_count == 1
     assert decision.parse_status == ExpertParseStatus.VALID
@@ -213,9 +218,23 @@ def test_vlm_expert_calls_once_and_includes_history_and_iqa(tmp_path: Path) -> N
     assert request["tool_choice"] == "auto"
     assert request["tools"] == [_registry().build_tool_schema()]
     messages = request["messages"]
-    assert any(message.get("role") == "tool" and "quality improved" in message["content"] for message in messages)
+    image_parts = [
+        part
+        for message in messages
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    ]
+    assert len(messages) == 2
+    assert len(image_parts) == 1
+    image_url = image_parts[0]["image_url"]["url"]
+    assert image_url.startswith("data:image/png;base64,")
+    assert base64.b64decode(image_url.split(",", 1)[1]) == b"latest-image"
     assert "current_aggregate_score: 0.500000" in str(messages[-1])
-    assert "data:image/png;base64" in str(messages[-1])
+    assert '"action":"scunet"' in str(messages[-1])
+    assert '"raw_scores":{"mock":0.5}' in str(messages[-1])
+    assert '"step_reward":0.1' in str(messages[-1])
+    assert '"feedback":"quality improved"' in str(messages[-1])
 
 
 def test_replay_uses_strict_parser_and_completes_multistep_controller(tmp_path: Path) -> None:

@@ -91,6 +91,7 @@ class ExpertDecisionSource(str, Enum):
     SCRIPTED = "scripted"
     REPLAY = "replay"
     VLM = "vlm"
+    SMOKE_OVERRIDE = "smoke_override"
 
 
 class ExpertDecisionMode(str, Enum):
@@ -172,6 +173,7 @@ class ExpertDecisionRecord(StrictModel):
     tool_call_id: str | None = None
     llm_response_id: str | None = None
     validation_status: ValidationStatus = ValidationStatus.VALID
+    prompt_text: str | None = None
     raw_assistant_output: str | None = None
     reasoning_content: str | None = None
     parsed_payload: dict[str, Any] | None = None
@@ -248,6 +250,7 @@ class RestorationStep(StrictModel):
     restoration: RestorationResult | None = None
     evaluation: EvaluationResult | None = None
     step_reward: float = 0.0
+    reward_components: dict[str, float] = Field(default_factory=dict)
     success: bool
     latency_seconds: float = Field(ge=0.0)
     error: str | None = None
@@ -333,6 +336,16 @@ class StageFRestorationTask(VLMRestorationTask):
     """Input accepted by stage F diagnosis and expert inference."""
 
     expert_decision_mode: ExpertDecisionMode | None = None
+
+
+class GRPORestorationTask(StrictModel):
+    """Image-only seed task used by one expert's GRPO rollout."""
+
+    sample_id: str = Field(min_length=1)
+    image_path: str
+    degradation_type: DegradationType
+    output_root: str
+    visual_evidence: list[str] = Field(default_factory=list)
 
 
 class WorkflowResult(StrictModel):

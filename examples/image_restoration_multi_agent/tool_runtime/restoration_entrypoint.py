@@ -23,6 +23,7 @@ from torchvision.io import write_png
 from torchvision.transforms.functional import pil_to_tensor
 
 RESULT_PREFIX = "RESULT_JSON="
+READY_PREFIX = "READY_JSON="
 
 
 class RestorationToolkitInstance(Protocol):
@@ -118,6 +119,16 @@ def _run_candidate(
     output_path: Path,
     device: torch.device,
 ) -> None:
+    model = _load_candidate_model(model_name, repo, checkpoint, device)
+    _run_loaded_candidate(model_name, model, input_path, output_path, device)
+
+
+def _load_candidate_model(
+    model_name: str,
+    repo: Path,
+    checkpoint: Path,
+    device: torch.device,
+) -> torch.nn.Module:
     if model_name == "nafnet_denoise":
         model = _load_nafnet(repo, checkpoint)
     elif model_name in {"focal_dehaze", "focal_desnow"}:
@@ -126,8 +137,16 @@ def _run_candidate(
         model = _load_mb_taylorformer(repo, checkpoint)
     else:
         raise ValueError(f"unsupported candidate model: {model_name}")
+    return model.eval().to(device)
 
-    model = model.eval().to(device)
+
+def _run_loaded_candidate(
+    model_name: str,
+    model: torch.nn.Module,
+    input_path: Path,
+    output_path: Path,
+    device: torch.device,
+) -> None:
     image = _load_image(input_path, device)
     original_height, original_width = image.shape[-2:]
     if model_name.startswith("focal_"):
@@ -143,13 +162,14 @@ def _run_candidate(
     _save_image(restored, output_path)
 
 
-def _run_verl_toolkit(
-    model_name: str,
+def _load_verl_toolkit(
+    model_names: list[str],
     external_tools_root: Path,
-    input_path: Path,
-    output_path: Path,
     device: torch.device,
-) -> None:
+    *,
+    preload: bool,
+    auto_unload: bool,
+) -> RestorationToolkitInstance:
     bundle = external_tools_root / "verl_bundle"
     agent_tools_dir = bundle / "agent_tools"
     source_directories = {
@@ -161,8 +181,10 @@ def _run_verl_toolkit(
         "turbo_snow": "img2img_turbo",
     }
     sys.path.insert(0, str(bundle))
-    selected_source = source_directories.get(model_name)
-    if selected_source:
+    selected_sources = list(
+        dict.fromkeys(source_directories[name] for name in model_names if name in source_directories)
+    )
+    for selected_source in selected_sources:
         source_dir = agent_tools_dir / selected_source
         sys.path.insert(0, str(source_dir))
         if (source_dir / "src").is_dir():
@@ -171,14 +193,25 @@ def _run_verl_toolkit(
     toolkit_module = importlib.import_module("agent_tools.restoration_toolkit")
     toolkit_factory = cast(RestorationToolkitFactory, getattr(toolkit_module, "RestorationToolkit"))
     toolkit = toolkit_factory(
-        models=[model_name],
+        models=model_names,
         device=str(device),
         load_iqa=False,
-        preload=False,
-        auto_unload=True,
+        preload=preload,
+        auto_unload=auto_unload,
     )
-    if toolkit.load_single_model(model_name) is None:
-        raise RuntimeError(f"failed to load verl restoration model: {model_name}")
+    missing = [model_name for model_name in model_names if toolkit.load_single_model(model_name) is None]
+    if missing:
+        raise RuntimeError(f"failed to load verl restoration models: {missing}")
+    return toolkit
+
+
+def _run_loaded_verl_toolkit(
+    toolkit: RestorationToolkitInstance,
+    model_name: str,
+    input_path: Path,
+    output_path: Path,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f"{model_name}-", dir=output_path.parent) as temporary_dir:
         generated = Path(toolkit.process_image_with_models([model_name], str(input_path), temporary_dir)).resolve()
         if not generated.is_file():
@@ -187,39 +220,161 @@ def _run_verl_toolkit(
         shutil.copy2(generated, output_path)
 
 
+def _run_verl_toolkit(
+    model_name: str,
+    external_tools_root: Path,
+    input_path: Path,
+    output_path: Path,
+    device: torch.device,
+) -> None:
+    toolkit = _load_verl_toolkit(
+        [model_name],
+        external_tools_root,
+        device,
+        preload=False,
+        auto_unload=True,
+    )
+    _run_loaded_verl_toolkit(toolkit, model_name, input_path, output_path)
+
+
+def _emit(prefix: str, payload: dict[str, object]) -> None:
+    try:
+        print(f"{prefix}{json.dumps(payload, separators=(',', ':'))}", flush=True)
+    except BrokenPipeError:
+        sys.exit(0)
+
+
+def _serve_jsonl(
+    *,
+    adapter: str,
+    model_names: list[str],
+    external_tools_root: Path,
+    repo: Path | None,
+    checkpoint: Path | None,
+    device: torch.device,
+) -> None:
+    if adapter == "verl_toolkit":
+        toolkit = _load_verl_toolkit(
+            model_names,
+            external_tools_root,
+            device,
+            preload=True,
+            auto_unload=False,
+        )
+        candidate_model = None
+    else:
+        if len(model_names) != 1 or repo is None or checkpoint is None:
+            raise ValueError("persistent candidate worker requires one model, --repo, and --checkpoint")
+        toolkit = None
+        candidate_model = _load_candidate_model(model_names[0], repo, checkpoint, device)
+
+    torch.cuda.synchronize(device)
+    _emit(
+        READY_PREFIX,
+        {
+            "status": "ready",
+            "adapter": adapter,
+            "models": model_names,
+            "device": str(device),
+            "peak_cuda_mb": torch.cuda.max_memory_allocated(device) / 1024**2,
+        },
+    )
+    for line in sys.stdin:
+        if not line.strip():
+            continue
+        request_id: object = None
+        try:
+            request = json.loads(line)
+            request_id = request.get("request_id")
+            model_name = str(request["model"])
+            if model_name not in model_names:
+                raise ValueError(f"model is not loaded by this worker: {model_name}")
+            input_path = Path(request["input"]).expanduser().resolve()
+            output_path = Path(request["output"]).expanduser().resolve()
+            started = time.perf_counter()
+            if toolkit is not None:
+                _run_loaded_verl_toolkit(toolkit, model_name, input_path, output_path)
+            else:
+                assert candidate_model is not None
+                _run_loaded_candidate(model_name, candidate_model, input_path, output_path, device)
+            torch.cuda.synchronize(device)
+            _emit(
+                RESULT_PREFIX,
+                {
+                    "request_id": request_id,
+                    "status": "success",
+                    "adapter": adapter,
+                    "model": model_name,
+                    "output_path": str(output_path),
+                    "inference_seconds": time.perf_counter() - started,
+                    "peak_cuda_mb": torch.cuda.max_memory_allocated(device) / 1024**2,
+                    "torch_version": torch.__version__,
+                },
+            )
+        except Exception as error:
+            _emit(
+                RESULT_PREFIX,
+                {
+                    "request_id": request_id,
+                    "status": "failed",
+                    "error": f"{type(error).__name__}: {error}",
+                },
+            )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--adapter", required=True, choices=["verl_toolkit", "candidate"])
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model")
+    parser.add_argument("--models")
     parser.add_argument("--external-tools-root", type=Path, required=True)
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--checkpoint", type=Path)
-    parser.add_argument("--input", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--input", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument("--serve-jsonl", action="store_true")
     args = parser.parse_args()
 
     external_tools_root = args.external_tools_root.expanduser().resolve()
     local_packages = external_tools_root / "python_packages"
     if local_packages.is_dir():
         sys.path.insert(0, str(local_packages))
-    input_path = args.input.expanduser().resolve()
-    output_path = args.output.expanduser().resolve()
     device = torch.device(args.device)
     torch.cuda.set_device(device)
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
+    model_names = [item.strip() for item in (args.models or args.model or "").split(",") if item.strip()]
+    if not model_names:
+        raise ValueError("--model or --models must specify at least one model")
+    repo = args.repo.expanduser().resolve() if args.repo is not None else None
+    checkpoint = args.checkpoint.expanduser().resolve() if args.checkpoint is not None else None
+    if args.serve_jsonl:
+        _serve_jsonl(
+            adapter=args.adapter,
+            model_names=model_names,
+            external_tools_root=external_tools_root,
+            repo=repo,
+            checkpoint=checkpoint,
+            device=device,
+        )
+        return
+    if len(model_names) != 1 or args.input is None or args.output is None:
+        raise ValueError("one-shot mode requires one model, --input, and --output")
 
+    input_path = args.input.expanduser().resolve()
+    output_path = args.output.expanduser().resolve()
+    model_name = model_names[0]
     started = time.perf_counter()
     if args.adapter == "verl_toolkit":
-        _run_verl_toolkit(args.model, external_tools_root, input_path, output_path, device)
+        _run_verl_toolkit(model_name, external_tools_root, input_path, output_path, device)
     else:
-        if args.repo is None or args.checkpoint is None:
+        if repo is None or checkpoint is None:
             raise ValueError("candidate adapter requires --repo and --checkpoint")
         _run_candidate(
-            args.model,
-            args.repo.expanduser().resolve(),
-            args.checkpoint.expanduser().resolve(),
+            model_name,
+            repo,
+            checkpoint,
             input_path,
             output_path,
             device,
@@ -228,7 +383,7 @@ def main() -> None:
     result = {
         "status": "success",
         "adapter": args.adapter,
-        "model": args.model,
+        "model": model_name,
         "output_path": str(output_path),
         "inference_seconds": time.perf_counter() - started,
         "peak_cuda_mb": torch.cuda.max_memory_allocated(device) / 1024**2,

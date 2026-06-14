@@ -686,6 +686,27 @@ def test_extract_prompt_image_urls_handles_numeric_dict_keys():
     assert image_urls == ["https://example.com/first.png", "https://example.com/second.png"]
 
 
+def test_extract_prompt_image_urls_handles_flattened_numeric_content_keys():
+    tree = make_trace_tree_root()
+    prompt_raw_content = {
+        "0": {"role": "system", "content": "system prompt"},
+        "1": {
+            "role": "user",
+            "content": {
+                "0": {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,AAAA"},
+                },
+                "1": {"type": "text", "text": "choose an action"},
+            },
+        },
+    }
+
+    image_urls = tree.extract_prompt_image_urls(prompt_raw_content)
+
+    assert image_urls == ["data:image/png;base64,AAAA"]
+
+
 def test_extract_prompt_image_urls_gracefully_handles_invalid_payloads():
     tree = make_trace_tree_root()
     invalid_prompt_content = [

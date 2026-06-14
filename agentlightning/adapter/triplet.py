@@ -574,7 +574,8 @@ class TraceTree:
 
         return rewards
 
-    def extract_prompt_image_urls(self, prompt_raw_content: Any) -> List[str]:
+    @staticmethod
+    def extract_prompt_image_urls(prompt_raw_content: Any) -> List[str]:
         """Extract image URLs from the span attributes, in order of appearance.
 
         Args:
@@ -616,6 +617,14 @@ class TraceTree:
                 except json.JSONDecodeError:
                     logger.debug(f"Failed to parse message content as JSON: {content}")
                     continue
+            if isinstance(content, dict):
+                numeric_content_keys = [
+                    key
+                    for key in cast(Dict[str, Any], content).keys()
+                    if isinstance(key, str) and key.isdigit()  # pyright: ignore[reportUnnecessaryIsInstance]
+                ]
+                if numeric_content_keys:
+                    content = [content[key] for key in sorted(numeric_content_keys, key=int)]
             if isinstance(content, list):
                 for content_part in cast(List[Dict[str, Any]], content):
                     if not isinstance(content_part, dict):  # pyright: ignore[reportUnnecessaryIsInstance]
@@ -955,6 +964,26 @@ class LlmProxyTraceToTriplet(TraceToTripletBase):
             source,
             key=lambda s: (s.sequence_id, s.start_time),
         )
+        prompt_image_annotations: List[Tuple[int, List[str]]] = []
+        prompt_image_key = LightningSpanAttributes.PROMPT_IMAGE_URLS.value
+        for span in spans:
+            image_urls_value = (span.attributes or {}).get(prompt_image_key)
+            if isinstance(image_urls_value, (list, tuple)) and all(
+                isinstance(image_url, str) for image_url in image_urls_value
+            ):
+                prompt_image_annotations.append((span.sequence_id, list(image_urls_value)))
+
+        sequence_image_urls: Dict[int, List[str]] = {}
+        for span in spans:
+            if span.name != "litellm_request":
+                continue
+            prompt_content = _attributes_unflatten_multiple(
+                span.attributes or {},
+                ["gen_ai.prompt", "agentlightning.operation.input.messages"],
+            )
+            image_urls = TraceTree.extract_prompt_image_urls(prompt_content)
+            if image_urls:
+                sequence_image_urls[span.sequence_id] = image_urls
 
         # 2) Collect LLM calls with token IDs.
         llm_items: List[Dict[str, Any]] = []
@@ -983,12 +1012,30 @@ class LlmProxyTraceToTriplet(TraceToTripletBase):
                         seq=s.sequence_id,
                         response_ids=resp_ids,
                         prompt_ids=prompt_ids,
+                        image_urls=sequence_image_urls.get(s.sequence_id, []),
                         request_id=rid,
                     )
                 )
 
         # Order LLM items by sequence only.
         llm_items.sort(key=lambda x: x["seq"])
+
+        # Provider prompt spans can be filtered before reaching the store. In
+        # that case, pair each explicit prompt-image annotation with the next
+        # model call. Annotations are emitted immediately before the request.
+        annotation_index = 0
+        pending_annotation: List[str] = []
+        for item in llm_items:
+            while (
+                annotation_index < len(prompt_image_annotations)
+                and prompt_image_annotations[annotation_index][0] <= item["seq"]
+            ):
+                pending_annotation = prompt_image_annotations[annotation_index][1]
+                annotation_index += 1
+            if pending_annotation:
+                if not item["image_urls"]:
+                    item["image_urls"] = pending_annotation
+                pending_annotation = []
 
         # Collect rewards by sequence only.
         rewards: List[Tuple[int, Optional[float]]] = []
@@ -1015,7 +1062,7 @@ class LlmProxyTraceToTriplet(TraceToTripletBase):
             s = item["span"]
             triplets.append(
                 Triplet(
-                    prompt={"token_ids": item["prompt_ids"]},
+                    prompt={"token_ids": item["prompt_ids"], "image_urls": item["image_urls"]},
                     response={"token_ids": item["response_ids"]},
                     reward=assigned.get(s.span_id, None),
                     metadata=dict(

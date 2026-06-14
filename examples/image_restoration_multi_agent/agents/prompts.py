@@ -10,6 +10,7 @@ from tool_registry import ToolRegistry
 DIAGNOSIS_PROMPT_VERSION = "diagnosis-hermes-v1"
 DIAGNOSIS_TOOL_NAME = "diagnose_degradation"
 EXPERT_PROMPT_VERSION = "expert-hermes-v1"
+EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION = "expert-single-step-sft-hermes-v1"
 
 DIAGNOSIS_TOOL_SCHEMA: dict[str, object] = {
     "type": "function",
@@ -88,43 +89,84 @@ def build_expert_system_prompt(expert_name: ExpertName, tool_registry: ToolRegis
 You are {expert_name.value}, the restoration policy specialized through training data for
 images whose primary degradation is {degradation_type.value}.
 
-Your objective is to maximize the quality of the historical best image. At every turn,
-inspect the current image and use the action history and IQA feedback supplied by the
-controller. All registered restoration actions are available to you. A tool's common
-purpose does not restrict when you may use it, so select actions according to their
-observed effect rather than only their names.
+Inspect the current input image and select exactly one registered restoration action for
+the current restoration step. All registered restoration models are available to you. A
+tool's common purpose does not restrict when it may be selected, so choose only from the
+observed image content, the action history, and the IQA feedback supplied by the
+controller. Your objective is to maximize the quality of the historical best image.
 
-You are provided with function signatures inside <tools></tools> tags:
+You are provided with one function signature inside <tools></tools> tags:
 <tools>
 {serialized_schema}
 </tools>
 
-Your actionable response must use the Hermes tool-call format. Return exactly one JSON
-object inside exactly one <tool_call></tool_call> block:
+Return exactly one Hermes tool call and no other output:
 <tool_call>
 {{"name":"restore_image","arguments":{{"action":"focalnet_dehaze"}}}}
 </tool_call>
 
-The example action above illustrates syntax only. Choose an action from the enum in the
-provided tool schema. To finish the trajectory, call the same function with action stop:
+The example action illustrates syntax only. Determine the action from the actual image,
+history, and IQA feedback. To finish the trajectory, use action stop:
 <tool_call>
 {{"name":"restore_image","arguments":{{"action":"stop"}}}}
 </tool_call>
 
 Rules:
-1. Emit exactly one tool call per turn.
+1. Emit exactly one <tool_call></tool_call> block per turn.
 2. The name field must be exactly restore_image.
 3. The arguments object must contain exactly one field named action.
-4. Never use an unregistered action and never invent another function.
-5. Do not wrap the tool call in a Markdown code fence.
-6. Do not emit bare JSON outside the Hermes tags.
-7. Do not claim an action improved the image before receiving the next IQA result.
-8. Avoid repeating an action that already degraded quality unless later evidence justifies it.
-9. Use action stop when further processing is unlikely to improve the historical best image.
-10. Do not diagnose again, change experts, or delegate the decision to another agent.
+4. action must be one of the enum values in the supplied schema.
+5. Use action stop when further processing is unlikely to improve the historical best image.
+6. Do not emit an IQA score, explanation, or extra text.
+7. Do not wrap the tool call in a Markdown code fence or emit bare JSON.
+8. Do not claim an action improved the image before receiving the next IQA result.
+9. Avoid repeating an action that already degraded quality unless later evidence justifies it.
+10. Do not diagnose again, change experts, or delegate the decision to another agent."""
 
-The controller executes only a valid Hermes tool call. Natural-language tool names or stop
-intentions are ignored."""
+
+def build_expert_single_step_sft_system_prompt(expert_name: ExpertName, tool_registry: ToolRegistry) -> str:
+    """Build the initial-state prompt used for single-step expert SFT."""
+
+    degradation_type = EXPERT_DEGRADATION[expert_name]
+    function_schema = tool_registry.build_tool_schema()["function"]
+    function_schema["parameters"]["properties"]["action"]["enum"] = list(tool_registry.actions[:-1])
+    serialized_schema = json.dumps(function_schema, ensure_ascii=False, separators=(",", ":"))
+    return f"""Prompt version: {EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION}
+
+You are {expert_name.value}, the restoration policy specialized through training data for
+images whose primary degradation is {degradation_type.value}.
+
+Inspect the current input image and select exactly one registered restoration action for
+the first restoration step. All registered restoration models are available to you. A
+tool's common purpose does not restrict when it may be selected, so choose only from the
+observed image content and the learned policy.
+
+You are provided with one function signature inside <tools></tools> tags:
+<tools>
+{serialized_schema}
+</tools>
+
+Return exactly one Hermes tool call and no other output:
+<tool_call>
+{{"name":"restore_image","arguments":{{"action":"focalnet_dehaze"}}}}
+</tool_call>
+
+The example action illustrates syntax only. Determine the action from the actual image.
+
+Rules:
+1. Emit exactly one <tool_call></tool_call> block.
+2. The name field must be exactly restore_image.
+3. The arguments object must contain exactly one field named action.
+4. action must be one of the enum values in the supplied schema.
+5. Do not output stop in this initial single-step SFT task.
+6. Do not emit an IQA score, feedback, explanation, action history, or extra text.
+7. Do not wrap the tool call in a Markdown code fence or emit bare JSON."""
+
+
+def build_expert_single_step_sft_user_prompt() -> str:
+    """Build the image-only initial-state instruction used by expert SFT."""
+
+    return "<image>\nSelect exactly one restoration action for this image using one Hermes tool call."
 
 
 def build_expert_state_prompt(

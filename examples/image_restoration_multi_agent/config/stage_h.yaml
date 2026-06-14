@@ -1,0 +1,93 @@
+workflow:
+  max_steps: 6
+  max_consecutive_failures: 2
+  no_improvement_limit: 2
+  improvement_epsilon: 0.000001
+  reward_mode: step_iqa_sum_v1
+  reward_alpha: 0.5
+  reward_scale: 5.0
+  step_reward_clip: 10.0
+  tool_call_cost: 0.05
+  repeated_action_penalty: 0.10
+  invalid_action_penalty: 1.0
+  failure_penalty: 0.50
+  stop_min_tool_calls: 1
+  stop_min_best_gain: 0.05
+  valid_stop_reward: 0.25
+  premature_stop_penalty: 1.0
+  forced_termination_penalty: 0.50
+
+tools_config: tools.yaml
+
+experts:
+  fog_expert:
+    tool_registry: all_restoration_tools
+  snow_expert:
+    tool_registry: all_restoration_tools
+  rain_expert:
+    tool_registry: all_restoration_tools
+  low_light_expert:
+    tool_registry: all_restoration_tools
+
+expert_resources:
+  fog_expert:
+    resource_name: fog_expert_policy
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/fog
+  snow_expert:
+    resource_name: snow_expert_policy
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/snow
+  rain_expert:
+    resource_name: rain_expert_policy
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/rain
+  low_light_expert:
+    resource_name: low_light_expert_policy
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/low_light
+
+runtime:
+  restoration:
+    environment_name: verl
+    service_url: http://127.0.0.1:8767
+    entrypoint: ../tool_runtime/restoration_entrypoint.py
+    external_tools_root: ../../../External_Tools
+    device: cuda:1
+    timeout_seconds: 600
+  evaluator:
+    environment_name: verl
+    service_url: http://127.0.0.1:8767
+    entrypoint: ../tool_runtime/iqa_entrypoint.py
+    external_tools_root: ../../../External_Tools
+    iqa_repo: ../../../External_Tools/iqa_repos/IQA-PyTorch
+    reward_calibration_path: iqa_reward_v1.json
+    device: cuda:0
+    timeout_seconds: 300
+
+vlm:
+  backend: vllm_openai
+  base_url: http://127.0.0.1:8000/v1
+  api_key: EMPTY
+  model: glm-4.1v-9b-thinking
+  timeout_seconds: 180
+  max_tokens: 512
+  temperature: 1.0
+  top_p: 0.95
+  seed: 0
+  return_token_ids: true
+  routing_mode: oracle_observe
+  diagnosis_failure_penalty: 1.0
+
+expert_vlm:
+  backend: vllm_openai
+  base_url: http://127.0.0.1:8000/v1
+  api_key: EMPTY
+  model: glm-4.1v-9b-thinking
+  timeout_seconds: 180
+  max_tokens: 512
+  temperature: 1.0
+  top_p: 0.95
+  seed: 0
+  return_token_ids: true
+  decision_mode: vlm_strict

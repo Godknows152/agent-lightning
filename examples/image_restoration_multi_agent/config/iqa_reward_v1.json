@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "provenance": {
+    "calibration_script": "examples/image_restoration_multi_agent/calibrate_iqa_reward.py",
+    "training_images_per_class": 8,
+    "degradation_classes": [
+      "fog",
+      "snow",
+      "rain",
+      "low_light"
+    ],
+    "restoration_actions": 16,
+    "total_scored_images": 544,
+    "sampling_seed": 42
+  },
+  "metrics": {
+    "maniqa": {
+      "raw_transform": "identity",
+      "mean": 0.3497765661381623,
+      "std": 0.13499245282260086,
+      "weight": 0.20991773505729774
+    },
+    "niqe": {
+      "raw_transform": "negate",
+      "formula": "niqe_quality = -raw_niqe",
+      "mean": -4.815153904988063,
+      "std": 2.0622065052590006,
+      "weight": 0.35
+    },
+    "clipiqa": {
+      "raw_transform": "identity",
+      "mean": 0.40913714182234423,
+      "std": 0.20188591955893603,
+      "weight": 0.1978690593366792
+    },
+    "topiq_nr": {
+      "raw_transform": "identity",
+      "mean": 0.4777178112006582,
+      "std": 0.14280860468443118,
+      "weight": 0.24221320560602305
+    }
+  },
+  "aggregate_formula": "sum(metric.weight * ((oriented_score - metric.mean) / metric.std))",
+  "weight_method": "50% targeted-tool discriminability plus 50% leave-one-out metric consensus, followed by 50% uniform shrinkage and a 0.35 single-metric cap",
+  "status": "initial_weakly_supervised_calibration"
+}

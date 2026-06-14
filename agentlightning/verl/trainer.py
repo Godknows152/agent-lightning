@@ -156,6 +156,75 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True, suffix: str 
     return metrics
 
 
+def compute_trajectory_transition_grpo_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    data_ids: np.ndarray,
+    rollout_ids: np.ndarray,
+    *,
+    epsilon: float = 1e-6,
+    norm_by_std: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute one GRPO advantage per rollout, then share it across its turns.
+
+    Each row is one visual transition containing only its latest image. Rows from
+    the same rollout repeat the final trajectory reward, so rewards are first
+    deduplicated by rollout before comparing the sampled trajectories for one
+    input. The resulting trajectory advantage is divided by its turn count so a
+    longer trajectory does not receive more total policy weight solely because it
+    contains more decisions.
+    """
+
+    if token_level_rewards.ndim != 2 or response_mask.shape != token_level_rewards.shape:
+        raise ValueError("token_level_rewards and response_mask must have the same 2D shape")
+    batch_size = token_level_rewards.shape[0]
+    if len(data_ids) != batch_size or len(rollout_ids) != batch_size:
+        raise ValueError("data_ids and rollout_ids must align with the reward batch")
+
+    sequence_rewards = token_level_rewards.sum(dim=-1)
+    rollout_rows: dict[str, list[int]] = {}
+    rollout_data_id: dict[str, object] = {}
+    rollout_reward: dict[str, torch.Tensor] = {}
+    for row_index, (data_id, rollout_id_value) in enumerate(zip(data_ids, rollout_ids, strict=True)):
+        rollout_id = str(rollout_id_value)
+        rollout_rows.setdefault(rollout_id, []).append(row_index)
+        if rollout_id in rollout_data_id and rollout_data_id[rollout_id] != data_id:
+            raise ValueError(f"rollout {rollout_id} is associated with multiple data ids")
+        rollout_data_id[rollout_id] = data_id
+        reward = sequence_rewards[row_index]
+        if rollout_id in rollout_reward and not torch.isclose(rollout_reward[rollout_id], reward):
+            raise ValueError(f"rollout {rollout_id} has inconsistent trajectory rewards across turns")
+        rollout_reward[rollout_id] = reward
+
+    data_rollouts: dict[object, list[str]] = {}
+    for rollout_id, data_id in rollout_data_id.items():
+        data_rollouts.setdefault(data_id, []).append(rollout_id)
+
+    rollout_advantage: dict[str, torch.Tensor] = {}
+    with torch.no_grad():
+        for rollout_group in data_rollouts.values():
+            rewards = torch.stack([rollout_reward[rollout_id] for rollout_id in rollout_group])
+            if len(rollout_group) == 1:
+                mean = torch.zeros_like(rewards[0])
+                std = torch.ones_like(rewards[0])
+            else:
+                mean = rewards.mean()
+                std = rewards.std()
+            for rollout_id, reward in zip(rollout_group, rewards, strict=True):
+                advantage = reward - mean
+                if norm_by_std:
+                    advantage = advantage / (std + epsilon)
+                rollout_advantage[rollout_id] = advantage
+
+        row_advantages = torch.zeros_like(sequence_rewards)
+        for rollout_id, rows in rollout_rows.items():
+            per_turn_advantage = rollout_advantage[rollout_id] / len(rows)
+            row_advantages[rows] = per_turn_advantage
+        advantages = row_advantages.unsqueeze(-1) * response_mask
+
+    return advantages, advantages.clone()
+
+
 class AgentLightningTrainer(RayPPOTrainer):
     """
     Specialized PPO trainer for agent-based reinforcement learning.
@@ -257,12 +326,12 @@ class AgentLightningTrainer(RayPPOTrainer):
                 batch, agent_metrics = self.agent_mode_daemon.get_train_data_batch(
                     max_prompt_length=(
                         self.config.agentlightning.trace_aggregator.trajectory_max_prompt_length
-                        if self.config.agentlightning.trace_aggregator.level.startswith("trajectory")
+                        if self.config.agentlightning.trace_aggregator.level == "trajectory"
                         else self.config.data.max_prompt_length
                     ),
                     max_response_length=(
                         self.config.agentlightning.trace_aggregator.trajectory_max_response_length
-                        if self.config.agentlightning.trace_aggregator.level.startswith("trajectory")
+                        if self.config.agentlightning.trace_aggregator.level == "trajectory"
                         else self.config.data.max_response_length
                     ),
                     device=gen_batch.batch["fake_ids"].device,
@@ -355,15 +424,28 @@ class AgentLightningTrainer(RayPPOTrainer):
                     "norm_adv_by_std_in_grpo", True
                 )  # GRPO adv normalization factor
 
-                batch = compute_advantage(
-                    batch,
-                    adv_estimator=self.config.algorithm.adv_estimator,
-                    gamma=self.config.algorithm.gamma,
-                    lam=self.config.algorithm.lam,
-                    num_repeat=self.config.actor_rollout_ref.rollout.n,
-                    norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
-                    config=self.config.algorithm,
-                )
+                if self.config.agentlightning.trace_aggregator.level == "trajectory_transition":
+                    if self.config.algorithm.adv_estimator != AdvantageEstimator.GRPO:
+                        raise ValueError("trajectory_transition aggregation currently requires GRPO")
+                    advantages, returns = compute_trajectory_transition_grpo_advantage(
+                        token_level_rewards=batch.batch["token_level_rewards"],
+                        response_mask=batch.batch["response_mask"],
+                        data_ids=batch.non_tensor_batch["data_id_list"],
+                        rollout_ids=batch.non_tensor_batch["rollout_id_list"],
+                        norm_by_std=norm_adv_by_std_in_grpo,
+                    )
+                    batch.batch["advantages"] = advantages
+                    batch.batch["returns"] = returns
+                else:
+                    batch = compute_advantage(
+                        batch,
+                        adv_estimator=self.config.algorithm.adv_estimator,
+                        gamma=self.config.algorithm.gamma,
+                        lam=self.config.algorithm.lam,
+                        num_repeat=self.config.actor_rollout_ref.rollout.n,
+                        norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                        config=self.config.algorithm,
+                    )
 
             # Calculate the metrics before processing. Refer to the comments of function `compute_data_metrics` for details.
             metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic, suffix="_before_processing"))
@@ -377,12 +459,30 @@ class AgentLightningTrainer(RayPPOTrainer):
             # next, round to minibatch size
             mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
             n_transition = len(batch)
-            random_indices = list(range(n_transition))
-            random.shuffle(random_indices)
-            batch.reorder(torch.tensor(random_indices).type(torch.int32))
-            n_remained_transition = n_transition // mini_batch_size * mini_batch_size
-            batch = batch[list(range(n_remained_transition))]
-            metrics["training/n_triplets_dropped_remainder"] = n_transition - n_remained_transition
+            if self.config.agentlightning.trace_aggregator.level == "trajectory_transition":
+                random_indices = list(range(n_transition))
+                random.shuffle(random_indices)
+                batch.reorder(torch.tensor(random_indices).type(torch.int32))
+                batch, actor_pad_size = pad_dataproto_to_divisor(batch, mini_batch_size)
+                if actor_pad_size:
+                    for key in (
+                        "response_mask",
+                        "advantages",
+                        "returns",
+                        "token_level_scores",
+                        "token_level_rewards",
+                    ):
+                        batch.batch[key][-actor_pad_size:] = 0
+                metrics["training/n_triplets_padded_remainder"] = actor_pad_size
+                metrics["training/n_triplets_dropped_remainder"] = 0
+                batch.meta_info["global_token_num"] = torch.sum(batch.batch["attention_mask"], dim=-1).tolist()
+            else:
+                random_indices = list(range(n_transition))
+                random.shuffle(random_indices)
+                batch.reorder(torch.tensor(random_indices).type(torch.int32))
+                n_remained_transition = n_transition // mini_batch_size * mini_batch_size
+                batch = batch[list(range(n_remained_transition))]
+                metrics["training/n_triplets_dropped_remainder"] = n_transition - n_remained_transition
 
             # Agent mode note: Change the order of balance batch;
             #     1. first calculate advantage
@@ -534,6 +634,7 @@ class AgentLightningTrainer(RayPPOTrainer):
 
                 # TODO: make a canonical logger that supports various backend
                 logger.log(data=metrics, step=self.global_steps)
+                progress_bar.update(1)
 
                 if is_last_step:
                     pprint(f"Final validation metrics: {last_val_metrics}")
@@ -545,5 +646,4 @@ class AgentLightningTrainer(RayPPOTrainer):
                     pprint(f"Training finished at step {self.global_steps}.")
                     return
 
-                progress_bar.update(1)
                 self.global_steps += 1

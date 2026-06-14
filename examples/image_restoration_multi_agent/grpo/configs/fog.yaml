@@ -1,0 +1,99 @@
+expert_name: fog_expert
+stage_config: ../../config/stage_h.yaml
+model_path: ../../../../../Models/GLM-4.1V-9B-Thinking
+adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/fog
+train_data: ../data/fog_train.jsonl
+val_data: ../data/fog_val.jsonl
+output_dir: ../outputs/fog
+swanlab:
+  enabled: true
+  project_name: image-restoration-multi-agent
+  experiment_name: fog-expert-grpo
+  mode: online
+  smoke_mode: offline
+  log_dir: ../outputs/fog/swanlab
+training:
+  # Dataset batch and GRPO candidate generation.
+  train_batch_size: 64
+  rollout_n: 4
+  # Keep every GRPO candidate trajectory in flight so vLLM can continuously
+  # batch requests from the same dialogue turn and pipeline later turns.
+  n_runners: 256
+  n_gpus_per_node: 4
+
+  # Model and LoRA.
+  lora_rank: 16
+  lora_alpha: 32
+  lora_target_modules: all-linear
+  freeze_vision_tower: true
+  use_remove_padding: false
+  enable_gradient_checkpointing: false
+  enable_activation_offload: false
+
+  # vLLM rollout engine and sampling.
+  tensor_model_parallel_size: 4
+  gpu_memory_utilization: 0.25
+  max_num_batched_tokens: 8192
+  max_num_seqs: 1024
+  layered_summon: true
+  enable_chunked_prefill: false
+  enable_prefix_caching: true
+  enforce_eager: false
+  free_cache_engine: true
+  max_prompt_length: 4096
+  max_response_length: 640
+  trajectory_max_prompt_length: 4096
+  trajectory_max_response_length: 12288
+  max_model_len: 16384
+  temperature: 0.7
+  top_k: -1
+  top_p: 0.9
+  do_sample: true
+  ignore_eos: false
+
+  # PPO update. The mini-batch counts transition rows, not input images.
+  ppo_mini_batch_size: 8
+  ppo_micro_batch_size_per_gpu: 1
+  ppo_epochs: 1
+  use_dynamic_bsz: false
+  ppo_max_token_len_per_gpu: 16384
+  loss_agg_mode: seq-mean-token-mean
+  shuffle: false
+  clip_ratio: 0.2
+  clip_ratio_low: 0.2
+  clip_ratio_high: 0.3
+  grad_clip: 1.0
+
+  # Actor old-log-prob and reference-policy forward batches.
+  rollout_log_prob_micro_batch_size_per_gpu: 1
+  rollout_log_prob_use_dynamic_bsz: false
+  rollout_log_prob_max_token_len_per_gpu: 16384
+  ref_log_prob_micro_batch_size_per_gpu: 1
+  ref_log_prob_use_dynamic_bsz: false
+  ref_log_prob_max_token_len_per_gpu: 16384
+  ref_param_offload: true
+
+  # Optimizer and regularization.
+  learning_rate: 0.00003
+  weight_decay: 0.01
+  lr_scheduler_type: constant
+  lr_warmup_steps_ratio: 0.0
+  use_kl_loss: true
+  kl_loss_coef: 0.05
+  kl_loss_type: low_var_kl
+  use_kl_in_reward: false
+  entropy_coeff: 0.01
+
+  # FSDP memory controls.
+  fsdp_param_offload: true
+  fsdp_optimizer_offload: true
+  actor_use_torch_compile: true
+  fsdp_use_torch_compile: false
+
+  # Trainer lifecycle.
+  total_epochs: 3
+  save_freq: 10
+  test_freq: 20
+  resume_mode: auto
+  max_actor_ckpt_to_keep: 2
+  val_before_train: false

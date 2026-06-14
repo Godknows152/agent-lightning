@@ -56,6 +56,12 @@ class VERL(Algorithm):
         [this blog post](https://agent-lightning.github.io/posts/trajectory_level_aggregation/)
         for more details.
 
+        For multimodal agents that should see only the latest image at each
+        decision, use `level="trajectory_transition"`. Each turn remains an
+        independent visual sample, while GRPO deduplicates the repeated final
+        reward by rollout, computes one trajectory advantage, and distributes it
+        across that rollout's turns with `1 / turn_count` weighting.
+
     Examples:
         ```python
         from agentlightning.algorithm.verl import VERL

@@ -20,6 +20,16 @@ class WorkflowSettings(StrictModel):
     tool_call_cost: float = Field(default=0.01, ge=0.0)
     invalid_action_penalty: float = Field(default=1.0, ge=0.0)
     failure_penalty: float = Field(default=0.25, ge=0.0)
+    reward_mode: Literal["best_gain_v1", "step_iqa_sum_v1"] = "best_gain_v1"
+    reward_alpha: float = Field(default=0.5, ge=0.0, le=1.0)
+    reward_scale: float = Field(default=1.0, gt=0.0)
+    step_reward_clip: float = Field(default=10.0, gt=0.0)
+    repeated_action_penalty: float = Field(default=0.0, ge=0.0)
+    stop_min_tool_calls: int = Field(default=1, ge=0)
+    stop_min_best_gain: float = 0.0
+    valid_stop_reward: float = 0.0
+    premature_stop_penalty: float = Field(default=0.0, ge=0.0)
+    forced_termination_penalty: float = Field(default=0.0, ge=0.0)
 
 
 class ExpertConfig(StrictModel):
@@ -53,6 +63,7 @@ class SubprocessSettings(StrictModel):
 
     environment_name: str = Field(default="verl", min_length=1)
     python_executable: str | None = None
+    service_url: str | None = None
     entrypoint: str
     external_tools_root: str
     device: str = "cuda:0"
@@ -79,15 +90,16 @@ class EvaluatorSettings(SubprocessSettings):
     """Configuration for the isolated IQA evaluator."""
 
     iqa_repo: str
-    metrics: list[IQAMetricConfig]
+    metrics: list[IQAMetricConfig] = Field(default_factory=list)
+    reward_calibration_path: str | None = None
 
     @model_validator(mode="after")
     def validate_metrics(self) -> EvaluatorSettings:
         names = [metric.name for metric in self.metrics]
         if len(names) != len(set(names)):
             raise ValueError("IQA metric names must be unique")
-        if not names:
-            raise ValueError("at least one IQA metric is required")
+        if not names and self.reward_calibration_path is None:
+            raise ValueError("metrics or reward_calibration_path must configure at least one IQA metric")
         return self
 
 
@@ -213,6 +225,10 @@ def load_real_example_config(path: str | Path) -> RealExampleConfig:
         config_path, config.runtime.evaluator.external_tools_root
     )
     config.runtime.evaluator.iqa_repo = _resolve_runtime_path(config_path, config.runtime.evaluator.iqa_repo)
+    if config.runtime.evaluator.reward_calibration_path is not None:
+        config.runtime.evaluator.reward_calibration_path = _resolve_runtime_path(
+            config_path, config.runtime.evaluator.reward_calibration_path
+        )
     return config
 
 
@@ -235,6 +251,10 @@ def load_stage_e_example_config(path: str | Path) -> StageEExampleConfig:
         config_path, config.runtime.evaluator.external_tools_root
     )
     config.runtime.evaluator.iqa_repo = _resolve_runtime_path(config_path, config.runtime.evaluator.iqa_repo)
+    if config.runtime.evaluator.reward_calibration_path is not None:
+        config.runtime.evaluator.reward_calibration_path = _resolve_runtime_path(
+            config_path, config.runtime.evaluator.reward_calibration_path
+        )
     return config
 
 
@@ -257,6 +277,10 @@ def load_stage_f_example_config(path: str | Path) -> StageFExampleConfig:
         config_path, config.runtime.evaluator.external_tools_root
     )
     config.runtime.evaluator.iqa_repo = _resolve_runtime_path(config_path, config.runtime.evaluator.iqa_repo)
+    if config.runtime.evaluator.reward_calibration_path is not None:
+        config.runtime.evaluator.reward_calibration_path = _resolve_runtime_path(
+            config_path, config.runtime.evaluator.reward_calibration_path
+        )
     return config
 
 
@@ -279,6 +303,10 @@ def load_stage_g_example_config(path: str | Path) -> StageGExampleConfig:
         config_path, config.runtime.evaluator.external_tools_root
     )
     config.runtime.evaluator.iqa_repo = _resolve_runtime_path(config_path, config.runtime.evaluator.iqa_repo)
+    if config.runtime.evaluator.reward_calibration_path is not None:
+        config.runtime.evaluator.reward_calibration_path = _resolve_runtime_path(
+            config_path, config.runtime.evaluator.reward_calibration_path
+        )
     for resource in config.expert_resources.values():
         if resource.policy_path is not None:
             resource.policy_path = _resolve_runtime_path(config_path, resource.policy_path)

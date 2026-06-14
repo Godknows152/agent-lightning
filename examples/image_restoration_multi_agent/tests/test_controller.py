@@ -125,3 +125,55 @@ def test_consecutive_evaluation_failures_do_not_replace_current_image(tmp_path: 
     assert state.tool_call_count == 2
     assert all(step.output_image is not None for step in state.steps)
     assert all(not step.success for step in state.steps)
+
+
+def test_step_iqa_rewards_sum_once_at_trajectory_level(tmp_path: Path) -> None:
+    factory = _factory()
+    factory.config.workflow = factory.config.workflow.model_copy(
+        update={
+            "reward_mode": "step_iqa_sum_v1",
+            "reward_alpha": 0.5,
+            "reward_scale": 5.0,
+            "tool_call_cost": 0.05,
+            "stop_min_best_gain": 0.05,
+            "valid_stop_reward": 0.25,
+            "premature_stop_penalty": 1.0,
+            "forced_termination_penalty": 0.5,
+        }
+    )
+    task = RestorationTask(
+        image_path=str(_input_image(tmp_path)),
+        degradation_type=DegradationType.FOG,
+        scripted_actions=["scunet", "s2former", "stop"],
+        score_sequence=[0.0, 0.2, 0.25],
+        output_dir=str(tmp_path / "run"),
+    )
+
+    state = factory.build(task).run(task, trajectory_id="trajectory-grpo", trace=False).state
+
+    assert [round(step.step_reward, 6) for step in state.steps] == [0.95, 0.7, 0.25]
+    assert state.final_reward == 1.9
+    assert state.steps[-1].reward_components["valid_stop"] == 1.0
+
+
+def test_step_iqa_reward_penalizes_immediate_stop(tmp_path: Path) -> None:
+    factory = _factory()
+    factory.config.workflow = factory.config.workflow.model_copy(
+        update={
+            "reward_mode": "step_iqa_sum_v1",
+            "stop_min_tool_calls": 1,
+            "premature_stop_penalty": 1.0,
+        }
+    )
+    task = RestorationTask(
+        image_path=str(_input_image(tmp_path)),
+        degradation_type=DegradationType.RAIN,
+        scripted_actions=["stop"],
+        score_sequence=[0.0],
+        output_dir=str(tmp_path / "run"),
+    )
+
+    state = factory.build(task).run(task, trajectory_id="trajectory-stop", trace=False).state
+
+    assert state.final_reward == -1.0
+    assert state.steps[0].reward_components["valid_stop"] == 0.0

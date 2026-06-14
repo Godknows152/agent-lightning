@@ -166,6 +166,7 @@ class ImageRestorationController:
                 break
 
             if action == STOP_ACTION:
+                stop_reward, reward_components = self._calculate_stop_reward(state)
                 state.steps.append(
                     RestorationStep(
                         step_index=decision.step_index,
@@ -174,7 +175,8 @@ class ImageRestorationController:
                         tool_name=None,
                         input_image=state.current_image,
                         output_image=None,
-                        step_reward=0.0,
+                        step_reward=stop_reward,
+                        reward_components=reward_components,
                         success=True,
                         latency_seconds=0.0,
                     )
@@ -186,6 +188,7 @@ class ImageRestorationController:
             restoration = self._restore(action, decision, state, str(output_dir), trace=trace)
             if restoration.status != ExecutionStatus.SUCCESS or restoration.output_path is None:
                 state.consecutive_failures += 1
+                step_reward, reward_components = self._calculate_failure_reward(state, action)
                 state.steps.append(
                     RestorationStep(
                         step_index=decision.step_index,
@@ -195,7 +198,8 @@ class ImageRestorationController:
                         input_image=state.current_image,
                         output_image=None,
                         restoration=restoration,
-                        step_reward=-self.settings.failure_penalty,
+                        step_reward=step_reward,
+                        reward_components=reward_components,
                         success=False,
                         latency_seconds=restoration.latency_seconds,
                         error=restoration.error,
@@ -216,6 +220,7 @@ class ImageRestorationController:
             )
             if evaluation.status != ExecutionStatus.SUCCESS:
                 state.consecutive_failures += 1
+                step_reward, reward_components = self._calculate_failure_reward(state, action)
                 state.steps.append(
                     RestorationStep(
                         step_index=decision.step_index,
@@ -226,7 +231,8 @@ class ImageRestorationController:
                         output_image=restoration.output_path,
                         restoration=restoration,
                         evaluation=evaluation,
-                        step_reward=-self.settings.failure_penalty,
+                        step_reward=step_reward,
+                        reward_components=reward_components,
                         success=False,
                         latency_seconds=restoration.latency_seconds,
                         error=evaluation.error,
@@ -248,6 +254,7 @@ class ImageRestorationController:
             else:
                 state.consecutive_no_improvement += 1
 
+            step_reward, reward_components = self._calculate_success_reward(state, action, evaluation)
             state.steps.append(
                 RestorationStep(
                     step_index=decision.step_index,
@@ -258,7 +265,8 @@ class ImageRestorationController:
                     output_image=restoration.output_path,
                     restoration=restoration,
                     evaluation=evaluation,
-                    step_reward=evaluation.delta_from_previous,
+                    step_reward=step_reward,
+                    reward_components=reward_components,
                     success=True,
                     latency_seconds=restoration.latency_seconds,
                 )
@@ -394,6 +402,7 @@ class ImageRestorationController:
                 input_image=state.current_image,
                 output_image=None,
                 step_reward=-self.settings.invalid_action_penalty,
+                reward_components={"invalid_action_penalty": -self.settings.invalid_action_penalty},
                 success=False,
                 latency_seconds=0.0,
                 error=error,
@@ -406,6 +415,12 @@ class ImageRestorationController:
         state.termination_reason = reason
 
     def _calculate_final_reward(self, state: RestorationTrajectoryState) -> float:
+        if self.settings.reward_mode == "step_iqa_sum_v1":
+            trajectory_reward = sum(step.step_reward for step in state.steps)
+            if state.termination_reason in {"max_steps", "no_improvement_limit"}:
+                trajectory_reward -= self.settings.forced_termination_penalty
+            return trajectory_reward
+
         quality_gain = state.best_evaluation.aggregate_score - state.original_evaluation.aggregate_score
         failures = sum(not step.success for step in state.steps)
         return (
@@ -414,3 +429,68 @@ class ImageRestorationController:
             - self.settings.invalid_action_penalty * state.invalid_action_count
             - self.settings.failure_penalty * failures
         )
+
+    def _calculate_success_reward(
+        self,
+        state: RestorationTrajectoryState,
+        action: str,
+        evaluation: EvaluationResult,
+    ) -> tuple[float, dict[str, float]]:
+        if self.settings.reward_mode != "step_iqa_sum_v1":
+            return evaluation.delta_from_previous, {"delta_from_previous": evaluation.delta_from_previous}
+
+        quality_delta = (
+            self.settings.reward_alpha * evaluation.delta_from_previous
+            + (1.0 - self.settings.reward_alpha) * evaluation.delta_from_original
+        )
+        scaled_quality = self.settings.reward_scale * quality_delta
+        clipped_quality = min(
+            self.settings.step_reward_clip,
+            max(-self.settings.step_reward_clip, scaled_quality),
+        )
+        repeated_penalty = (
+            self.settings.repeated_action_penalty if any(step.tool_name == action for step in state.steps) else 0.0
+        )
+        step_reward = clipped_quality - self.settings.tool_call_cost - repeated_penalty
+        return step_reward, {
+            "delta_from_previous": evaluation.delta_from_previous,
+            "delta_from_original": evaluation.delta_from_original,
+            "quality_delta": quality_delta,
+            "scaled_clipped_quality": clipped_quality,
+            "tool_call_cost": -self.settings.tool_call_cost,
+            "repeated_action_penalty": -repeated_penalty,
+        }
+
+    def _calculate_failure_reward(
+        self,
+        state: RestorationTrajectoryState,
+        action: str,
+    ) -> tuple[float, dict[str, float]]:
+        if self.settings.reward_mode != "step_iqa_sum_v1":
+            return -self.settings.failure_penalty, {"failure_penalty": -self.settings.failure_penalty}
+        repeated_penalty = (
+            self.settings.repeated_action_penalty if any(step.tool_name == action for step in state.steps) else 0.0
+        )
+        reward = -self.settings.failure_penalty - self.settings.tool_call_cost - repeated_penalty
+        return reward, {
+            "failure_penalty": -self.settings.failure_penalty,
+            "tool_call_cost": -self.settings.tool_call_cost,
+            "repeated_action_penalty": -repeated_penalty,
+        }
+
+    def _calculate_stop_reward(
+        self,
+        state: RestorationTrajectoryState,
+    ) -> tuple[float, dict[str, float]]:
+        if self.settings.reward_mode != "step_iqa_sum_v1":
+            return 0.0, {"stop_reward": 0.0}
+        best_gain = state.best_evaluation.aggregate_score - state.original_evaluation.aggregate_score
+        valid_stop = (
+            state.tool_call_count >= self.settings.stop_min_tool_calls and best_gain >= self.settings.stop_min_best_gain
+        )
+        stop_reward = self.settings.valid_stop_reward if valid_stop else -self.settings.premature_stop_penalty
+        return stop_reward, {
+            "best_gain_at_stop": best_gain,
+            "valid_stop": 1.0 if valid_stop else 0.0,
+            "stop_reward": stop_reward,
+        }

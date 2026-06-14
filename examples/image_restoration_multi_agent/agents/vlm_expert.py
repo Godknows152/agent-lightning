@@ -23,7 +23,11 @@ from schemas import (
 )
 from tool_registry import RESTORE_FUNCTION_NAME, ToolRegistry
 
-from .prompts import build_expert_state_prompt, build_expert_system_prompt
+from .prompts import (
+    build_expert_single_step_sft_user_prompt,
+    build_expert_state_prompt,
+    build_expert_system_prompt,
+)
 
 
 class _DumpableResponse(Protocol):
@@ -40,6 +44,10 @@ class _ChatNamespace(Protocol):
 
 class _OpenAICompatibleClient(Protocol):
     chat: _ChatNamespace
+
+
+class _Tokenizer(Protocol):
+    def decode(self, token_ids: list[int], *, skip_special_tokens: bool) -> str: ...
 
 
 def _tool_call_from_raw_hermes(
@@ -148,61 +156,25 @@ def _history_payload(state: RestorationTrajectoryState) -> list[dict[str, Any]]:
 
     history: list[dict[str, Any]] = []
     for step in state.steps:
+        evaluation = step.evaluation
         history.append(
             {
                 "step_index": step.step_index,
                 "action": step.expert_decision.action,
                 "success": step.success,
-                "aggregate_score": step.evaluation.aggregate_score if step.evaluation is not None else None,
-                "delta_from_previous": step.evaluation.delta_from_previous if step.evaluation is not None else None,
-                "feedback": step.evaluation.feedback if step.evaluation is not None else None,
+                "raw_scores": evaluation.raw_scores if evaluation is not None else None,
+                "normalized_scores": evaluation.normalized_scores if evaluation is not None else None,
+                "aggregate_score": evaluation.aggregate_score if evaluation is not None else None,
+                "delta_from_previous": evaluation.delta_from_previous if evaluation is not None else None,
+                "delta_from_original": evaluation.delta_from_original if evaluation is not None else None,
+                "delta_from_best": evaluation.delta_from_best if evaluation is not None else None,
+                "is_new_best": evaluation.is_new_best if evaluation is not None else None,
+                "step_reward": step.step_reward,
+                "feedback": evaluation.feedback if evaluation is not None else None,
                 "error": step.error,
             }
         )
     return history
-
-
-def _history_messages(state: RestorationTrajectoryState) -> list[dict[str, Any]]:
-    """Reconstruct prior assistant/tool messages without resending old images."""
-
-    messages: list[dict[str, Any]] = []
-    for step in state.steps:
-        decision = step.expert_decision
-        if decision.action is None or decision.parse_status != ExpertParseStatus.VALID:
-            continue
-        tool_call_id = decision.tool_call_id or f"history-call-{step.step_index}"
-        messages.append(
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": tool_call_id,
-                        "type": "function",
-                        "function": {
-                            "name": RESTORE_FUNCTION_NAME,
-                            "arguments": json.dumps({"action": decision.action}, separators=(",", ":")),
-                        },
-                    }
-                ],
-            }
-        )
-        tool_result = {
-            "success": step.success,
-            "aggregate_score": step.evaluation.aggregate_score if step.evaluation is not None else None,
-            "delta_from_previous": step.evaluation.delta_from_previous if step.evaluation is not None else None,
-            "delta_from_best": step.evaluation.delta_from_best if step.evaluation is not None else None,
-            "feedback": step.evaluation.feedback if step.evaluation is not None else None,
-            "error": step.error,
-        }
-        messages.append(
-            {
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": json.dumps(tool_result, ensure_ascii=False, separators=(",", ":")),
-            }
-        )
-    return messages
 
 
 class VLMRestorationExpertAgent:
@@ -217,12 +189,14 @@ class VLMRestorationExpertAgent:
         max_steps: int,
         resource_name: str | None = None,
         client: object | None = None,
+        tokenizer: object | None = None,
     ) -> None:
         self.settings = settings
         self.expert_name = expert_name
         self.tool_registry = tool_registry
         self.max_steps = max_steps
         self.resource_name = resource_name or expert_name.value
+        self.tokenizer = cast(_Tokenizer | None, tokenizer)
         self.client = cast(
             _OpenAICompatibleClient,
             client
@@ -241,19 +215,21 @@ class VLMRestorationExpertAgent:
         started_at = time.perf_counter()
         try:
             image_url = self._encode_image(state.current_image)
-            state_prompt = build_expert_state_prompt(
-                step_index=step_index,
-                remaining_steps=max(self.max_steps - step_index, 0),
-                current_score=state.current_evaluation.aggregate_score,
-                best_score=state.best_evaluation.aggregate_score,
-                original_score=state.original_evaluation.aggregate_score,
-                consecutive_no_improvement=state.consecutive_no_improvement,
-                history_json=json.dumps(_history_payload(state), ensure_ascii=False, separators=(",", ":")),
-                latest_feedback=state.current_evaluation.feedback,
-            )
+            if step_index == 0:
+                state_prompt = build_expert_single_step_sft_user_prompt().removeprefix("<image>\n")
+            else:
+                state_prompt = build_expert_state_prompt(
+                    step_index=step_index,
+                    remaining_steps=max(self.max_steps - step_index, 0),
+                    current_score=state.current_evaluation.aggregate_score,
+                    best_score=state.best_evaluation.aggregate_score,
+                    original_score=state.original_evaluation.aggregate_score,
+                    consecutive_no_improvement=state.consecutive_no_improvement,
+                    history_json=json.dumps(_history_payload(state), ensure_ascii=False, separators=(",", ":")),
+                    latest_feedback=state.current_evaluation.feedback,
+                )
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": build_expert_system_prompt(self.expert_name, self.tool_registry)},
-                *_history_messages(state),
                 {
                     "role": "user",
                     "content": [
@@ -301,6 +277,9 @@ class VLMRestorationExpertAgent:
         reasoning_content = (
             message.get("reasoning_content") if isinstance(message.get("reasoning_content"), str) else None
         )
+        generated_token_ids = _int_list(first_choice.get("token_ids"))
+        if raw_response is None and generated_token_ids and self.tokenizer is not None:
+            raw_response = self.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
         parse_status, parsed_payload, action, tool_call_id, parse_error = parse_expert_response(
             raw_response,
             self.tool_registry,
@@ -320,6 +299,7 @@ class VLMRestorationExpertAgent:
             tool_call_id=tool_call_id,
             llm_response_id=(response_payload.get("id") if isinstance(response_payload.get("id"), str) else None),
             validation_status=self._validation_status(parse_status),
+            prompt_text=state_prompt,
             raw_assistant_output=raw_response,
             reasoning_content=reasoning_content,
             parsed_payload=parsed_payload,
@@ -329,7 +309,7 @@ class VLMRestorationExpertAgent:
             ),
             latency_seconds=time.perf_counter() - started_at,
             prompt_token_ids=_int_list(response_payload.get("prompt_token_ids")),
-            generated_token_ids=_int_list(first_choice.get("token_ids")),
+            generated_token_ids=generated_token_ids,
             usage=usage,
             response_payload=response_payload,
             error=parse_error,

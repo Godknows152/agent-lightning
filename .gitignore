@@ -9,6 +9,11 @@ requirements-freeze*.txt
 agent_lightning_paper.pdf
 /Information_Search/
 /External_Tools/
+/LlamaFactory/
+/examples/image_restoration_multi_agent/grpo/data/
+/examples/image_restoration_multi_agent/grpo/log/
+/examples/image_restoration_multi_agent/grpo/outputs/
+/examples/image_restoration_multi_agent/grpo/artifacts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -963,6 +963,48 @@ def test_execute_both_main_algorithm_cooperative_shutdown(store: LightningStore)
     strat.execute(algorithm=algo, runner=_runner_wait_for_stop, store=store)
 
 
+def test_execute_both_waits_for_store_before_spawning_runners(
+    monkeypatch: pytest.MonkeyPatch, store: LightningStore
+) -> None:
+    events: list[str] = []
+
+    class RecordingServer(LightningStore):  # type: ignore[misc]
+        def __init__(self, wrapped: LightningStore, host: str, port: int) -> None:
+            _ = (wrapped, host, port)
+            self.endpoint = f"http://{host}:{port}"
+
+        async def start(self) -> None:
+            events.append("store_ready")
+
+        async def stop(self) -> None:
+            events.append("store_stopped")
+
+    monkeypatch.setattr("agentlightning.execution.client_server.LightningStoreServer", RecordingServer)
+
+    strat = ClientServerExecutionStrategy(
+        role="both",
+        main_process="algorithm",
+        n_runners=2,
+        server_host="127.0.0.1",
+        server_port=_free_port(),
+    )
+
+    def record_spawn(*args: Any, **kwargs: Any) -> list[Process]:
+        _ = (args, kwargs)
+        events.append("runners_spawned")
+        return []
+
+    monkeypatch.setattr(strat, "_spawn_runners", record_spawn)
+
+    async def algorithm(store: LightningStore, event: ExecutionEvent) -> None:
+        _ = (store, event)
+        events.append("algorithm_started")
+
+    strat.execute(algorithm=algorithm, runner=_noop_runner, store=store)
+
+    assert events == ["store_ready", "runners_spawned", "algorithm_started", "store_stopped"]
+
+
 def test_execute_both_main_runner_debug_cooperative_shutdown(store: LightningStore) -> None:
     """
     main_process='runner' requires n_runners == 1.

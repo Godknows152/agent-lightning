@@ -29,8 +29,9 @@ class ClientServerExecutionStrategy(ExecutionStrategy):
     - `"runner"`: Connect to an existing server with
       [`LightningStoreClient`][agentlightning.LightningStoreClient] and run the
       runner bundle locally (spawning multiple processes when requested).
-    - `"both"`: Spawn runner processes first, then execute the algorithm and
-      server on the same machine. This mode orchestrates the full loop locally.
+    - `"both"`: Run the algorithm and runners on the same machine. When the
+      algorithm owns the main process, the HTTP store is made ready before
+      runner processes are spawned.
 
     When `role == "both"` you may choose which side runs on the main process
     via `main_process`. The runner-on-main option is limited to
@@ -125,7 +126,11 @@ class ClientServerExecutionStrategy(ExecutionStrategy):
         self.allowed_exit_codes = tuple(allowed_exit_codes)
 
     async def _execute_algorithm(
-        self, algorithm: AlgorithmBundle, store: LightningStore, stop_evt: ExecutionEvent
+        self,
+        algorithm: AlgorithmBundle,
+        store: LightningStore,
+        stop_evt: ExecutionEvent,
+        on_store_ready: Callable[[], None] | None = None,
     ) -> None:
         wrapper_store: LightningStore | None = None
         if self.managed_store:
@@ -141,6 +146,8 @@ class ClientServerExecutionStrategy(ExecutionStrategy):
                 await wrapper_store.start()
                 server_started = True
                 logger.debug("Algorithm bundle starting against endpoint %s", wrapper_store.endpoint)
+            if on_store_ready is not None:
+                on_store_ready()
             await algorithm(wrapper_store, stop_evt)
             logger.debug("Algorithm bundle completed successfully")
         except asyncio.CancelledError:
@@ -389,11 +396,21 @@ class ClientServerExecutionStrategy(ExecutionStrategy):
                     self._check_process_exitcodes(processes)
             elif self.role == "both":
                 if self.main_process == "algorithm":
-                    logger.info("Spawning runner processes...")
-                    processes = self._spawn_runners(runner, store, stop_evt, ctx=ctx)
+
+                    def spawn_runners_after_store_ready() -> None:
+                        logger.info("Store is ready; spawning runner processes...")
+                        processes.extend(self._spawn_runners(runner, store, stop_evt, ctx=ctx))
+
                     try:
-                        logger.info("Running algorithm...")
-                        asyncio.run(self._execute_algorithm(algorithm, store, stop_evt))
+                        logger.info("Starting store and algorithm...")
+                        asyncio.run(
+                            self._execute_algorithm(
+                                algorithm,
+                                store,
+                                stop_evt,
+                                on_store_ready=spawn_runners_after_store_ready,
+                            )
+                        )
                     finally:
                         # Always request the runner side to unwind once the
                         # algorithm/server portion finishes (successfully or not).

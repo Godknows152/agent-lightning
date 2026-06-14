@@ -11,6 +11,7 @@ from config import SubprocessSettings
 from schemas import ExecutionStatus, RestorationResult
 from subprocess_utils import parse_result_json, resolve_python_command, validate_image_file
 from tool_registry import ToolRegistry
+from tool_runtime.service_client import post_json
 
 
 class SubprocessRestorationWorker:
@@ -43,43 +44,58 @@ class SubprocessRestorationWorker:
             destination_dir.mkdir(parents=True, exist_ok=True)
             partial.unlink(missing_ok=True)
 
-            command = [
-                *self.python_command,
-                str(self.entrypoint),
-                "--adapter",
-                tool.runtime.adapter,
-                "--model",
-                tool.runtime.model,
-                "--external-tools-root",
-                str(self.external_tools_root),
-                "--input",
-                str(source),
-                "--output",
-                str(partial),
-                "--device",
-                self.settings.device,
-            ]
-            if tool.runtime.repo:
-                command.extend(["--repo", str((self.external_tools_root / tool.runtime.repo).resolve())])
-            if tool.runtime.checkpoint:
-                command.extend(["--checkpoint", str((self.external_tools_root / tool.runtime.checkpoint).resolve())])
+            service_url = os.getenv("IMAGE_RESTORATION_SERVICE_URL") or self.settings.service_url
+            if service_url:
+                process_result = post_json(
+                    service_url,
+                    "/restore",
+                    {
+                        "action": action,
+                        "input_path": str(source),
+                        "output_path": str(partial),
+                    },
+                    self.settings.timeout_seconds,
+                )
+            else:
+                command = [
+                    *self.python_command,
+                    str(self.entrypoint),
+                    "--adapter",
+                    tool.runtime.adapter,
+                    "--model",
+                    tool.runtime.model,
+                    "--external-tools-root",
+                    str(self.external_tools_root),
+                    "--input",
+                    str(source),
+                    "--output",
+                    str(partial),
+                    "--device",
+                    self.settings.device,
+                ]
+                if tool.runtime.repo:
+                    command.extend(["--repo", str((self.external_tools_root / tool.runtime.repo).resolve())])
+                if tool.runtime.checkpoint:
+                    command.extend(
+                        ["--checkpoint", str((self.external_tools_root / tool.runtime.checkpoint).resolve())]
+                    )
 
-            environment = os.environ.copy()
-            environment.setdefault("HF_HUB_OFFLINE", "1")
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=self.settings.timeout_seconds,
-                check=False,
-                env=environment,
-            )
-            if completed.returncode != 0:
-                detail = completed.stderr.strip() or completed.stdout.strip()
-                raise RuntimeError(f"restoration subprocess exited with {completed.returncode}: {detail[-2000:]}")
-            process_result = parse_result_json(completed.stdout)
+                environment = os.environ.copy()
+                environment.setdefault("HF_HUB_OFFLINE", "1")
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.settings.timeout_seconds,
+                    check=False,
+                    env=environment,
+                )
+                if completed.returncode != 0:
+                    detail = completed.stderr.strip() or completed.stdout.strip()
+                    raise RuntimeError(f"restoration subprocess exited with {completed.returncode}: {detail[-2000:]}")
+                process_result = parse_result_json(completed.stdout)
             if process_result.get("status") != "success":
-                raise RuntimeError(f"restoration subprocess reported failure: {process_result}")
+                raise RuntimeError(f"restoration runtime reported failure: {process_result}")
             validate_image_file(partial)
             os.replace(partial, destination)
             process_result["output_path"] = str(destination)
@@ -94,6 +110,7 @@ class SubprocessRestorationWorker:
                     **process_result,
                     "environment_name": self.settings.environment_name,
                     "device": self.settings.device,
+                    "service_url": service_url,
                     "checkpoint": tool.runtime.checkpoint,
                 },
             )
@@ -109,5 +126,6 @@ class SubprocessRestorationWorker:
                 metadata={
                     "environment_name": self.settings.environment_name,
                     "device": self.settings.device,
+                    "service_url": os.getenv("IMAGE_RESTORATION_SERVICE_URL") or self.settings.service_url,
                 },
             )

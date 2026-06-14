@@ -973,19 +973,19 @@ class LightningStoreServer(LightningStore):
 
         dashboard_dir = (Path(__file__).parent.parent / "dashboard").resolve()
         if not dashboard_dir.exists():
-            server_logger.error("Dashboard directory not found at %s. Please build the dashboard first.", dashboard_dir)
+            server_logger.info("Dashboard assets are unavailable at %s; Store API remains enabled.", dashboard_dir)
             return
 
         dashboard_assets_dir = dashboard_dir / "assets"
         if not dashboard_assets_dir.exists():
-            server_logger.error(
-                "Dashboard assets directory not found at %s. Please build the dashboard first.", dashboard_assets_dir
+            server_logger.info(
+                "Dashboard assets are unavailable at %s; Store API remains enabled.", dashboard_assets_dir
             )
             return
 
         index_file = dashboard_dir / "index.html"
         if not index_file.exists():
-            server_logger.error("Dashboard index file not found at %s. Please build the dashboard first.", index_file)
+            server_logger.info("Dashboard index is unavailable at %s; Store API remains enabled.", index_file)
             return
 
         # Mount the static files in dashboard/assets

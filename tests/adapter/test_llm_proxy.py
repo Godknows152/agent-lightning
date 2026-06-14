@@ -4,6 +4,7 @@ import json
 from typing import Any, Dict, List
 
 from agentlightning.adapter import LlmProxyTraceToTriplet
+from agentlightning.semconv import LightningSpanAttributes
 from agentlightning.types import Span
 
 
@@ -339,3 +340,128 @@ def test_multiple_rewards_attach_to_latest_unmatched_llm_calls():
     assert triplets[0].reward == 0.3  # backfilled by the last reward
     assert triplets[1].reward == 0.1  # first reward targets the latest prior call (seq=4)
     assert triplets[2].reward == 0.2  # second reward picks up the remaining unmatched call (seq=6)
+
+
+def test_proxy_adapter_pairs_multimodal_prompt_with_raw_token_span():
+    prompt_ids, response_ids = [1, 2, 3], [4, 5]
+    image_url = "data:image/png;base64,AAAA"
+    prompt_content = json.dumps(
+        [
+            {"type": "image_url", "image_url": {"url": image_url}},
+            {"type": "text", "text": "choose an action"},
+        ]
+    )
+    spans = [
+        _mk_span(
+            span_id="litellm",
+            name="litellm_request",
+            seq=3,
+            start=100,
+            end=110,
+            attrs={"gen_ai.prompt.0.role": "user", "gen_ai.prompt.0.content": prompt_content},
+        ),
+        _mk_span(
+            span_id="raw",
+            name="raw_gen_ai_request",
+            seq=3,
+            start=101,
+            end=109,
+            attrs=_raw_attrs_with_tokens(
+                prompt_ids,
+                response_ids,
+                response_id="chatcmpl-multimodal",
+            ),
+        ),
+    ]
+
+    triplets = LlmProxyTraceToTriplet().adapt(spans)
+
+    assert len(triplets) == 1
+    assert triplets[0].prompt["image_urls"] == [image_url]
+
+
+def test_proxy_adapter_pairs_flattened_multimodal_prompt_with_raw_token_span():
+    prompt_ids, response_ids = [1, 2, 3], [4, 5]
+    image_url = "data:image/png;base64,AAAA"
+    spans = [
+        _mk_span(
+            span_id="litellm",
+            name="litellm_request",
+            seq=3,
+            start=100,
+            end=110,
+            attrs={
+                "gen_ai.prompt.0.role": "system",
+                "gen_ai.prompt.0.content": "system prompt",
+                "gen_ai.prompt.1.role": "user",
+                "gen_ai.prompt.1.content.0.type": "image_url",
+                "gen_ai.prompt.1.content.0.image_url.url": image_url,
+                "gen_ai.prompt.1.content.1.type": "text",
+                "gen_ai.prompt.1.content.1.text": "choose an action",
+            },
+        ),
+        _mk_span(
+            span_id="raw",
+            name="raw_gen_ai_request",
+            seq=3,
+            start=101,
+            end=109,
+            attrs=_raw_attrs_with_tokens(
+                prompt_ids,
+                response_ids,
+                response_id="chatcmpl-flattened-multimodal",
+            ),
+        ),
+    ]
+
+    triplets = LlmProxyTraceToTriplet().adapt(spans)
+
+    assert len(triplets) == 1
+    assert triplets[0].prompt["image_urls"] == [image_url]
+
+
+def test_proxy_adapter_pairs_explicit_prompt_image_annotation_with_next_call():
+    first_image = "/tmp/original.png"
+    second_image = "/tmp/restored.png"
+    image_key = LightningSpanAttributes.PROMPT_IMAGE_URLS.value
+    spans = [
+        _mk_span(
+            span_id="image-1",
+            name="agentlightning.annotation",
+            seq=1,
+            start=90,
+            end=91,
+            attrs={image_key: [first_image]},
+        ),
+        _mk_span(
+            span_id="raw-1",
+            name="raw_gen_ai_request",
+            seq=2,
+            start=100,
+            end=109,
+            attrs=_raw_attrs_with_tokens([1, 2], [3], response_id="chatcmpl-first"),
+        ),
+        _mk_span(
+            span_id="image-2",
+            name="agentlightning.annotation",
+            seq=3,
+            start=110,
+            end=111,
+            attrs={image_key: [second_image]},
+        ),
+        _mk_span(
+            span_id="raw-2",
+            name="raw_gen_ai_request",
+            seq=4,
+            start=120,
+            end=129,
+            attrs=_raw_attrs_with_tokens([4, 5], [6], response_id="chatcmpl-second"),
+        ),
+    ]
+
+    triplets = LlmProxyTraceToTriplet().adapt(spans)
+
+    assert [triplet.prompt["image_urls"] for triplet in triplets] == [
+        [first_image],
+        [second_image],
+    ]
