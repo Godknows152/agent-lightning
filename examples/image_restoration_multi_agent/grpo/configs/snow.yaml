@@ -1,7 +1,7 @@
 expert_name: snow_expert
 stage_config: ../../config/stage_h.yaml
 model_path: ../../../../../Models/GLM-4.1V-9B-Thinking
-adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/snow
+adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/format_cold_start/snow
 train_data: ../data/snow_train.jsonl
 val_data: ../data/snow_val.jsonl
 output_dir: ../outputs/snow
@@ -14,11 +14,11 @@ swanlab:
   log_dir: ../outputs/snow/swanlab
 training:
   # Dataset batch and GRPO candidate generation.
-  train_batch_size: 64
+  train_batch_size: 32
   rollout_n: 4
   # Keep every GRPO candidate trajectory in flight so vLLM can continuously
   # batch requests from the same dialogue turn and pipeline later turns.
-  n_runners: 256
+  n_runners: 128
   n_gpus_per_node: 4
 
   # Model and LoRA.
@@ -27,8 +27,14 @@ training:
   lora_target_modules: all-linear
   freeze_vision_tower: true
   use_remove_padding: false
-  enable_gradient_checkpointing: false
+  enable_gradient_checkpointing: true
   enable_activation_offload: false
+
+  # Release restoration/IQA GPU memory after rollout and reload it before the
+  # next rollout phase. The HTTP service process itself remains alive.
+  tool_runtime_lifecycle_enabled: true
+  tool_runtime_control_url: http://127.0.0.1:8767
+  tool_runtime_lifecycle_timeout_seconds: 1800
 
   # vLLM rollout engine and sampling.
   tensor_model_parallel_size: 4

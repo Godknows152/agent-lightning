@@ -191,50 +191,39 @@ The verified run retained four VLM turns as four independent visual transitions 
 
 ## Stage H Formal GRPO
 
-Train one expert at a time on GPU 0 through GPU 3. The default tool topology keeps one complete 16-model
-restoration set and two IQA workers on each visible GPU; vLLM uses all four GPUs with TP=4:
+The four-GPU topology keeps one complete 16-model restoration set and two IQA workers on each visible GPU.
+vLLM uses all four GPUs with TP=4; `train_batch_size=32` and `rollout_n=4` produce 128 concurrent trajectories.
+The launcher serially trains Fog, Snow, Rain, and Low-light, stopping immediately if any expert fails:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  bash examples/image_restoration_multi_agent/grpo/run_expert_grpo.sh fog
-
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  bash examples/image_restoration_multi_agent/grpo/run_expert_grpo.sh snow
-
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  bash examples/image_restoration_multi_agent/grpo/run_expert_grpo.sh rain
-
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  bash examples/image_restoration_multi_agent/grpo/run_expert_grpo.sh low_light
+  bash examples/image_restoration_multi_agent/grpo/run_expert_grpo_4gpu.sh
 ```
 
-Before formal training starts, the launcher preloads two MANIQA/NIQE/CLIP-IQA/TOPIQ-NR workers on each GPU.
-Each GPU also receives one complete restoration set: one toolkit process containing the 12 copied `verl` models
-plus one process for each of the four candidate models. Requests are pooled across all four GPUs while each model
+The two-GPU topology has the same per-GPU tool allocation, while vLLM uses both GPUs with TP=2.
+Its independent configurations use `train_batch_size=16`, 64 concurrent trajectories, separate checkpoints,
+and `-2gpu` SwanLab experiment names:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+  bash examples/image_restoration_multi_agent/grpo/run_expert_grpo_2gpu.sh
+```
+
+Before formal training starts, either launcher preloads two MANIQA/NIQE/CLIP-IQA/TOPIQ-NR workers on each GPU.
+Each visible GPU also receives one complete restoration set: one toolkit process containing the 12 copied `verl`
+models plus one process for each of the four candidate models. Requests are pooled across visible GPUs while each model
 process remains internally serialized. The service log is written beside the GRPO log as
-`grpo/log/<expert>_tool_runtime_<timestamp>.log`. Startup fails before GRPO begins if any model cannot load or
+`grpo/log/<expert>_<topology>_tool_runtime_<timestamp>.log`. Startup fails before GRPO begins if any model cannot load or
 the requested resident set exceeds available memory. `IMAGE_RESTORATION_TOOL_STARTUP_TIMEOUT` changes the
 default 1,800-second preload timeout, and `IMAGE_RESTORATION_TOOL_PORT` changes the default port `8767`.
 
-Formal rollout concurrency equals `train_batch_size * rollout_n` (currently `64 * 4 = 256`). All 256 trajectories
-remain in flight: vLLM continuously batches their first-turn requests, and later turns re-enter the same dynamic
+Formal rollout concurrency equals `train_batch_size * rollout_n`. All trajectories remain in flight: vLLM
+continuously batches their first-turn requests, and later turns re-enter the same dynamic
 batch as soon as their restoration and IQA feedback is ready. This preserves multi-turn trajectory semantics without
 introducing a global turn barrier that would make every trajectory wait for the slowest tool call.
 The launcher renders training-step and per-batch rollout completion as two stable terminal progress bars. The
 saved GRPO log contains compact progress snapshots instead of repeated `Completed x/y tasks` lines, and
 expected malformed Hermes outputs are collapsed from a traceback into one `invalid_tool_call` warning line.
-
-To run all experts sequentially while keeping the current terminal open after a failure:
-
-```bash
-for expert in fog snow rain low_light; do
-  if ! CUDA_VISIBLE_DEVICES=0,1,2,3 \
-    bash examples/image_restoration_multi_agent/grpo/run_expert_grpo.sh "$expert"; then
-    printf 'GRPO failed for %s; remaining experts were not started.\n' "$expert" >&2
-    break
-  fi
-done
-```
 
 Formal runs use SwanLab project `image-restoration-multi-agent` with experiment names `fog-expert-grpo`, `snow-expert-grpo`, `rain-expert-grpo`, and `low-light-expert-grpo`. Each expert YAML exposes `swanlab.enabled`, `project_name`, `experiment_name`, `mode`, `smoke_mode`, and `log_dir`. Supported modes are `online`, `local`, `offline`, and `disabled`; setting `enabled: false` also removes SwanLab from the VERL logger list. Authenticate with `swanlab login` or `SWANLAB_API_KEY` before starting an online run. Credentials are intentionally not stored in YAML.
 
@@ -285,9 +274,12 @@ Each expert YAML is the experiment-facing source of truth rather than a minimal 
 | `grpo/agent.py` | Fixed-expert Agent Lightning rollout returning one trajectory reward |
 | `grpo/smoke_runtime.py` | Real-policy smoke environment with copy restoration and deterministic IQA |
 | `grpo/train_grpo.py` | Agent Lightning VERL latest-image/trajectory-advantage GRPO entrypoint with SwanLab logging |
-| `grpo/run_expert_grpo.sh` | Shared smoke/formal launcher for all four experts |
+| `grpo/run_expert_grpo.sh` | Shared internal smoke/formal launcher used by both GPU topologies |
+| `grpo/run_expert_grpo_4gpu.sh` | Serial four-expert launcher with TP=4 and fail-fast behavior |
+| `grpo/run_expert_grpo_2gpu.sh` | Serial four-expert launcher with TP=2 and fail-fast behavior |
 | `grpo/render_training_log.py` | Compact terminal progress bars and single-line Hermes error rendering |
 | `grpo/configs/` | Independent Fog, Snow, Rain, and Low-light GRPO configurations |
+| `grpo/configs_2gpu/` | Independent two-GPU configurations and output locations for all four experts |
 | `grpo/templates/glm4v_no_thinking.jinja` | GLM-4.1V chat template aligned with the expert SFT prefix |
 | `tests/` | Protocol, controller, subprocess, IQA, failure-path, VLM parsing, and trace tests |
 

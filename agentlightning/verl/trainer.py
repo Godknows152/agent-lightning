@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+import json
 import random
 from contextlib import contextmanager
 from copy import deepcopy
 from pprint import pprint
 from typing import Dict, Tuple, Type
+from urllib.request import Request, urlopen
 
 import numpy as np
 import torch
@@ -262,6 +264,7 @@ class AgentLightningTrainer(RayPPOTrainer):
         test_data = next(iter(self.val_dataloader))
         test_batch = DataProto.from_single_dict(test_data)
 
+        self._set_rollout_resources_awake(True)
         self.async_rollout_manager.wake_up()
         self.agent_mode_daemon.set_up_data_and_server(
             test_batch.non_tensor_batch,
@@ -269,10 +272,32 @@ class AgentLightningTrainer(RayPPOTrainer):
             is_train=False,
         )
         self.agent_mode_daemon.run_until_all_finished()
+        self._set_rollout_resources_awake(False)
         test_metrics = self.agent_mode_daemon.get_test_metrics()
         self.agent_mode_daemon.clear_data_and_server()
         self.async_rollout_manager.sleep()
         return test_metrics
+
+    def _set_rollout_resources_awake(self, awake: bool) -> None:
+        """Wake external rollout resources or release them before policy updates."""
+        control = self.config.agentlightning.get("rollout_resource_control", None)
+        if not control or not control.get("enabled", False):
+            return
+        endpoint = "wake" if awake else "sleep"
+        base_url = str(control.base_url).rstrip("/")
+        timeout = float(control.get("timeout_seconds", 1800))
+        request = Request(
+            f"{base_url}/{endpoint}",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        print(f"{'Waking' if awake else 'Sleeping'} external rollout resources at {base_url}.", flush=True)
+        with urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read())
+        expected_status = "ready" if awake else "sleeping"
+        if payload.get("status") != expected_status:
+            raise RuntimeError(f"external rollout resource {endpoint} failed: {payload}")
 
     def _compute_reference_log_prob(self, batch: DataProto) -> DataProto:
         """Compute reference log probability using the correct worker based on LoRA configuration.
@@ -318,11 +343,13 @@ class AgentLightningTrainer(RayPPOTrainer):
 
             # generate a batch
             with _timer("gen", timing_raw):
+                self._set_rollout_resources_awake(True)
                 self.async_rollout_manager.wake_up()
                 self.agent_mode_daemon.set_up_data_and_server(
                     gen_batch.non_tensor_batch, self.async_rollout_manager.server_addresses
                 )
                 self.agent_mode_daemon.run_until_all_finished()
+                self._set_rollout_resources_awake(False)
                 batch, agent_metrics = self.agent_mode_daemon.get_train_data_batch(
                     max_prompt_length=(
                         self.config.agentlightning.trace_aggregator.trajectory_max_prompt_length

@@ -177,3 +177,29 @@ def test_step_iqa_reward_penalizes_immediate_stop(tmp_path: Path) -> None:
 
     assert state.final_reward == -1.0
     assert state.steps[0].reward_components["valid_stop"] == 0.0
+
+
+def test_invalid_action_overrides_prior_iqa_gains_with_terminal_penalty(tmp_path: Path) -> None:
+    factory = _factory()
+    factory.config.workflow = factory.config.workflow.model_copy(
+        update={
+            "reward_mode": "step_iqa_sum_v1",
+            "reward_alpha": 0.5,
+            "reward_scale": 5.0,
+            "invalid_action_penalty": 10.0,
+        }
+    )
+    task = RestorationTask(
+        image_path=str(_input_image(tmp_path)),
+        degradation_type=DegradationType.FOG,
+        scripted_actions=["scunet", "not_registered"],
+        score_sequence=[0.0, 0.8],
+        output_dir=str(tmp_path / "run"),
+    )
+
+    state = factory.build(task).run(task, trajectory_id="trajectory-invalid-after-gain", trace=False).state
+
+    assert state.steps[0].step_reward > 0.0
+    assert state.steps[1].step_reward == -10.0
+    assert state.termination_reason == "invalid_action"
+    assert state.final_reward == -10.0

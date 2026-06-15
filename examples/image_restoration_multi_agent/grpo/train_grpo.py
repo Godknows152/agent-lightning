@@ -110,12 +110,20 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
     if bool(swanlab["enabled"]):
         loggers.append("swanlab")
     chat_template = NO_THINKING_CHAT_TEMPLATE.read_text(encoding="utf-8")
-    return {
+    conf = {
         "algorithm": {
             "adv_estimator": "grpo",
             "use_kl_in_reward": bool(training["use_kl_in_reward"]),
         },
         "agentlightning": {
+            "rollout_resource_control": {
+                "enabled": bool(training["tool_runtime_lifecycle_enabled"]) and not smoke,
+                "base_url": os.getenv(
+                    "IMAGE_RESTORATION_SERVICE_URL",
+                    str(training["tool_runtime_control_url"]),
+                ),
+                "timeout_seconds": float(training["tool_runtime_lifecycle_timeout_seconds"]),
+            },
             "trace_aggregator": {
                 # Keep each turn as an independent visual observation so the
                 # actor encodes only the latest image. The trainer still
@@ -125,7 +133,7 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "trajectory_max_prompt_length": int(training["trajectory_max_prompt_length"]),
                 "trajectory_max_response_length": int(training["trajectory_max_response_length"]),
                 "debug": False,
-            }
+            },
         },
         "data": {
             "train_batch_size": train_batch_size,
@@ -254,10 +262,15 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
             "val_before_train": bool(training["val_before_train"]),
             "save_freq": 1 if smoke else int(training["save_freq"]),
             "test_freq": -1 if smoke else int(training["test_freq"]),
-            "total_training_steps": 1 if smoke else -1,
             "total_epochs": 1 if smoke else int(training["total_epochs"]),
         },
     }
+    actual_total_training_steps = int(training.get("total_training_steps", -1))
+    if actual_total_training_steps > 0:
+        conf["trainer"]["total_training_steps"] = actual_total_training_steps
+    if smoke:
+        conf["trainer"]["total_training_steps"] = 1
+    return conf
 
 
 def _configure_swanlab_environment(run: dict[str, Any], *, smoke: bool) -> None:

@@ -15,6 +15,7 @@ from PIL import Image
 from schemas import ExecutionStatus
 from tool_registry import ToolDefinition, ToolRegistry, ToolRegistryConfig, ToolRuntime
 from tool_runtime.persistent_tool_server import JsonlWorker, JsonlWorkerPool, _handler
+from tool_runtime.restoration_entrypoint import _bootstrap_basicsr_utils, _bootstrap_retinexformer_utils
 from tool_runtime.service_client import post_json
 from workers import SubprocessRestorationWorker
 
@@ -45,13 +46,16 @@ def test_jsonl_worker_reuses_one_long_lived_process(tmp_path: Path) -> None:
         "print('READY_JSON='+json.dumps({'status':'ready','pid':os.getpid()}), flush=True)\n"
         "for line in sys.stdin:\n"
         "    request=json.loads(line)\n"
+        "    command=request.get('command','infer')\n"
         "    print('RESULT_JSON='+json.dumps({'status':'success','request_id':request['request_id'],"
-        "'pid':os.getpid(),'value':request['value']}), flush=True)\n",
+        "'pid':os.getpid(),'command':command,'value':request.get('value')}), flush=True)\n",
         encoding="utf-8",
     )
     worker = JsonlWorker("test", [sys.executable, str(worker_script)])
     try:
         first = worker.request({"value": 1})
+        sleeping = worker.request({"command": "sleep"})
+        waking = worker.request({"command": "wake"})
         second = worker.request({"value": 2})
     finally:
         worker.close()
@@ -59,6 +63,8 @@ def test_jsonl_worker_reuses_one_long_lived_process(tmp_path: Path) -> None:
     assert first["pid"] == worker.ready["pid"]
     assert second["pid"] == worker.ready["pid"]
     assert (first["value"], second["value"]) == (1, 2)
+    assert sleeping["command"] == "sleep"
+    assert waking["command"] == "wake"
 
 
 def test_jsonl_worker_pool_runs_requests_concurrently() -> None:
@@ -90,8 +96,73 @@ def test_jsonl_worker_pool_runs_requests_concurrently() -> None:
     assert {result["value"] for result in results} == {1, 2}
 
 
+def test_retinexformer_utils_bootstrap_breaks_scandir_circular_import(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    package_root = tmp_path / "basicsr_retinexformer"
+    utils_root = package_root / "utils"
+    utils_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (utils_root / "misc.py").write_text(
+        "def scandir(*args, **kwargs): return iter(())\n" "def scandir_SIDD(*args, **kwargs): return iter(())\n",
+        encoding="utf-8",
+    )
+    (utils_root / "create_lmdb.py").write_text(
+        "from basicsr_retinexformer.utils import scandir\n" "def create_lmdb_for_gopro(): return scandir\n",
+        encoding="utf-8",
+    )
+    (utils_root / "__init__.py").write_text(
+        "from .create_lmdb import create_lmdb_for_gopro\n" "from .misc import scandir, scandir_SIDD\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in list(sys.modules):
+        if module_name == "basicsr_retinexformer" or module_name.startswith("basicsr_retinexformer."):
+            monkeypatch.delitem(sys.modules, module_name)
+
+    _bootstrap_retinexformer_utils(tmp_path)
+
+    utils_module = sys.modules["basicsr_retinexformer.utils"]
+    assert list(utils_module.scandir()) == []
+    assert utils_module.create_lmdb_for_gopro() is utils_module.scandir
+
+
+def test_generic_basicsr_utils_bootstrap_supports_namespace_package(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    package_root = tmp_path / "basicsr"
+    utils_root = package_root / "utils"
+    utils_root.mkdir(parents=True)
+    (utils_root / "misc.py").write_text(
+        "def scandir(*args, **kwargs): return iter(())\n" "def scandir_SIDD(*args, **kwargs): return iter(())\n",
+        encoding="utf-8",
+    )
+    (utils_root / "create_lmdb.py").write_text(
+        "from basicsr.utils import scandir\n" "def create_lmdb_for_gopro(): return scandir\n",
+        encoding="utf-8",
+    )
+    (utils_root / "__init__.py").write_text(
+        "from .create_lmdb import create_lmdb_for_gopro\n" "from .misc import scandir, scandir_SIDD\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    for module_name in list(sys.modules):
+        if module_name == "basicsr" or module_name.startswith("basicsr."):
+            monkeypatch.delitem(sys.modules, module_name)
+
+    _bootstrap_basicsr_utils("basicsr", package_root)
+
+    utils_module = sys.modules["basicsr.utils"]
+    assert list(utils_module.scandir()) == []
+    assert utils_module.create_lmdb_for_gopro() is utils_module.scandir
+
+
 def test_persistent_service_http_protocol() -> None:
     class FakeRuntime:
+        state = "ready"
+
         def restore(self, payload):
             return {"status": "success", "action": payload["action"]}
 
@@ -99,7 +170,15 @@ def test_persistent_service_http_protocol() -> None:
             return {"status": "success", "image_path": payload["image_path"]}
 
         def health(self):
-            return {"status": "ready"}
+            return {"status": self.state}
+
+        def sleep(self):
+            self.state = "sleeping"
+            return {"status": self.state}
+
+        def wake(self):
+            self.state = "ready"
+            return {"status": self.state}
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(FakeRuntime()))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -108,6 +187,8 @@ def test_persistent_service_http_protocol() -> None:
     try:
         restoration = post_json(base_url, "/restore", {"action": "scunet"}, 2)
         evaluation = post_json(base_url, "/evaluate", {"image_path": "/tmp/image.png"}, 2)
+        sleeping = post_json(base_url, "/sleep", {}, 2)
+        waking = post_json(base_url, "/wake", {}, 2)
     finally:
         server.shutdown()
         server.server_close()
@@ -115,6 +196,8 @@ def test_persistent_service_http_protocol() -> None:
 
     assert restoration == {"status": "success", "action": "scunet"}
     assert evaluation == {"status": "success", "image_path": "/tmp/image.png"}
+    assert sleeping == {"status": "sleeping"}
+    assert waking == {"status": "ready"}
 
 
 def test_subprocess_worker_publishes_only_valid_images(tmp_path: Path) -> None:

@@ -415,6 +415,9 @@ class ImageRestorationController:
         state.termination_reason = reason
 
     def _calculate_final_reward(self, state: RestorationTrajectoryState) -> float:
+        if state.termination_reason in {"invalid_tool_call", "invalid_action"}:
+            return -self.settings.invalid_action_penalty
+
         if self.settings.reward_mode == "step_iqa_sum_v1":
             trajectory_reward = sum(step.step_reward for step in state.steps)
             if state.termination_reason in {"max_steps", "no_improvement_limit"}:

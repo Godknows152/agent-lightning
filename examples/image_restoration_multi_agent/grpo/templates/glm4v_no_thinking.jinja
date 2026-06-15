@@ -36,5 +36,8 @@
         {%- endif %}
     {%- endif %}
 {%- endfor %}
-{% if add_generation_prompt %}<|assistant|>
+{% if add_generation_prompt %}<|assistant|><think>
+
+</think>
+
 {% endif %}

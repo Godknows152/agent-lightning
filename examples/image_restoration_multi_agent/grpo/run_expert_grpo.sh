@@ -15,10 +15,12 @@ esac
 
 ROOT="/home/LXJ/Python_Projects/Agent_Lightning"
 LOG_DIR="$ROOT/examples/image_restoration_multi_agent/grpo/log"
+CONFIG_DIR="${GRPO_CONFIG_DIR:-examples/image_restoration_multi_agent/grpo/configs}"
+TOPOLOGY="${GRPO_TOPOLOGY:-4gpu}"
 mkdir -p "$LOG_DIR"
 RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$LOG_DIR/${EXPERT}_grpo_${RUN_STAMP}.log"
-TOOL_LOG_FILE="$LOG_DIR/${EXPERT}_tool_runtime_${RUN_STAMP}.log"
+LOG_FILE="$LOG_DIR/${EXPERT}_${TOPOLOGY}_grpo_${RUN_STAMP}.log"
+TOOL_LOG_FILE="$LOG_DIR/${EXPERT}_${TOPOLOGY}_tool_runtime_${RUN_STAMP}.log"
 
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 export PYTHONUNBUFFERED=1
@@ -138,7 +140,7 @@ conda run --no-capture-output -n agent-lightning \
     exec python "$@"
   ' bash \
   examples/image_restoration_multi_agent/grpo/train_grpo.py \
-  --config "examples/image_restoration_multi_agent/grpo/configs/${EXPERT}.yaml" \
+  --config "${CONFIG_DIR}/${EXPERT}.yaml" \
   "$@" 2>&1 | /home/LXJ/anaconda3/envs/agent-lightning/bin/python \
     examples/image_restoration_multi_agent/grpo/render_training_log.py \
     --log-file "$LOG_FILE"

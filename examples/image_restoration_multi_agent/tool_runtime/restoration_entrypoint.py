@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import importlib
 import importlib.util
 import json
@@ -30,6 +31,8 @@ class RestorationToolkitInstance(Protocol):
     """Runtime subset used from the copied verl restoration toolkit."""
 
     def load_single_model(self, model_name: str) -> object | None: ...
+
+    def unload_all_models(self) -> None: ...
 
     def process_image_with_models(self, model_list: list[str], img_path: str, output_dir: str) -> str: ...
 
@@ -68,6 +71,7 @@ def _pad_to_multiple(image: torch.Tensor, multiple: int) -> tuple[torch.Tensor, 
 
 def _load_nafnet(repo: Path, checkpoint: Path) -> torch.nn.Module:
     sys.path.insert(0, str(repo))
+    _bootstrap_basicsr_utils("basicsr", repo / "basicsr")
     module = importlib.import_module("basicsr.models.archs.NAFNet_arch")
     model = module.NAFNet(
         img_channel=3,
@@ -101,6 +105,7 @@ def _load_focalnet(repo: Path, checkpoint: Path, model_name: str) -> torch.nn.Mo
 
 def _load_mb_taylorformer(repo: Path, checkpoint: Path) -> torch.nn.Module:
     sys.path.insert(0, str(repo))
+    _bootstrap_basicsr_utils("basicsr", repo / "basicsr")
     module = importlib.import_module("basicsr.models.archs.MB_TaylorFormer")
     with (repo / "Dehazing/Options/MB-TaylorFormer-B.yml").open("r", encoding="utf-8") as config_file:
         network_config = yaml.safe_load(config_file)["network_g"]
@@ -189,6 +194,8 @@ def _load_verl_toolkit(
         sys.path.insert(0, str(source_dir))
         if (source_dir / "src").is_dir():
             sys.path.insert(0, str(source_dir / "src"))
+    if "Retinexformer" in selected_sources:
+        _bootstrap_retinexformer_utils(agent_tools_dir / "Retinexformer")
 
     toolkit_module = importlib.import_module("agent_tools.restoration_toolkit")
     toolkit_factory = cast(RestorationToolkitFactory, getattr(toolkit_module, "RestorationToolkit"))
@@ -203,6 +210,50 @@ def _load_verl_toolkit(
     if missing:
         raise RuntimeError(f"failed to load verl restoration models: {missing}")
     return toolkit
+
+
+def _bootstrap_retinexformer_utils(retinexformer_root: Path) -> None:
+    """Load Retinexformer utilities without triggering its circular import."""
+    _bootstrap_basicsr_utils(
+        "basicsr_retinexformer",
+        retinexformer_root / "basicsr_retinexformer",
+    )
+
+
+def _bootstrap_basicsr_utils(package_name: str, package_root: Path) -> None:
+    """Initialize a bundled BasicSR utils package before create_lmdb imports it."""
+    utils_name = f"{package_name}.utils"
+    if utils_name in sys.modules:
+        return
+
+    utils_root = package_root / "utils"
+    importlib.import_module(package_name)
+    utils_spec = importlib.util.spec_from_file_location(
+        utils_name,
+        utils_root / "__init__.py",
+        submodule_search_locations=[str(utils_root)],
+    )
+    if utils_spec is None or utils_spec.loader is None:
+        raise RuntimeError(f"unable to load {package_name} utils from {utils_root}")
+    utils_module = importlib.util.module_from_spec(utils_spec)
+    sys.modules[utils_name] = utils_module
+
+    misc_name = f"{utils_name}.misc"
+    misc_spec = importlib.util.spec_from_file_location(misc_name, utils_root / "misc.py")
+    if misc_spec is None or misc_spec.loader is None:
+        sys.modules.pop(utils_name, None)
+        raise RuntimeError(f"unable to load {package_name} misc utilities from {utils_root}")
+    misc_module = importlib.util.module_from_spec(misc_spec)
+    sys.modules[misc_name] = misc_module
+    try:
+        misc_spec.loader.exec_module(misc_module)
+        utils_module.scandir = misc_module.scandir
+        utils_module.scandir_SIDD = misc_module.scandir_SIDD
+        utils_spec.loader.exec_module(utils_module)
+    except Exception:
+        sys.modules.pop(misc_name, None)
+        sys.modules.pop(utils_name, None)
+        raise
 
 
 def _run_loaded_verl_toolkit(
@@ -253,20 +304,43 @@ def _serve_jsonl(
     checkpoint: Path | None,
     device: torch.device,
 ) -> None:
-    if adapter == "verl_toolkit":
-        toolkit = _load_verl_toolkit(
-            model_names,
-            external_tools_root,
-            device,
-            preload=True,
-            auto_unload=False,
-        )
+    if adapter != "verl_toolkit" and (len(model_names) != 1 or repo is None or checkpoint is None):
+        raise ValueError("persistent candidate worker requires one model, --repo, and --checkpoint")
+
+    toolkit: RestorationToolkitInstance | None = None
+    candidate_model: torch.nn.Module | None = None
+
+    def wake_models() -> None:
+        nonlocal toolkit, candidate_model
+        if adapter == "verl_toolkit":
+            if toolkit is None:
+                toolkit = _load_verl_toolkit(
+                    model_names,
+                    external_tools_root,
+                    device,
+                    preload=True,
+                    auto_unload=False,
+                )
+            else:
+                missing = [model_name for model_name in model_names if toolkit.load_single_model(model_name) is None]
+                if missing:
+                    raise RuntimeError(f"failed to reload verl restoration models: {missing}")
+        elif candidate_model is None:
+            assert repo is not None and checkpoint is not None
+            candidate_model = _load_candidate_model(model_names[0], repo, checkpoint, device)
+        torch.cuda.synchronize(device)
+
+    def sleep_models() -> None:
+        nonlocal candidate_model
+        if toolkit is not None:
+            toolkit.unload_all_models()
         candidate_model = None
-    else:
-        if len(model_names) != 1 or repo is None or checkpoint is None:
-            raise ValueError("persistent candidate worker requires one model, --repo, and --checkpoint")
-        toolkit = None
-        candidate_model = _load_candidate_model(model_names[0], repo, checkpoint, device)
+        gc.collect()
+        with torch.cuda.device(device):
+            torch.cuda.empty_cache()
+        torch.cuda.synchronize(device)
+
+    wake_models()
 
     torch.cuda.synchronize(device)
     _emit(
@@ -286,6 +360,35 @@ def _serve_jsonl(
         try:
             request = json.loads(line)
             request_id = request.get("request_id")
+            command = request.get("command", "infer")
+            if command == "sleep":
+                sleep_models()
+                _emit(
+                    RESULT_PREFIX,
+                    {
+                        "request_id": request_id,
+                        "status": "success",
+                        "state": "sleeping",
+                        "device": str(device),
+                        "cuda_allocated_mb": torch.cuda.memory_allocated(device) / 1024**2,
+                    },
+                )
+                continue
+            if command == "wake":
+                wake_models()
+                _emit(
+                    RESULT_PREFIX,
+                    {
+                        "request_id": request_id,
+                        "status": "success",
+                        "state": "ready",
+                        "device": str(device),
+                        "cuda_allocated_mb": torch.cuda.memory_allocated(device) / 1024**2,
+                    },
+                )
+                continue
+            if command != "infer":
+                raise ValueError(f"unknown worker command: {command}")
             model_name = str(request["model"])
             if model_name not in model_names:
                 raise ValueError(f"model is not loaded by this worker: {model_name}")
@@ -295,7 +398,8 @@ def _serve_jsonl(
             if toolkit is not None:
                 _run_loaded_verl_toolkit(toolkit, model_name, input_path, output_path)
             else:
-                assert candidate_model is not None
+                if candidate_model is None:
+                    raise RuntimeError("candidate restoration model is sleeping")
                 _run_loaded_candidate(model_name, candidate_model, input_path, output_path, device)
             torch.cuda.synchronize(device)
             _emit(

@@ -139,6 +139,8 @@ class PersistentToolRuntime:
         self.iqa_workers = iqa_workers
         self._workers: list[JsonlWorker] = []
         self._action_workers: dict[str, tuple[JsonlWorkerPool, str]] = {}
+        self._state = "starting"
+        self._state_lock = threading.Lock()
 
         tool_payload = yaml.safe_load(tools_config.read_text(encoding="utf-8"))
         tools = tool_payload.get("tools") if isinstance(tool_payload, dict) else None
@@ -228,8 +230,15 @@ class PersistentToolRuntime:
         if set(self._action_workers) != action_names:
             missing = sorted(action_names - set(self._action_workers))
             raise RuntimeError(f"persistent restoration workers are missing actions: {missing}")
+        self._state = "ready"
+
+    def _require_ready(self) -> None:
+        with self._state_lock:
+            if self._state != "ready":
+                raise RuntimeError(f"tool runtime is not ready: state={self._state}")
 
     def restore(self, payload: dict[str, object]) -> dict[str, Any]:
+        self._require_ready()
         action = str(payload["action"])
         worker_and_model = self._action_workers.get(action)
         if worker_and_model is None:
@@ -244,7 +253,44 @@ class PersistentToolRuntime:
         )
 
     def evaluate(self, payload: dict[str, object]) -> dict[str, Any]:
+        self._require_ready()
         return self._iqa_pool.request({"input": str(payload["image_path"])})
+
+    def sleep(self) -> dict[str, object]:
+        """Unload every worker model after all rollout requests have completed."""
+        with self._state_lock:
+            if self._state == "sleeping":
+                return {"status": "sleeping"}
+            if self._state != "ready":
+                raise RuntimeError(f"cannot sleep tool runtime from state={self._state}")
+            self._state = "sleeping_pending"
+        try:
+            workers = [worker.request({"command": "sleep"}) for worker in self._workers]
+        except Exception:
+            with self._state_lock:
+                self._state = "failed"
+            raise
+        with self._state_lock:
+            self._state = "sleeping"
+        return {"status": "sleeping", "workers": workers}
+
+    def wake(self) -> dict[str, object]:
+        """Reload every worker model before the next rollout phase."""
+        with self._state_lock:
+            if self._state == "ready":
+                return {"status": "ready"}
+            if self._state != "sleeping":
+                raise RuntimeError(f"cannot wake tool runtime from state={self._state}")
+            self._state = "waking"
+        try:
+            workers = [worker.request({"command": "wake"}) for worker in self._workers]
+        except Exception:
+            with self._state_lock:
+                self._state = "failed"
+            raise
+        with self._state_lock:
+            self._state = "ready"
+        return {"status": "ready", "workers": workers}
 
     def health(self) -> dict[str, object]:
         iqa_worker_devices = [str(worker.ready["device"]) for worker in self._iqa_pool.workers]
@@ -253,7 +299,7 @@ class PersistentToolRuntime:
             for action, (worker_pool, _model) in self._action_workers.items()
         }
         return {
-            "status": "ready",
+            "status": self._state,
             "restoration_devices": self.restoration_devices,
             "iqa_devices": self.iqa_devices,
             "actions": sorted(self._action_workers),
@@ -301,6 +347,10 @@ def _handler(runtime: PersistentToolRuntime) -> type[BaseHTTPRequestHandler]:
                     response = runtime.restore(cast(dict[str, object], payload))
                 elif self.path == "/evaluate":
                     response = runtime.evaluate(cast(dict[str, object], payload))
+                elif self.path == "/sleep":
+                    response = runtime.sleep()
+                elif self.path == "/wake":
+                    response = runtime.wake()
                 else:
                     self._write_json(HTTPStatus.NOT_FOUND, {"status": "failed", "error": "unknown endpoint"})
                     return

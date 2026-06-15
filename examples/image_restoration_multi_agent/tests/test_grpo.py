@@ -65,11 +65,17 @@ def test_grpo_config_uses_trajectory_transition_swanlab_and_stochastic_smoke() -
     assert formal["actor_rollout_ref"]["rollout"]["n"] == 4
     assert formal["actor_rollout_ref"]["rollout"]["tensor_model_parallel_size"] == 4
     assert formal["trainer"]["n_gpus_per_node"] == 4
-    assert run["training"]["n_runners"] == 256
+    assert run["training"]["train_batch_size"] == 32
+    assert run["training"]["n_runners"] == 128
     assert run["training"]["n_runners"] == run["training"]["train_batch_size"] * run["training"]["rollout_n"]
     assert formal["data"]["max_response_length"] == 640
-    assert formal["actor_rollout_ref"]["model"]["enable_gradient_checkpointing"] is False
+    assert formal["actor_rollout_ref"]["model"]["enable_gradient_checkpointing"] is True
     assert formal["actor_rollout_ref"]["model"]["enable_activation_offload"] is False
+    assert formal["agentlightning"]["rollout_resource_control"] == {
+        "enabled": True,
+        "base_url": "http://127.0.0.1:8767",
+        "timeout_seconds": 1800.0,
+    }
     assert formal["actor_rollout_ref"]["actor"]["ppo_mini_batch_size"] == 8
     assert formal["actor_rollout_ref"]["actor"]["ppo_micro_batch_size_per_gpu"] == 1
     assert formal["actor_rollout_ref"]["actor"]["ppo_epochs"] == 1
@@ -87,27 +93,47 @@ def test_grpo_config_uses_trajectory_transition_swanlab_and_stochastic_smoke() -
     assert formal["trainer"]["max_actor_ckpt_to_keep"] == 2
 
 
+def test_grpo_chat_template_prefills_closed_empty_thinking_block() -> None:
+    run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
+    formal = _verl_config(run, smoke=False)
+    template = formal["actor_rollout_ref"]["model"]["custom_chat_template"]
+
+    expected_generation_prompt = "{% if add_generation_prompt %}<|assistant|><think>\n\n</think>\n\n" "{% endif %}"
+    assert expected_generation_prompt in template
+    assert formal["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"]["chat_template"] == str(
+        EXAMPLE_DIR / "grpo/templates/glm4v_no_thinking.jinja"
+    )
+
+
 def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
     config = load_stage_g_example_config(EXAMPLE_DIR / "config/stage_h.yaml")
 
     assert config.workflow.max_steps == 6
+    assert config.workflow.invalid_action_penalty == 10.0
     assert config.runtime.evaluator.device == "cuda:0"
     assert config.runtime.restoration.device == "cuda:1"
     assert config.runtime.evaluator.service_url == "http://127.0.0.1:8767"
     assert config.runtime.restoration.service_url == "http://127.0.0.1:8767"
 
-    launch_script = (EXAMPLE_DIR / "grpo/run_expert_grpo.sh").read_text(encoding="utf-8")
-    assert "CUDA_VISIBLE_DEVICES:-0,1,2,3" in launch_script
-    assert "IMAGE_RESTORATION_WORKERS_PER_DEVICE:-1" in launch_script
-    assert "IMAGE_RESTORATION_IQA_WORKERS_PER_DEVICE:-2" in launch_script
-    assert "IMAGE_RESTORATION_DEVICES:-cuda:0,cuda:1,cuda:2,cuda:3" in launch_script
-    assert "IMAGE_RESTORATION_IQA_DEVICES:-cuda:0,cuda:1,cuda:2,cuda:3" in launch_script
-    assert "RESTORATION_WORKERS=$((RESTORATION_WORKERS_PER_DEVICE * RESTORATION_DEVICE_COUNT))" in launch_script
-    assert "IQA_WORKERS=$((IQA_WORKERS_PER_DEVICE * IQA_DEVICE_COUNT))" in launch_script
-    assert '--restoration-workers "$RESTORATION_WORKERS"' in launch_script
-    assert '--iqa-workers "$IQA_WORKERS"' in launch_script
-    assert '--restoration-devices "$RESTORATION_DEVICES"' in launch_script
-    assert '--iqa-devices "$IQA_DEVICES"' in launch_script
+    common_script = (EXAMPLE_DIR / "grpo/run_expert_grpo.sh").read_text(encoding="utf-8")
+    four_gpu_script = (EXAMPLE_DIR / "grpo/run_expert_grpo_4gpu.sh").read_text(encoding="utf-8")
+    two_gpu_script = (EXAMPLE_DIR / "grpo/run_expert_grpo_2gpu.sh").read_text(encoding="utf-8")
+    assert "RESTORATION_WORKERS=$((RESTORATION_WORKERS_PER_DEVICE * RESTORATION_DEVICE_COUNT))" in common_script
+    assert "IQA_WORKERS=$((IQA_WORKERS_PER_DEVICE * IQA_DEVICE_COUNT))" in common_script
+    assert '--restoration-workers "$RESTORATION_WORKERS"' in common_script
+    assert '--iqa-workers "$IQA_WORKERS"' in common_script
+    assert "CUDA_VISIBLE_DEVICES:-0,1,2,3" in four_gpu_script
+    assert 'GRPO_CONFIG_DIR="examples/image_restoration_multi_agent/grpo/configs"' in four_gpu_script
+    assert 'IMAGE_RESTORATION_DEVICES="cuda:0,cuda:1,cuda:2,cuda:3"' in four_gpu_script
+    assert 'IMAGE_RESTORATION_IQA_WORKERS_PER_DEVICE="2"' in four_gpu_script
+    assert "for expert in fog snow rain low_light; do" in four_gpu_script
+    assert "remaining experts will not be started" in four_gpu_script
+    assert "CUDA_VISIBLE_DEVICES:-0,1" in two_gpu_script
+    assert 'GRPO_CONFIG_DIR="examples/image_restoration_multi_agent/grpo/configs_2gpu"' in two_gpu_script
+    assert 'IMAGE_RESTORATION_DEVICES="cuda:0,cuda:1"' in two_gpu_script
+    assert 'IMAGE_RESTORATION_IQA_WORKERS_PER_DEVICE="2"' in two_gpu_script
+    assert "for expert in fog snow rain low_light; do" in two_gpu_script
+    assert "remaining experts will not be started" in two_gpu_script
 
 
 def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
@@ -133,8 +159,10 @@ def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
         "resume_mode",
     } <= expected_keys
     assert all(set(run["training"]) == expected_keys for run in runs)
-    assert all(run["training"]["enable_gradient_checkpointing"] is False for run in runs)
+    assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
     assert all(run["training"]["enable_activation_offload"] is False for run in runs)
+    assert all(run["training"]["train_batch_size"] == 32 for run in runs)
+    assert all(run["training"]["n_runners"] == 128 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 4 for run in runs)
     assert all(run["training"]["tensor_model_parallel_size"] == 4 for run in runs)
     assert all(
@@ -160,6 +188,25 @@ def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
     assert all(Path(run["swanlab"]["log_dir"]).is_absolute() for run in runs)
 
 
+def test_all_two_gpu_expert_configs_use_two_gpu_topology() -> None:
+    config_paths = sorted((EXAMPLE_DIR / "grpo/configs_2gpu").glob("*.yaml"))
+    runs = [_load_run_config(path) for path in config_paths]
+
+    assert len(config_paths) == 4
+    assert all(run["training"]["train_batch_size"] == 16 for run in runs)
+    assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
+    assert all(run["training"]["rollout_n"] == 4 for run in runs)
+    assert all(run["training"]["n_runners"] == 64 for run in runs)
+    assert all(run["training"]["n_gpus_per_node"] == 2 for run in runs)
+    assert all(run["training"]["tensor_model_parallel_size"] == 2 for run in runs)
+    assert all("_2gpu" in run["output_dir"] for run in runs)
+    assert all(str(run["swanlab"]["experiment_name"]).endswith("-2gpu") for run in runs)
+    assert all(
+        run["training"]["n_runners"] == run["training"]["train_batch_size"] * run["training"]["rollout_n"]
+        for run in runs
+    )
+
+
 def test_swanlab_environment_and_disable_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
     monkeypatch.delenv("SWANLAB_LOG_DIR", raising=False)
@@ -174,6 +221,15 @@ def test_swanlab_environment_and_disable_switch(monkeypatch: pytest.MonkeyPatch)
 
     run["swanlab"]["enabled"] = False
     assert _verl_config(run, smoke=False)["trainer"]["logger"] == ["console"]
+
+
+def test_grpo_tool_lifecycle_uses_runtime_service_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
+    monkeypatch.setenv("IMAGE_RESTORATION_SERVICE_URL", "http://127.0.0.1:9876")
+
+    formal = _verl_config(run, smoke=False)
+
+    assert formal["agentlightning"]["rollout_resource_control"]["base_url"] == "http://127.0.0.1:9876"
 
 
 def test_smoke_override_retains_real_response_and_forces_valid_action() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gc
 import importlib
 import io
 import json
@@ -75,9 +76,26 @@ def main() -> None:
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats(device)
     metric_names = [item.strip() for item in args.metrics.split(",") if item.strip()]
-    diagnostics = io.StringIO()
-    with contextlib.redirect_stdout(diagnostics):
-        metrics = {metric_name: pyiqa.create_metric(metric_name, device=str(device)) for metric_name in metric_names}
+    metrics: dict[str, IQAMetric] = {}
+
+    def wake_metrics() -> None:
+        if metrics:
+            return
+        diagnostics = io.StringIO()
+        with contextlib.redirect_stdout(diagnostics):
+            metrics.update(
+                {metric_name: pyiqa.create_metric(metric_name, device=str(device)) for metric_name in metric_names}
+            )
+        torch.cuda.synchronize(device)
+
+    def sleep_metrics() -> None:
+        metrics.clear()
+        gc.collect()
+        with torch.cuda.device(device):
+            torch.cuda.empty_cache()
+        torch.cuda.synchronize(device)
+
+    wake_metrics()
     torch.cuda.synchronize(device)
     if args.serve_jsonl:
         _emit(
@@ -96,6 +114,37 @@ def main() -> None:
             try:
                 request = json.loads(line)
                 request_id = request.get("request_id")
+                command = request.get("command", "infer")
+                if command == "sleep":
+                    sleep_metrics()
+                    _emit(
+                        RESULT_PREFIX,
+                        {
+                            "request_id": request_id,
+                            "status": "success",
+                            "state": "sleeping",
+                            "device": str(device),
+                            "cuda_allocated_mb": torch.cuda.memory_allocated(device) / 1024**2,
+                        },
+                    )
+                    continue
+                if command == "wake":
+                    wake_metrics()
+                    _emit(
+                        RESULT_PREFIX,
+                        {
+                            "request_id": request_id,
+                            "status": "success",
+                            "state": "ready",
+                            "device": str(device),
+                            "cuda_allocated_mb": torch.cuda.memory_allocated(device) / 1024**2,
+                        },
+                    )
+                    continue
+                if command != "infer":
+                    raise ValueError(f"unknown worker command: {command}")
+                if not metrics:
+                    raise RuntimeError("IQA models are sleeping")
                 input_path = Path(request["input"]).expanduser().resolve()
                 raw_scores, metric_seconds = _evaluate_metrics(metrics, input_path, device)
                 _emit(

@@ -24,6 +24,7 @@ from schemas import (
 from tool_registry import RESTORE_FUNCTION_NAME, ToolRegistry
 
 from .prompts import (
+    build_expert_single_step_sft_system_prompt,
     build_expert_single_step_sft_user_prompt,
     build_expert_state_prompt,
     build_expert_system_prompt,
@@ -151,6 +152,18 @@ def _int_list(value: Any) -> list[int] | None:
     return cast(list[int], items)
 
 
+def _generated_token_ids(first_choice: dict[str, Any]) -> list[int] | None:
+    """Read generated token IDs from native or provider-specific vLLM fields."""
+
+    token_ids = _int_list(first_choice.get("token_ids"))
+    if token_ids is not None:
+        return token_ids
+    provider_fields = first_choice.get("provider_specific_fields")
+    if not isinstance(provider_fields, dict):
+        return None
+    return _int_list(provider_fields.get("token_ids"))
+
+
 def _history_payload(state: RestorationTrajectoryState) -> list[dict[str, Any]]:
     """Build a compact, serializable action and feedback history."""
 
@@ -216,8 +229,10 @@ class VLMRestorationExpertAgent:
         try:
             image_url = self._encode_image(state.current_image)
             if step_index == 0:
+                system_prompt = build_expert_single_step_sft_system_prompt(self.expert_name, self.tool_registry)
                 state_prompt = build_expert_single_step_sft_user_prompt().removeprefix("<image>\n")
             else:
+                system_prompt = build_expert_system_prompt(self.expert_name, self.tool_registry)
                 state_prompt = build_expert_state_prompt(
                     step_index=step_index,
                     remaining_steps=max(self.max_steps - step_index, 0),
@@ -229,7 +244,7 @@ class VLMRestorationExpertAgent:
                     latest_feedback=state.current_evaluation.feedback,
                 )
             messages: list[dict[str, Any]] = [
-                {"role": "system", "content": build_expert_system_prompt(self.expert_name, self.tool_registry)},
+                {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
                     "content": [
@@ -277,7 +292,7 @@ class VLMRestorationExpertAgent:
         reasoning_content = (
             message.get("reasoning_content") if isinstance(message.get("reasoning_content"), str) else None
         )
-        generated_token_ids = _int_list(first_choice.get("token_ids"))
+        generated_token_ids = _generated_token_ids(first_choice)
         if raw_response is None and generated_token_ids and self.tokenizer is not None:
             raw_response = self.tokenizer.decode(generated_token_ids, skip_special_tokens=True)
         parse_status, parsed_payload, action, tool_call_id, parse_error = parse_expert_response(

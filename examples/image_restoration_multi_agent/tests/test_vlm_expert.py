@@ -9,6 +9,11 @@ from typing import Any
 
 import pytest
 from agents import ReplayExpertAgent, ScriptedDiagnosisAgent, VLMRestorationExpertAgent, parse_expert_response
+from agents.prompts import (
+    build_expert_single_step_sft_system_prompt,
+    build_expert_single_step_sft_user_prompt,
+    build_expert_system_prompt,
+)
 from config import load_stage_f_example_config
 from controller import ImageRestorationController
 from evaluators import ScriptedEvaluator
@@ -32,7 +37,16 @@ EXAMPLE_DIR = Path(__file__).resolve().parents[1]
 
 
 class _FakeResponse:
-    def __init__(self, content: str | None, tool_calls: list[dict[str, Any]] | None) -> None:
+    def __init__(
+        self,
+        content: str | None,
+        tool_calls: list[dict[str, Any]] | None,
+        *,
+        provider_token_ids: bool = False,
+    ) -> None:
+        choice_token_fields = (
+            {"provider_specific_fields": {"token_ids": [3, 4]}} if provider_token_ids else {"token_ids": [3, 4]}
+        )
         self.payload = {
             "id": "chatcmpl-expert-test",
             "model": "glm-4.1v-9b-thinking",
@@ -47,7 +61,7 @@ class _FakeResponse:
                         "tool_calls": tool_calls,
                     },
                     "finish_reason": "tool_calls" if tool_calls else "stop",
-                    "token_ids": [3, 4],
+                    **choice_token_fields,
                 }
             ],
             "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
@@ -59,21 +73,34 @@ class _FakeResponse:
 
 
 class _FakeCompletions:
-    def __init__(self, content: str | None, tool_calls: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        content: str | None,
+        tool_calls: list[dict[str, Any]] | None = None,
+        *,
+        provider_token_ids: bool = False,
+    ) -> None:
         self.content = content
         self.tool_calls = tool_calls
+        self.provider_token_ids = provider_token_ids
         self.call_count = 0
         self.last_request: dict[str, Any] | None = None
 
     def create(self, **request: Any) -> _FakeResponse:
         self.call_count += 1
         self.last_request = request
-        return _FakeResponse(self.content, self.tool_calls)
+        return _FakeResponse(self.content, self.tool_calls, provider_token_ids=self.provider_token_ids)
 
 
 class _FakeClient:
-    def __init__(self, content: str | None, tool_calls: list[dict[str, Any]] | None = None) -> None:
-        self.completions = _FakeCompletions(content, tool_calls)
+    def __init__(
+        self,
+        content: str | None,
+        tool_calls: list[dict[str, Any]] | None = None,
+        *,
+        provider_token_ids: bool = False,
+    ) -> None:
+        self.completions = _FakeCompletions(content, tool_calls, provider_token_ids=provider_token_ids)
         self.chat = type("Chat", (), {"completions": self.completions})()
 
 
@@ -235,6 +262,51 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
     assert '"raw_scores":{"mock":0.5}' in str(messages[-1])
     assert '"step_reward":0.1' in str(messages[-1])
     assert '"feedback":"quality improved"' in str(messages[-1])
+    assert messages[0]["content"] == build_expert_system_prompt(ExpertName.FOG, _registry())
+
+
+def test_vlm_expert_first_turn_exactly_reuses_single_step_sft_prompts(tmp_path: Path) -> None:
+    config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
+    registry = _registry()
+    client = _FakeClient(None, _parsed_tool_call("scunet"))
+    image_path = tmp_path / "initial.png"
+    image_path.write_bytes(b"initial-image")
+    agent = VLMRestorationExpertAgent(
+        config.expert_vlm,
+        ExpertName.FOG,
+        registry,
+        max_steps=config.workflow.max_steps,
+        client=client,
+    )
+
+    decision = agent.decide(_state(image_path))
+
+    assert decision.parse_status == ExpertParseStatus.VALID
+    request = client.completions.last_request
+    assert request is not None
+    messages = request["messages"]
+    assert messages[0]["content"] == build_expert_single_step_sft_system_prompt(ExpertName.FOG, registry)
+    user_text = build_expert_single_step_sft_user_prompt().removeprefix("<image>\n")
+    assert messages[1]["content"][1] == {"type": "text", "text": user_text}
+
+
+def test_vlm_expert_retains_provider_specific_token_ids_for_invalid_output(tmp_path: Path) -> None:
+    config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
+    image_path = tmp_path / "invalid.png"
+    image_path.write_bytes(b"invalid-image")
+    client = _FakeClient("malformed output", provider_token_ids=True)
+    agent = VLMRestorationExpertAgent(
+        config.expert_vlm,
+        ExpertName.FOG,
+        _registry(),
+        max_steps=config.workflow.max_steps,
+        client=client,
+    )
+
+    decision = agent.decide(_state(image_path))
+
+    assert decision.parse_status == ExpertParseStatus.INVALID_TOOL_CALL
+    assert decision.generated_token_ids == [3, 4]
 
 
 def test_replay_uses_strict_parser_and_completes_multistep_controller(tmp_path: Path) -> None:
@@ -309,7 +381,11 @@ def test_invalid_replay_stops_before_worker_and_returns_original(tmp_path: Path)
     result = controller.run(task, trajectory_id="replay-invalid")
 
     assert result.state.termination_reason == "invalid_tool_call"
+    assert result.state.final_reward == -config.workflow.invalid_action_penalty
     assert result.state.tool_call_count == 0
     assert result.state.best_image == str(input_path.resolve())
     assert result.state.steps[0].expert_decision.parse_status == ExpertParseStatus.INVALID_TOOL_CALL
+    assert result.state.steps[0].reward_components == {
+        "invalid_action_penalty": -config.workflow.invalid_action_penalty
+    }
     assert result.state.steps[0].output_image is None
