@@ -20,7 +20,7 @@ import yaml
 from transformers import AutoTokenizer
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
-NO_THINKING_CHAT_TEMPLATE = EXAMPLE_DIR / "grpo/templates/glm4v_no_thinking.jinja"
+DEFAULT_CHAT_TEMPLATE = EXAMPLE_DIR / "grpo/templates/qwen35_hermes_nothink.jinja"
 if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
 
@@ -48,6 +48,8 @@ def _load_run_config(path: Path) -> dict[str, Any]:
         raise ValueError(f"GRPO run config must be a mapping: {path}")
     for key in ("stage_config", "model_path", "adapter_path", "train_data", "val_data", "output_dir"):
         payload[key] = _resolve(path, str(payload[key]))
+    if payload.get("chat_template") is not None:
+        payload["chat_template"] = _resolve(path, str(payload["chat_template"]))
     swanlab = payload.get("swanlab")
     if not isinstance(swanlab, dict):
         raise ValueError(f"GRPO run config must contain a swanlab mapping: {path}")
@@ -63,7 +65,7 @@ def _load_run_config(path: Path) -> dict[str, Any]:
     if missing_swanlab_keys:
         missing = ", ".join(sorted(missing_swanlab_keys))
         raise ValueError(f"GRPO swanlab config is missing keys: {missing}")
-    valid_modes = {"online", "local", "offline", "disabled"}
+    valid_modes = {"online", "cloud", "local", "offline", "disabled"}
     for key in ("mode", "smoke_mode"):
         if swanlab[key] not in valid_modes:
             choices = ", ".join(sorted(valid_modes))
@@ -72,6 +74,12 @@ def _load_run_config(path: Path) -> dict[str, Any]:
     training = payload.get("training")
     if not isinstance(training, dict):
         raise ValueError(f"GRPO run config must contain a training mapping: {path}")
+    trace_aggregator_level = str(training.get("trace_aggregator_level", "trajectory"))
+    valid_trace_aggregator_levels = {"trajectory", "trajectory_transition", "transition"}
+    if trace_aggregator_level not in valid_trace_aggregator_levels:
+        choices = ", ".join(sorted(valid_trace_aggregator_levels))
+        raise ValueError(f"training.trace_aggregator_level must be one of {choices}, got {trace_aggregator_level!r}")
+    training["trace_aggregator_level"] = trace_aggregator_level
     rollout_concurrency = int(training["train_batch_size"]) * int(training["rollout_n"])
     if int(training["n_runners"]) != rollout_concurrency:
         raise ValueError(
@@ -109,7 +117,10 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
     loggers = ["console"]
     if bool(swanlab["enabled"]):
         loggers.append("swanlab")
-    chat_template = NO_THINKING_CHAT_TEMPLATE.read_text(encoding="utf-8")
+    chat_template_path = Path(str(run.get("chat_template") or DEFAULT_CHAT_TEMPLATE)).expanduser()
+    if not chat_template_path.is_absolute():
+        chat_template_path = (EXAMPLE_DIR / chat_template_path).resolve()
+    chat_template = chat_template_path.read_text(encoding="utf-8")
     conf = {
         "algorithm": {
             "adv_estimator": "grpo",
@@ -125,13 +136,16 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "timeout_seconds": float(training["tool_runtime_lifecycle_timeout_seconds"]),
             },
             "trace_aggregator": {
-                # Keep each turn as an independent visual observation so the
-                # actor encodes only the latest image. The trainer still
-                # deduplicates rewards by rollout and computes GRPO at the
-                # complete-trajectory level.
-                "level": "trajectory_transition",
+                # Default to trajectory-level aggregation so each sampled
+                # multi-turn rollout contributes one PPO/GRPO row. This matches
+                # the original VERL restoration setup and avoids dynamic row
+                # counts from variable-length tool-call trajectories.
+                "level": str(training["trace_aggregator_level"]),
                 "trajectory_max_prompt_length": int(training["trajectory_max_prompt_length"]),
                 "trajectory_max_response_length": int(training["trajectory_max_response_length"]),
+                "force_one_sample_per_rollout": bool(
+                    training.get("force_one_sample_per_rollout", training["trace_aggregator_level"] == "trajectory")
+                ),
                 "debug": False,
             },
         },
@@ -149,15 +163,14 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "lora_alpha": int(training["lora_alpha"]),
                 "target_modules": str(training["lora_target_modules"]),
                 "lora_adapter_path": run["adapter_path"],
-                # Expert SFT and its evaluation use LlamaFactory's
-                # enable_thinking=false prefix. Apply the same template to both
-                # rollout generation and actor/ref retokenization.
+                # Expert SFT uses a no-thinking Qwen3.5 prefix and embeds the
+                # Hermes protocol in the system prompt. Apply the same template
+                # to rollout generation and actor/ref retokenization.
                 "custom_chat_template": chat_template,
-                # GLM-4.1V uses 3-axis M-RoPE. Keeping the 2D attention mask
-                # avoids Transformers treating those axes as packed batches.
                 "use_remove_padding": bool(training["use_remove_padding"]),
                 "enable_gradient_checkpointing": bool(training["enable_gradient_checkpointing"]),
                 "enable_activation_offload": bool(training["enable_activation_offload"]),
+                "override_config": {"attn_implementation": str(training.get("attn_implementation", "sdpa"))},
             },
             "rollout": {
                 "name": "vllm",
@@ -166,7 +179,7 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "n": rollout_n,
                 # GRPO requires stochastic candidates even in the one-step
                 # smoke run. Greedy decoding can make all group members
-                # identical and produced non-finite policy statistics on GLM.
+                # identical and can produce non-finite policy statistics.
                 "temperature": float(training["temperature"]),
                 "top_k": int(training["top_k"]),
                 "top_p": float(training["top_p"]),
@@ -179,8 +192,7 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "max_num_batched_tokens": int(training["max_num_batched_tokens"]),
                 "max_num_seqs": int(training["max_num_seqs"]),
                 # Preload the immutable base model in vLLM, then synchronize only
-                # LoRA tensors. GLM-4.1V's vLLM loader does not accept PEFT
-                # ``base_layer`` names from full-model hybrid weight sync.
+                # LoRA tensors.
                 "load_format": "safetensors",
                 # Keep the preloaded base model resident during trainer/rollout
                 # switches and synchronize only the trainable LoRA tensors.
@@ -194,9 +206,10 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                     "vllm": {
                         "enable_auto_tool_choice": True,
                         "tool_call_parser": "hermes",
-                        "chat_template": str(NO_THINKING_CHAT_TEMPLATE),
+                        "chat_template": str(chat_template_path),
                         "max_model_len": int(training["max_model_len"]),
                         "mm_processor_cache_gb": 0,
+                        "disable_custom_all_reduce": bool(training.get("disable_custom_all_reduce", False)),
                     }
                 },
             },
@@ -206,9 +219,9 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "ppo_epochs": int(training["ppo_epochs"]),
                 "use_dynamic_bsz": bool(training["use_dynamic_bsz"]),
                 "ppo_max_token_len_per_gpu": int(training["ppo_max_token_len_per_gpu"]),
-                # First average tokens within each action, then average action
-                # rows. Combined with the 1/T advantage scaling this gives each
-                # trajectory equal total policy weight regardless of turn count.
+                # In trajectory aggregation, each complete sampled rollout is
+                # one policy row. Average over generated assistant tokens while
+                # masking tool-observation tokens through response_mask.
                 "loss_agg_mode": str(training["loss_agg_mode"]),
                 "shuffle": bool(training["shuffle"]),
                 "grad_clip": float(training["grad_clip"]),
@@ -277,8 +290,15 @@ def _configure_swanlab_environment(run: dict[str, Any], *, smoke: bool) -> None:
     swanlab = cast(dict[str, Any], run["swanlab"])
     if not bool(swanlab["enabled"]):
         return
+    mode = str(swanlab["smoke_mode"] if smoke else swanlab["mode"])
+    # SwanLab 0.7.x uses "cloud" for online logging. Keep "online" as a
+    # friendlier config alias because earlier project configs used it.
+    if mode == "online":
+        mode = "cloud"
+    Path(str(run["output_dir"])).mkdir(parents=True, exist_ok=True)
+    Path(str(swanlab["log_dir"])).mkdir(parents=True, exist_ok=True)
     os.environ["SWANLAB_LOG_DIR"] = str(swanlab["log_dir"])
-    os.environ["SWANLAB_MODE"] = str(swanlab["smoke_mode"] if smoke else swanlab["mode"])
+    os.environ["SWANLAB_MODE"] = mode
 
 
 def main() -> int:
@@ -294,6 +314,7 @@ def main() -> int:
     if args.smoke:
         stage_config.workflow.max_steps = 2
         stage_config.workflow.no_improvement_limit = 2
+        stage_config.workflow.stop_min_tool_calls = 1
     registry = ToolRegistry.from_yaml(stage_config.tools_config)
     factory_class = SmokeControllerFactory if args.smoke else RealControllerFactory
     factory = factory_class(stage_config, registry)

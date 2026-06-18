@@ -345,6 +345,7 @@ class StageFImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
                 routed_expert,
                 self.factory.tool_registry,
                 max_steps=self.config.workflow.max_steps,
+                min_stop_tool_calls=self.config.workflow.stop_min_tool_calls,
                 resource_name=self._resource_name(routed_expert),
                 client=self.expert_client,
             )

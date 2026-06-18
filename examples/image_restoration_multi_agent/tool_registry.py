@@ -108,20 +108,26 @@ class ToolRegistry:
             raise UnknownActionError("stop does not have a restoration runtime")
         return self._tools[action]
 
-    def build_tool_schema(self) -> dict[str, Any]:
+    def build_tool_schema(self, *, include_stop: bool = True) -> dict[str, Any]:
         """Build the canonical OpenAI-compatible restore_image tool definition."""
 
+        actions = list(self.actions if include_stop else self._tools.keys())
+        description = (
+            "Apply one registered restoration action or stop the trajectory."
+            if include_stop
+            else "Apply one registered restoration action."
+        )
         return {
             "type": "function",
             "function": {
                 "name": RESTORE_FUNCTION_NAME,
-                "description": "Apply one registered restoration action or stop the trajectory.",
+                "description": description,
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": list(self.actions),
+                            "enum": actions,
                         }
                     },
                     "required": ["action"],

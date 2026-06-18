@@ -27,7 +27,7 @@ class _DiagnosisResponse:
         assert mode == "json"
         return {
             "id": "chatcmpl-stage-g-diagnosis",
-            "model": "glm-4.1v-9b-thinking",
+            "model": "qwen3.5-9b",
             "choices": [
                 {
                     "message": {
@@ -69,7 +69,7 @@ class _InvalidExpertResponse:
         assert mode == "json"
         return {
             "id": "chatcmpl-stage-g-expert",
-            "model": "glm-4.1v-9b-thinking",
+            "model": "qwen3.5-9b",
             "choices": [
                 {
                     "message": {"content": "untrained response", "tool_calls": None},

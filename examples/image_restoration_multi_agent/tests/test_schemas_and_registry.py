@@ -52,6 +52,16 @@ def test_tool_schema_contains_all_actions_and_stop() -> None:
     assert all(registry.get_tool(action).runtime is not None for action in registry.actions[:-1])
 
 
+def test_tool_schema_can_hide_stop_for_early_training_turns() -> None:
+    config = load_example_config(EXAMPLE_DIR / "config" / "default.yaml")
+    registry = ToolRegistry.from_yaml(config.tools_config)
+    schema = registry.build_tool_schema(include_stop=False)
+
+    action_enum = schema["function"]["parameters"]["properties"]["action"]["enum"]
+    assert STOP_ACTION not in action_enum
+    assert action_enum == list(registry.actions[:-1])
+
+
 def test_diagnosis_rejects_mismatched_route() -> None:
     with pytest.raises(ValidationError, match="must route"):
         DiagnosisResult(primary_type=DegradationType.FOG, route_to=ExpertName.RAIN)

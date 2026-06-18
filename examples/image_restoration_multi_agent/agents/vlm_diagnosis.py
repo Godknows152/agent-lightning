@@ -1,4 +1,4 @@
-"""Single-call GLM-V diagnosis through a vLLM OpenAI-compatible endpoint."""
+"""Single-call VLM diagnosis through a vLLM OpenAI-compatible endpoint."""
 
 from __future__ import annotations
 
@@ -163,7 +163,7 @@ def _int_list(value: Any) -> list[int] | None:
 
 
 class VLMDegradationDiagnosisAgent:
-    """Call a served GLM-V model exactly once and retain the complete response."""
+    """Call a served VLM exactly once and retain the complete response."""
 
     def __init__(self, settings: VLMSettings, *, client: object | None = None) -> None:
         self.settings = settings

@@ -1,6 +1,6 @@
 # Hierarchical Multi-Agent Image Restoration
 
-This example implements stages A-H of the design in `分层多智能体图像修复系统设计草案.md`. It provides validated protocols, a deterministic workflow, Agent Lightning tracing, a real restoration/IQA path isolated in the `verl` conda environment, four parallel GLM-4.1V expert interfaces, and trajectory-level GRPO training from the four SFT LoRA adapters.
+This example implements stages A-H of the design in `分层多智能体图像修复系统设计草案.md`. It provides validated protocols, a deterministic workflow, Agent Lightning tracing, a real restoration/IQA path isolated in the `verl` conda environment, four parallel Qwen3.5 expert interfaces, and trajectory-level GRPO training from the four SFT LoRA adapters.
 
 ## Current Scope
 
@@ -12,7 +12,7 @@ This example implements stages A-H of the design in `分层多智能体图像修
 - TOPIQ-NR, MUSIQ, and NIQE evaluation with normalized weighted aggregation.
 - A separate GRPO reward calibration for MANIQA, direction-normalized NIQE,
   CLIP-IQA, and TOPIQ-NR.
-- Single-call GLM-4.1V diagnosis through a vLLM OpenAI-compatible endpoint.
+- Single-call Qwen3.5 diagnosis through a vLLM OpenAI-compatible endpoint.
 - Strict VLM parsing with raw-response and token-ID retention.
 - Independent `predicted_strict` and `oracle_observe` routing modes.
 - Diagnosis API, parsing, classification, confusion-matrix, and latency metrics.
@@ -26,7 +26,7 @@ This example implements stages A-H of the design in `分层多智能体图像修
 - Image-only, no-GT GRPO seed manifests with 1,000 train and 200 validation images per expert.
 - Four-metric IQA reward using MANIQA, direction-normalized NIQE, CLIP-IQA, and TOPIQ-NR.
 - Step IQA rewards summed into one trajectory reward, including stop and failure shaping.
-- Agent Lightning VERL with `trace_aggregator.level=trajectory_transition`, one latest image per turn, trajectory-level GRPO advantages, GLM-4.1V multimodal compatibility patches, and LoRA-only policy updates.
+- Agent Lightning VERL with `trace_aggregator.level=trajectory`, complete sampled rollouts as PPO rows, Qwen3.5 multimodal compatibility patches, and LoRA-only policy updates.
 - Four independent GRPO run configurations and SwanLab experiment names under the shared `image-restoration-multi-agent` project.
 - A Stage H persistent tool service with all IQA metrics on `cuda:0` and all restoration models on `cuda:1`.
 
@@ -42,11 +42,11 @@ conda activate agent-lightning
 
 The controller and Agent Lightning runner use `agent-lightning`. Restoration and IQA processes use `verl`; the main environment never imports their PyTorch, BasicSR, or model packages. Stages D-G retain the one-shot subprocess path. Formal Stage H launches a local HTTP service whose model-owning children remain alive throughout the GRPO run.
 
-Stage E serves `/home/LXJ/Python_Projects/Models/GLM-4.1V-9B-Thinking` with vLLM `0.10.2` from the `agent-lightning` environment. The model is exposed through the standard OpenAI Chat Completions API. Guided JSON decoding is intentionally disabled so the smoke test observes the untrained model's actual format-following behavior.
+Stage E serves `/home/LXJ/Python_Projects/Models/Qwen3.5-9B` with vLLM `0.19.1` from the `agent-lightning` environment. The model is exposed through the standard OpenAI Chat Completions API. Guided JSON decoding is intentionally disabled so the smoke test observes the untrained model's actual format-following behavior.
 
 Stage H also requires the `swanlab` Python package in `agent-lightning`; the verified environment uses SwanLab `0.8.2`.
 
-The launch script enables `--enable-auto-tool-choice --tool-call-parser hermes` for both diagnosis and expert inference. Prompts explicitly embed their function schema inside `<tools>` tags because the GLM-4.1V checkpoint's bundled chat template does not render the OpenAI `tools` request field by itself. Diagnosis uses `<tool_call>{"name":"diagnose_degradation","arguments":{"primary_type":"fog","visual_evidence":[...]}}</tool_call>`; experts use `<tool_call>{"name":"restore_image","arguments":{"action":"..."}}</tool_call>`. The controller derives `route_to` from `primary_type`.
+The launch script enables `--enable-auto-tool-choice --tool-call-parser hermes` for both diagnosis and expert inference. Prompts explicitly embed their function schema inside `<tools>` tags, and the custom Qwen3.5 chat template ignores the OpenAI `tools` request field so the policy stays on the raw Hermes JSON protocol. Diagnosis uses `<tool_call>{"name":"diagnose_degradation","arguments":{"primary_type":"fog","visual_evidence":[...]}}</tool_call>`; experts use `<tool_call>{"name":"restore_image","arguments":{"action":"..."}}</tool_call>`. The controller derives `route_to` from `primary_type`.
 
 ## Smoke Test
 
@@ -74,11 +74,11 @@ The command starts model subprocesses in `verl`. Override the isolated interpret
 
 ## Stage E VLM Smoke Test
 
-Start GLM-4.1V on one GPU:
+Start Qwen3.5 on one GPU:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 conda run --no-capture-output -n agent-lightning \
-  bash examples/image_restoration_multi_agent/serve_glm4v.sh
+  bash examples/image_restoration_multi_agent/serve_qwen35.sh
 ```
 
 In another terminal, run the complete path on a different GPU:
@@ -178,7 +178,7 @@ The generated JSONL files and rollout artifacts are ignored by Git. Each sample 
 
 ## Stage H GRPO Smoke Test
 
-The smoke test uses the real GLM-4.1V base model and Fog SFT LoRA, two stochastic trajectories, independent latest-image transitions with trajectory-level advantages, copy restoration, deterministic action-dependent IQA, one actor update, and checkpoint saving:
+The smoke test uses the real Qwen3.5 base model and Fog SFT LoRA, two stochastic complete trajectories, copy restoration, deterministic action-dependent IQA, one actor update, and checkpoint saving:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 \
@@ -187,7 +187,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
 
 Smoke runs use the YAML `swanlab.smoke_mode` setting, which defaults to `offline`; formal runs use `swanlab.mode`, which defaults to `online`. Because the current SFT policy can still omit Hermes calls, smoke mode retains each real VLM response but overrides the environment action with `scunet -> stop`. This smoke-only override guarantees two turns so latest-image feedback, trajectory reward broadcasting, response masks, and actor updates are exercised. Formal training never enables the override.
 
-The verified run retained four VLM turns as four independent visual transitions from two rollouts. Each turn contained only its latest image plus complete text state; GRPO deduplicated the repeated final reward by rollout and shared the resulting trajectory advantage across its turns with `1/T` weighting. A lightweight prompt-image trace annotation preserves the current image path even when the provider omits large multimodal prompt payloads from telemetry. The run reported `n_triplets=4`, `n_trajectory_transition_rollouts=2`, `avg_images_per_transition=1.0`, `max_images_per_transition=1`, no dropped or padded transitions, finite entropy/KL/gradient norm, and a consolidated LoRA adapter under `grpo/outputs/fog/smoke/`. Peak actor allocated memory fell from about 76.6 GB in the cumulative-image trajectory smoke to about 29.8 GB. The deterministic override gives both trajectories the same reward, so its group advantage is intentionally zero. This proves the training path, not restoration policy quality; before relying on a long formal run, monitor Hermes validity and group reward standard deviation during the first batches.
+The verified trajectory-transition smoke previously retained four VLM turns as four independent visual transitions from two rollouts. The current trajectory configuration instead forces Agent Lightning to merge each rollout into one PPO row, matching the original VERL restoration training semantics. A lightweight prompt-image trace annotation still preserves the current image path even when the provider omits large multimodal prompt payloads from telemetry. Because the live expert prompt is currently rebuilt per step from compact state text, non-prefix turns are appended as text observation tokens and masked out of the policy loss; duplicated vision placeholder spans from those appended prompts are stripped so the trajectory keeps one visual slot instead of accumulating intermediate images. The first trajectory-mode run should monitor `n_unmerged_rollouts`, `n_triplets`, `n_stripped_vision_tokens`, and image-token alignment errors, with the target of one triplet per sampled rollout. This proves the training path, not restoration policy quality; before relying on a long formal run, monitor Hermes validity, group reward standard deviation, merge ratio, KL, and gradient norms during the first batches.
 
 ## Stage H Formal GRPO
 
@@ -264,7 +264,7 @@ Each expert YAML is the experiment-facing source of truth rather than a minimal 
 | `lit_agent.py` | Deterministic and real Agent Lightning `LitAgent` wrappers |
 | `smoke_test.py` | No-GPU traced end-to-end smoke test |
 | `real_smoke_test.py` | GPU traced smoke test across `agent-lightning` and `verl` |
-| `serve_glm4v.sh` | vLLM launch command for the local GLM-4.1V checkpoint |
+| `serve_qwen35.sh` | vLLM launch command for the local Qwen3.5 checkpoint |
 | `stage_e_smoke_test.py` | Traced real-VLM smoke test for both routing modes |
 | `stage_f_smoke_test.py` | Traced replay/real-VLM expert smoke test with real restoration and IQA components |
 | `stage_g_smoke_test.py` | Four-category Replay or strict-VLM validation matrix with isolated outputs |
@@ -280,7 +280,7 @@ Each expert YAML is the experiment-facing source of truth rather than a minimal 
 | `grpo/render_training_log.py` | Compact terminal progress bars and single-line Hermes error rendering |
 | `grpo/configs/` | Independent Fog, Snow, Rain, and Low-light GRPO configurations |
 | `grpo/configs_2gpu/` | Independent two-GPU configurations and output locations for all four experts |
-| `grpo/templates/glm4v_no_thinking.jinja` | GLM-4.1V chat template aligned with the expert SFT prefix |
+| `grpo/templates/qwen35_hermes_nothink.jinja` | Qwen3.5 chat template aligned with the expert SFT prefix |
 | `tests/` | Protocol, controller, subprocess, IQA, failure-path, VLM parsing, and trace tests |
 
 ## Output Contract

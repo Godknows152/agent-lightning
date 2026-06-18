@@ -49,7 +49,7 @@ class _FakeResponse:
         )
         self.payload = {
             "id": "chatcmpl-expert-test",
-            "model": "glm-4.1v-9b-thinking",
+            "model": "qwen3.5-9b",
             "prompt_token_ids": [1, 2],
             "choices": [
                 {
@@ -263,6 +263,33 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
     assert '"step_reward":0.1' in str(messages[-1])
     assert '"feedback":"quality improved"' in str(messages[-1])
     assert messages[0]["content"] == build_expert_system_prompt(ExpertName.FOG, _registry())
+
+
+def test_vlm_expert_hides_stop_before_minimum_tool_calls(tmp_path: Path) -> None:
+    config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
+    registry = _registry()
+    client = _FakeClient(None, _parsed_tool_call("scunet"))
+    image_path = tmp_path / "latest.png"
+    image_path.write_bytes(b"latest-image")
+    agent = VLMRestorationExpertAgent(
+        config.expert_vlm,
+        ExpertName.FOG,
+        registry,
+        max_steps=config.workflow.max_steps,
+        min_stop_tool_calls=5,
+        client=client,
+    )
+    state = _state(image_path, with_history=True)
+    state.tool_call_count = 1
+
+    decision = agent.decide(state)
+
+    assert decision.parse_status == ExpertParseStatus.VALID
+    request = client.completions.last_request
+    assert request is not None
+    action_enum = request["tools"][0]["function"]["parameters"]["properties"]["action"]["enum"]
+    assert "stop" not in action_enum
+    assert "The stop action is not available yet" in request["messages"][0]["content"]
 
 
 def test_vlm_expert_first_turn_exactly_reuses_single_step_sft_prompts(tmp_path: Path) -> None:

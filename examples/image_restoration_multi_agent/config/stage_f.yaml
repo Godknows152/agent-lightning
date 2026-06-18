@@ -54,7 +54,7 @@ vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: glm-4.1v-9b-thinking
+  model: qwen3.5-9b
   timeout_seconds: 180
   max_tokens: 2048
   temperature: 0.0
@@ -68,7 +68,7 @@ expert_vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: glm-4.1v-9b-thinking
+  model: qwen3.5-9b
   timeout_seconds: 180
   max_tokens: 2048
   temperature: 0.0

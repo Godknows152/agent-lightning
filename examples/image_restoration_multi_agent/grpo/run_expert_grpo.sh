@@ -17,6 +17,9 @@ ROOT="/home/LXJ/Python_Projects/Agent_Lightning"
 LOG_DIR="$ROOT/examples/image_restoration_multi_agent/grpo/log"
 CONFIG_DIR="${GRPO_CONFIG_DIR:-examples/image_restoration_multi_agent/grpo/configs}"
 TOPOLOGY="${GRPO_TOPOLOGY:-4gpu}"
+GRPO_CONDA_ENV="${GRPO_CONDA_ENV:-agent-lightning}"
+GRPO_ENV_DIR="${GRPO_ENV_DIR:-/home/LXJ/anaconda3/envs/${GRPO_CONDA_ENV}}"
+GRPO_PYTHON="${GRPO_PYTHON:-${GRPO_ENV_DIR}/bin/python}"
 mkdir -p "$LOG_DIR"
 RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
 LOG_FILE="$LOG_DIR/${EXPERT}_${TOPOLOGY}_grpo_${RUN_STAMP}.log"
@@ -127,7 +130,7 @@ if [[ "$SMOKE" == false ]]; then
   echo "Persistent restoration/IQA service is ready at $TOOL_URL."
 fi
 
-conda run --no-capture-output -n agent-lightning \
+conda run --no-capture-output -n "$GRPO_CONDA_ENV" \
   bash -c '
     set -euo pipefail
     for proxy_var in ALL_PROXY all_proxy HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
@@ -141,6 +144,6 @@ conda run --no-capture-output -n agent-lightning \
   ' bash \
   examples/image_restoration_multi_agent/grpo/train_grpo.py \
   --config "${CONFIG_DIR}/${EXPERT}.yaml" \
-  "$@" 2>&1 | /home/LXJ/anaconda3/envs/agent-lightning/bin/python \
+  "$@" 2>&1 | "$GRPO_PYTHON" \
     examples/image_restoration_multi_agent/grpo/render_training_log.py \
     --log-file "$LOG_FILE"

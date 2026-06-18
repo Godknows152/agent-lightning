@@ -1,4 +1,4 @@
-"""Run stage E with GLM-4.1V diagnosis and real restoration/IQA models.
+"""Run stage E with a served VLM diagnosis agent and real restoration/IQA models.
 
 Usage:
     python examples/image_restoration_multi_agent/stage_e_smoke_test.py \

@@ -1,4 +1,4 @@
-"""Run stage F with replay or strict GLM-4.1V expert decisions.
+"""Run stage F with replay or strict served-VLM expert decisions.
 
 Usage:
     python examples/image_restoration_multi_agent/stage_f_smoke_test.py \

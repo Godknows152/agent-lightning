@@ -105,6 +105,30 @@ def test_no_improvement_limit_stops_the_loop(tmp_path: Path) -> None:
     assert len(state.steps) == 3
 
 
+def test_no_improvement_limit_can_be_disabled(tmp_path: Path) -> None:
+    factory = _factory()
+    factory.config.workflow = factory.config.workflow.model_copy(
+        update={
+            "max_steps": 4,
+            "no_improvement_limit": None,
+        }
+    )
+    task = RestorationTask(
+        image_path=str(_input_image(tmp_path)),
+        degradation_type=DegradationType.LOW_LIGHT,
+        scripted_actions=["scunet"] * 4,
+        score_sequence=[0.5, 0.49, 0.48, 0.47, 0.46],
+        output_dir=str(tmp_path / "run"),
+    )
+
+    result = factory.build(task).run(task, trajectory_id="trajectory-no-improvement-disabled", trace=False)
+
+    state = result.state
+    assert state.termination_reason == "max_steps"
+    assert state.tool_call_count == 4
+    assert state.consecutive_no_improvement == 4
+
+
 def test_consecutive_evaluation_failures_do_not_replace_current_image(tmp_path: Path) -> None:
     input_path = _input_image(tmp_path)
     task = RestorationTask(

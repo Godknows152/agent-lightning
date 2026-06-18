@@ -117,6 +117,7 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
             self.expert_name,
             self.factory.tool_registry,
             max_steps=self.config.workflow.max_steps,
+            min_stop_tool_calls=self.config.workflow.stop_min_tool_calls,
             resource_name=resource_name,
             tokenizer=self.tokenizer,
         )

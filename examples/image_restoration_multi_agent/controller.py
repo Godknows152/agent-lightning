@@ -271,7 +271,10 @@ class ImageRestorationController:
                     latency_seconds=restoration.latency_seconds,
                 )
             )
-            if state.consecutive_no_improvement >= self.settings.no_improvement_limit:
+            if (
+                self.settings.no_improvement_limit is not None
+                and state.consecutive_no_improvement >= self.settings.no_improvement_limit
+            ):
                 self._terminate(state, "no_improvement_limit")
                 break
 

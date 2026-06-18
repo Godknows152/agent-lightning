@@ -15,7 +15,7 @@ class WorkflowSettings(StrictModel):
 
     max_steps: int = Field(default=6, ge=1)
     max_consecutive_failures: int = Field(default=2, ge=1)
-    no_improvement_limit: int = Field(default=3, ge=1)
+    no_improvement_limit: int | None = Field(default=3, ge=1)
     improvement_epsilon: float = Field(default=1e-6, ge=0.0)
     tool_call_cost: float = Field(default=0.01, ge=0.0)
     invalid_action_penalty: float = Field(default=1.0, ge=0.0)

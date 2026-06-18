@@ -78,12 +78,32 @@ Rules:
 8. Do not call a restoration tool and do not propose a restoration sequence."""
 
 
-def build_expert_system_prompt(expert_name: ExpertName, tool_registry: ToolRegistry) -> str:
+def build_expert_system_prompt(
+    expert_name: ExpertName,
+    tool_registry: ToolRegistry,
+    *,
+    allow_stop: bool = True,
+    min_stop_tool_calls: int | None = None,
+) -> str:
     """Build one expert prompt with the complete shared Hermes tool schema."""
 
     degradation_type = EXPERT_DEGRADATION[expert_name]
-    function_schema = tool_registry.build_tool_schema()["function"]
+    function_schema = tool_registry.build_tool_schema(include_stop=allow_stop)["function"]
     serialized_schema = json.dumps(function_schema, ensure_ascii=False, separators=(",", ":"))
+    if allow_stop:
+        stop_instruction = """The example action illustrates syntax only. Determine the action from the actual image,
+history, and IQA feedback. To finish the trajectory, use action stop:
+<tool_call>
+{"name":"restore_image","arguments":{"action":"stop"}}
+</tool_call>"""
+        stop_rule = "Use action stop when further processing is unlikely to improve the historical best image."
+    else:
+        threshold = min_stop_tool_calls if min_stop_tool_calls is not None else "the configured minimum"
+        stop_instruction = f"""The example action illustrates syntax only. Determine the action from the actual image,
+history, and IQA feedback. The stop action is not available yet because fewer than
+{threshold} restoration tool calls have been executed. Continue with one restoration action
+from the supplied schema."""
+        stop_rule = "Do not use action stop before it appears in the supplied schema."
     return f"""Prompt version: {EXPERT_PROMPT_VERSION}
 
 You are {expert_name.value}, the restoration policy specialized through training data for
@@ -105,18 +125,14 @@ Return exactly one Hermes tool call and no other output:
 {{"name":"restore_image","arguments":{{"action":"focalnet_dehaze"}}}}
 </tool_call>
 
-The example action illustrates syntax only. Determine the action from the actual image,
-history, and IQA feedback. To finish the trajectory, use action stop:
-<tool_call>
-{{"name":"restore_image","arguments":{{"action":"stop"}}}}
-</tool_call>
+{stop_instruction}
 
 Rules:
 1. Emit exactly one <tool_call></tool_call> block per turn.
 2. The name field must be exactly restore_image.
 3. The arguments object must contain exactly one field named action.
 4. action must be one of the enum values in the supplied schema.
-5. Use action stop when further processing is unlikely to improve the historical best image.
+5. {stop_rule}
 6. Do not emit an IQA score, explanation, or extra text.
 7. Do not wrap the tool call in a Markdown code fence or emit bare JSON.
 8. Do not claim an action improved the image before receiving the next IQA result.
@@ -128,8 +144,7 @@ def build_expert_single_step_sft_system_prompt(expert_name: ExpertName, tool_reg
     """Build the initial-state prompt used for single-step expert SFT."""
 
     degradation_type = EXPERT_DEGRADATION[expert_name]
-    function_schema = tool_registry.build_tool_schema()["function"]
-    function_schema["parameters"]["properties"]["action"]["enum"] = list(tool_registry.actions[:-1])
+    function_schema = tool_registry.build_tool_schema(include_stop=False)["function"]
     serialized_schema = json.dumps(function_schema, ensure_ascii=False, separators=(",", ":"))
     return f"""Prompt version: {EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION}
 

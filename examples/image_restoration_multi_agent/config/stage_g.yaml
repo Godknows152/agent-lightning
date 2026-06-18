@@ -22,19 +22,19 @@ experts:
 expert_resources:
   fog_expert:
     resource_name: fog_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
+    served_model_name: qwen3.5-9b
     policy_path: null
   snow_expert:
     resource_name: snow_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
+    served_model_name: qwen3.5-9b
     policy_path: null
   rain_expert:
     resource_name: rain_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
+    served_model_name: qwen3.5-9b
     policy_path: null
   low_light_expert:
     resource_name: low_light_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
+    served_model_name: qwen3.5-9b
     policy_path: null
 
 runtime:
@@ -72,7 +72,7 @@ vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: glm-4.1v-9b-thinking
+  model: qwen3.5-9b
   timeout_seconds: 180
   max_tokens: 2048
   temperature: 0.0
@@ -86,7 +86,7 @@ expert_vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: glm-4.1v-9b-thinking
+  model: qwen3.5-9b
   timeout_seconds: 180
   max_tokens: 2048
   temperature: 0.0

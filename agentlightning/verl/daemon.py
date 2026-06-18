@@ -29,6 +29,7 @@ __all__ = [
     "AgentModeDaemon",
     "get_left_padded_ids_and_attention_mask",
     "get_right_padded_ids_and_attention_mask",
+    "strip_vision_token_spans",
 ]
 
 
@@ -109,6 +110,73 @@ def log_mismatch_detail(
             )
             print(full_ids, file=f)
             print(prefix_ids, file=f)
+
+
+def _convert_token_to_id(tokenizer: Any, token: str) -> Optional[int]:
+    convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if convert is None:
+        return None
+    try:
+        token_id = convert(token)
+    except Exception:
+        return None
+    if not isinstance(token_id, int) or token_id < 0:
+        return None
+    return token_id
+
+
+def strip_vision_token_spans(token_ids: List[int], tokenizer: Any) -> Tuple[List[int], int]:
+    """Remove Qwen/GLM-style vision placeholder spans from a token sequence.
+
+    Agent Lightning's trajectory fallback can append a later full prompt as
+    observation tokens when the prompt is not a strict prefix of the previous
+    context. For multimodal prompts this duplicates image placeholder tokens in
+    the textual sequence. The actor/ref forward pass then receives more image
+    tokens than the single visual slot intended for the trajectory.
+
+    This mirrors the restoration VERL loop's latest-image design: later tool
+    feedback is kept as text observation, while extra image markers are not
+    inserted into the training sequence.
+    """
+
+    vision_start_id = _convert_token_to_id(tokenizer, "<|vision_start|>")
+    vision_end_id = _convert_token_to_id(tokenizer, "<|vision_end|>")
+    standalone_vision_ids = {
+        token_id
+        for token_id in (
+            _convert_token_to_id(tokenizer, "<|image_pad|>"),
+            _convert_token_to_id(tokenizer, "<|video_pad|>"),
+            _convert_token_to_id(tokenizer, "<image>"),
+            _convert_token_to_id(tokenizer, "<|image|>"),
+        )
+        if token_id is not None
+    }
+
+    if vision_start_id is None and vision_end_id is None and not standalone_vision_ids:
+        return token_ids, 0
+
+    stripped: List[int] = []
+    removed = 0
+    in_vision_span = False
+    for token_id in token_ids:
+        if vision_start_id is not None and token_id == vision_start_id:
+            in_vision_span = True
+            removed += 1
+            continue
+
+        if in_vision_span:
+            removed += 1
+            if vision_end_id is not None and token_id == vision_end_id:
+                in_vision_span = False
+            continue
+
+        if token_id in standalone_vision_ids:
+            removed += 1
+            continue
+
+        stripped.append(token_id)
+
+    return stripped, removed
 
 
 def get_left_padded_ids_and_attention_mask(
@@ -931,6 +999,7 @@ class AgentModeDaemon:
             unmerged_count: int = 0
             template_mismatch_count, retoken_mismatch_count, others_mismatch_count = 0, 0, 0
             response_per_turn_list: List[int] = []
+            stripped_vision_token_count: int = 0
 
             for rollout_id, sample_info in finished_id_to_sample_info.items():
                 merged_trace_idx: List[List[int]] = []
@@ -971,8 +1040,12 @@ class AgentModeDaemon:
                 if current_merged_trace_idx not in merged_trace_idx:
                     merged_trace_idx.append(current_merged_trace_idx)
 
-                if len(merged_trace_idx) > 1:
+                prefix_unmerged = len(merged_trace_idx) > 1
+                if prefix_unmerged:
                     unmerged_count += 1
+
+                if self.trace_aggregator.get("force_one_sample_per_rollout", False):
+                    merged_trace_idx = [list(range(len(sample_info["trace_list"])))]
 
                 # Merge all trace segments in merged_trace_idx into training samples
                 for current_merged_trace_idx in merged_trace_idx:
@@ -987,15 +1060,26 @@ class AgentModeDaemon:
                         response_ids = []
                         response_mask = []
 
-                    prompt_length = len(prompt_ids)
-                    response_ids += sample_info["trace_list"][current_merged_trace_idx[0]]["response_ids"]
-                    response_mask += [1] * len(response_ids)
+                    first_response_ids = sample_info["trace_list"][current_merged_trace_idx[0]]["response_ids"]
+                    response_ids += first_response_ids
+                    response_mask += [1] * len(first_response_ids)
                     for turn_index in current_merged_trace_idx[1:]:
                         trace = sample_info["trace_list"][turn_index]
-                        new_prompt_length = len(trace["prompt_ids"]) - len(response_ids) - prompt_length
-                        response_ids += trace["prompt_ids"][-new_prompt_length:]
+                        current_context = prompt_ids + response_ids
+                        trace_prompt_ids = trace["prompt_ids"]
+                        if (
+                            len(trace_prompt_ids) >= len(current_context)
+                            and trace_prompt_ids[: len(current_context)] == current_context
+                        ):
+                            prompt_delta = trace_prompt_ids[len(current_context) :]
+                        else:
+                            prompt_delta, removed_vision_tokens = strip_vision_token_spans(
+                                trace_prompt_ids, self.tokenizer
+                            )
+                            stripped_vision_token_count += removed_vision_tokens
+                        response_ids += prompt_delta
                         response_ids += trace["response_ids"]
-                        response_mask += [0] * new_prompt_length
+                        response_mask += [0] * len(prompt_delta)
                         response_mask += [1] * len(trace["response_ids"])
 
                     reward_list.append(sample_info["reward"])
@@ -1031,7 +1115,12 @@ class AgentModeDaemon:
                     response_mask_list.append(one_response_mask)
                     data_id_list.append(sample_info["data_id"])
                     rollout_id_list.append(rollout_id)
-                    image_urls = sample_info["trace_list"][current_merged_trace_idx[-1]].get("image_urls", [])
+                    # Trajectory mode keeps a single visual slot, like the
+                    # original VERL restoration agent loop. Later non-prefix
+                    # prompts are appended as text observations with their
+                    # duplicated vision tokens stripped above, so multimodal
+                    # inputs must correspond to the first prompt's image tokens.
+                    image_urls = sample_info["trace_list"][current_merged_trace_idx[0]].get("image_urls", [])
                     image_count_list.append(len(image_urls))
                     multi_modal_inputs = self._get_multi_modal_inputs(image_urls)
                     multi_modal_inputs_list.append(multi_modal_inputs or {})
@@ -1122,6 +1211,9 @@ class AgentModeDaemon:
                     "training/avg_response_length_by_turn": np.mean(response_per_turn_list),  # type: ignore
                     "training/max_response_length_by_turn": np.max(response_per_turn_list),  # type: ignore
                     "training/min_response_length_by_turn": np.min(response_per_turn_list),  # type: ignore
+                    "training/n_stripped_vision_tokens": stripped_vision_token_count,  # type: ignore
+                    "training/avg_images_per_trajectory": np.mean(image_count_list) if image_count_list else 0.0,
+                    "training/max_images_per_trajectory": max(image_count_list, default=0),
                 }
                 if aggregation_level == "trajectory"
                 else {}

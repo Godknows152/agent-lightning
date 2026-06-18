@@ -200,6 +200,7 @@ class VLMRestorationExpertAgent:
         tool_registry: ToolRegistry,
         *,
         max_steps: int,
+        min_stop_tool_calls: int = 0,
         resource_name: str | None = None,
         client: object | None = None,
         tokenizer: object | None = None,
@@ -208,6 +209,7 @@ class VLMRestorationExpertAgent:
         self.expert_name = expert_name
         self.tool_registry = tool_registry
         self.max_steps = max_steps
+        self.min_stop_tool_calls = min_stop_tool_calls
         self.resource_name = resource_name or expert_name.value
         self.tokenizer = cast(_Tokenizer | None, tokenizer)
         self.client = cast(
@@ -231,8 +233,15 @@ class VLMRestorationExpertAgent:
             if step_index == 0:
                 system_prompt = build_expert_single_step_sft_system_prompt(self.expert_name, self.tool_registry)
                 state_prompt = build_expert_single_step_sft_user_prompt().removeprefix("<image>\n")
+                include_stop = False
             else:
-                system_prompt = build_expert_system_prompt(self.expert_name, self.tool_registry)
+                include_stop = state.tool_call_count >= self.min_stop_tool_calls
+                system_prompt = build_expert_system_prompt(
+                    self.expert_name,
+                    self.tool_registry,
+                    allow_stop=include_stop,
+                    min_stop_tool_calls=self.min_stop_tool_calls,
+                )
                 state_prompt = build_expert_state_prompt(
                     step_index=step_index,
                     remaining_steps=max(self.max_steps - step_index, 0),
@@ -256,7 +265,7 @@ class VLMRestorationExpertAgent:
             request: dict[str, Any] = {
                 "model": self.settings.model,
                 "messages": messages,
-                "tools": [self.tool_registry.build_tool_schema()],
+                "tools": [self.tool_registry.build_tool_schema(include_stop=include_stop)],
                 "tool_choice": "auto",
                 "max_tokens": self.settings.max_tokens,
                 "temperature": self.settings.temperature,

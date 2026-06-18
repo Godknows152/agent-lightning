@@ -17,6 +17,12 @@ __all__ = ["Algorithm", "algo", "FastAlgorithm", "Baseline", "APO", "VERL"]
 # Shortcuts for usages like algo.APO(...)
 
 
+def _patch_transformers_vision2seq_alias() -> None:
+    from agentlightning._transformers_compat import patch_transformers_vision2seq_alias
+
+    patch_transformers_vision2seq_alias()
+
+
 def APO(*args: Any, **kwargs: Any) -> APOType[Any]:
     from .apo import APO as APOImplementation
 
@@ -24,6 +30,7 @@ def APO(*args: Any, **kwargs: Any) -> APOType[Any]:
 
 
 def VERL(*args: Any, **kwargs: Any) -> VERLType:
+    _patch_transformers_vision2seq_alias()
     from .verl import VERL as VERLImplementation
 
     return VERLImplementation(*args, **kwargs)

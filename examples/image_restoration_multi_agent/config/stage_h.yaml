@@ -1,7 +1,7 @@
 workflow:
   max_steps: 6
   max_consecutive_failures: 2
-  no_improvement_limit: 2
+  no_improvement_limit: null
   improvement_epsilon: 0.000001
   reward_mode: step_iqa_sum_v1
   reward_alpha: 0.5
@@ -13,10 +13,10 @@ workflow:
   # missing fields, multiple calls, and unregistered actions.
   invalid_action_penalty: 10.0
   failure_penalty: 0.50
-  stop_min_tool_calls: 1
+  stop_min_tool_calls: 5
   stop_min_best_gain: 0.05
   valid_stop_reward: 0.25
-  premature_stop_penalty: 1.0
+  premature_stop_penalty: 5.0
   forced_termination_penalty: 0.50
 
 tools_config: tools.yaml
@@ -34,20 +34,20 @@ experts:
 expert_resources:
   fog_expert:
     resource_name: fog_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/fog
+    served_model_name: qwen3.5-9b
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/fog
   snow_expert:
     resource_name: snow_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/snow
+    served_model_name: qwen3.5-9b
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/snow
   rain_expert:
     resource_name: rain_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/rain
+    served_model_name: qwen3.5-9b
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/rain
   low_light_expert:
     resource_name: low_light_expert_policy
-    served_model_name: glm-4.1v-9b-thinking
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/low_light
+    served_model_name: qwen3.5-9b
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/low_light
 
 runtime:
   restoration:
@@ -71,7 +71,7 @@ vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: glm-4.1v-9b-thinking
+  model: qwen3.5-9b
   timeout_seconds: 180
   max_tokens: 512
   temperature: 1.0
@@ -85,7 +85,7 @@ expert_vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: glm-4.1v-9b-thinking
+  model: qwen3.5-9b
   timeout_seconds: 180
   max_tokens: 512
   temperature: 1.0

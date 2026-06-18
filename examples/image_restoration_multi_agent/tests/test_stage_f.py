@@ -34,7 +34,7 @@ class _FakeResponse:
         assert mode == "json"
         return {
             "id": "chatcmpl-diagnosis",
-            "model": "glm-4.1v-9b-thinking",
+            "model": "qwen3.5-9b",
             "choices": [
                 {
                     "message": {
@@ -76,7 +76,7 @@ class _InvalidResponse:
         assert mode == "json"
         return {
             "id": "chatcmpl-invalid-diagnosis",
-            "model": "glm-4.1v-9b-thinking",
+            "model": "qwen3.5-9b",
             "choices": [
                 {
                     "message": {"content": "still thinking", "tool_calls": None},

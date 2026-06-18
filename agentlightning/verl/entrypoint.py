@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import inspect
+import os
 from typing import TYPE_CHECKING, Any, Type
 
 import hydra
@@ -67,10 +69,26 @@ def run_ppo(
         except AttributeError:
             # verl < 0.6.0
             num_cpus = config.ray_init.num_cpus
+        ray_env_vars = {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
+        for name in (
+            "LD_LIBRARY_PATH",
+            "PATH",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "no_proxy",
+            "NO_PROXY",
+        ):
+            value = os.environ.get(name)
+            if value:
+                ray_env_vars[name] = value
+        for name, value in os.environ.items():
+            if name.startswith("VLLM_") and value:
+                ray_env_vars[name] = value
         ray.init(
-            runtime_env={
-                "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
-            },
+            runtime_env={"env_vars": ray_env_vars},
             num_cpus=num_cpus,
             # Agent Lightning already exposes training metrics through the
             # configured experiment logger. Avoid starting Ray's optional
@@ -129,7 +147,6 @@ class TaskRunner:
         if config.actor_rollout_ref.actor.strategy in ["fsdp", "fsdp2"]:
             assert config.critic.strategy in ["fsdp", "fsdp2"]
             from verl.single_controller.ray import RayWorkerGroup
-            from verl.workers.fsdp_workers import CriticWorker
 
             from .compat import (
                 AgentLightningActorRolloutRefWorker,
@@ -143,6 +160,14 @@ class TaskRunner:
             )
             reference_policy_cls = AgentLightningActorRolloutRefWorker
             ray_worker_group_cls = RayWorkerGroup
+
+            try:
+                from verl.workers.fsdp_workers import CriticWorker
+            except ModuleNotFoundError:
+                # VERL 0.8 builds critic workers through the unified
+                # TrainingWorker class after converting CriticConfig to
+                # TrainingWorkerConfig inside RayPPOTrainer.init_workers().
+                from verl.workers.engine_workers import TrainingWorker as CriticWorker
 
         elif config.actor_rollout_ref.actor.strategy == "megatron":
             assert config.actor_rollout_ref.actor.strategy == config.critic.strategy
@@ -168,8 +193,19 @@ class TaskRunner:
 
         role_worker_mapping: dict[Role, ActorClass[Any]] = {
             Role.ActorRollout: ray.remote(actor_rollout_cls),
-            Role.Critic: ray.remote(CriticWorker),
         }
+        use_critic = config.algorithm.adv_estimator not in [
+            "grpo",
+            "rloo",
+            "reinforce_plus_plus",
+            "remax",
+            "reinforce_plus_plus_baseline",
+            "dr_grpo",
+            "reinforce_plus_plus_baseline",
+            "gspo",
+        ]
+        if use_critic:
+            role_worker_mapping[Role.Critic] = ray.remote(CriticWorker)
 
         global_pool_id = "global_pool"
         resource_pool_spec = {
@@ -177,8 +213,9 @@ class TaskRunner:
         }
         mapping = {
             Role.ActorRollout: global_pool_id,
-            Role.Critic: global_pool_id,
         }
+        if use_critic:
+            mapping[Role.Critic] = global_pool_id
 
         # we should adopt a multi-source reward function here
         # - for rule-based rm, we directly call a reward score
@@ -201,12 +238,14 @@ class TaskRunner:
             role_worker_mapping[Role.RefPolicy] = ray.remote(reference_policy_cls)
             mapping[Role.RefPolicy] = global_pool_id
 
-        reward_fn = load_reward_manager(
-            config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {})
-        )
-        val_reward_fn = load_reward_manager(
-            config, tokenizer, num_examine=1, **config.reward_model.get("reward_kwargs", {})
-        )
+        reward_manager_kwargs = dict(config.reward_model.get("reward_kwargs", {}))
+        if "num_examine" in inspect.signature(load_reward_manager).parameters:
+            reward_fn = load_reward_manager(config, tokenizer, num_examine=0, **reward_manager_kwargs)
+            val_reward_fn = load_reward_manager(config, tokenizer, num_examine=1, **reward_manager_kwargs)
+        else:
+            # VERL 0.8 moved num_examine into reward-manager config/defaults.
+            reward_fn = load_reward_manager(config, tokenizer, **reward_manager_kwargs)
+            val_reward_fn = load_reward_manager(config, tokenizer, **reward_manager_kwargs)
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
         from verl.utils.dataset.rl_dataset import collate_fn

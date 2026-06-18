@@ -1,17 +1,18 @@
 expert_name: low_light_expert
 stage_config: ../../config/stage_h.yaml
-model_path: ../../../../../Models/GLM-4.1V-9B-Thinking
-adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/format_cold_start/low_light
+model_path: ../../../../../Models/Qwen3.5-9B
+adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/low_light
+chat_template: ../templates/qwen35_hermes_nothink.jinja
 train_data: ../data/low_light_train.jsonl
 val_data: ../data/low_light_val.jsonl
-output_dir: ../outputs/low_light
+output_dir: ../outputs/qwen3_5/low_light
 swanlab:
   enabled: true
   project_name: image-restoration-multi-agent
-  experiment_name: low-light-expert-grpo
+  experiment_name: qwen3.5-low-light-expert-grpo
   mode: online
   smoke_mode: offline
-  log_dir: ../outputs/low_light/swanlab
+  log_dir: ../outputs/qwen3_5/low_light/swanlab
 training:
   # Dataset batch and GRPO candidate generation.
   train_batch_size: 32
@@ -45,24 +46,26 @@ training:
   enable_chunked_prefill: false
   enable_prefix_caching: true
   enforce_eager: false
-  free_cache_engine: true
+  free_cache_engine: false
   max_prompt_length: 4096
   max_response_length: 640
+  trace_aggregator_level: trajectory
+  force_one_sample_per_rollout: true
   trajectory_max_prompt_length: 4096
-  trajectory_max_response_length: 12288
+  trajectory_max_response_length: 4096
   max_model_len: 16384
-  temperature: 0.7
+  temperature: 1.0
   top_k: -1
   top_p: 0.9
   do_sample: true
   ignore_eos: false
 
-  # PPO update. The mini-batch counts transition rows, not input images.
+  # PPO update. In trajectory mode, the mini-batch counts complete sampled trajectories.
   ppo_mini_batch_size: 8
   ppo_micro_batch_size_per_gpu: 1
   ppo_epochs: 1
   use_dynamic_bsz: false
-  ppo_max_token_len_per_gpu: 16384
+  ppo_max_token_len_per_gpu: 4096
   loss_agg_mode: seq-mean-token-mean
   shuffle: false
   clip_ratio: 0.2
@@ -88,7 +91,7 @@ training:
   kl_loss_coef: 0.05
   kl_loss_type: low_var_kl
   use_kl_in_reward: false
-  entropy_coeff: 0.01
+  entropy_coeff: 0.05
 
   # FSDP memory controls.
   fsdp_param_offload: true

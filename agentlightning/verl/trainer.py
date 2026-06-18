@@ -252,6 +252,8 @@ class AgentLightningTrainer(RayPPOTrainer):
         daemon_cls: Type[AgentModeDaemon],
         **kwargs,
     ):
+        self.reward_fn = kwargs.pop("reward_fn", None)
+        self.val_reward_fn = kwargs.pop("val_reward_fn", None)
         super().__init__(**kwargs)
         self.store = store
         self.llm_proxy = llm_proxy
@@ -265,17 +267,17 @@ class AgentLightningTrainer(RayPPOTrainer):
         test_batch = DataProto.from_single_dict(test_data)
 
         self._set_rollout_resources_awake(True)
-        self.async_rollout_manager.wake_up()
+        self._call_rollout_manager_lifecycle("wake_up")
         self.agent_mode_daemon.set_up_data_and_server(
             test_batch.non_tensor_batch,
-            self.async_rollout_manager.server_addresses,
+            self._get_rollout_server_addresses(),
             is_train=False,
         )
         self.agent_mode_daemon.run_until_all_finished()
         self._set_rollout_resources_awake(False)
         test_metrics = self.agent_mode_daemon.get_test_metrics()
         self.agent_mode_daemon.clear_data_and_server()
-        self.async_rollout_manager.sleep()
+        self._call_rollout_manager_lifecycle("sleep")
         return test_metrics
 
     def _set_rollout_resources_awake(self, awake: bool) -> None:
@@ -299,6 +301,48 @@ class AgentLightningTrainer(RayPPOTrainer):
         if payload.get("status") != expected_status:
             raise RuntimeError(f"external rollout resource {endpoint} failed: {payload}")
 
+    def _call_rollout_manager_lifecycle(self, method_name: str) -> None:
+        """Call optional rollout manager lifecycle hooks across VERL versions."""
+        method = getattr(self.async_rollout_manager, method_name, None)
+        if callable(method):
+            method()
+
+    def _get_rollout_server_addresses(self) -> list[str]:
+        """Return rollout server addresses across VERL rollout manager layouts."""
+        server_addresses = getattr(self.async_rollout_manager, "server_addresses", None)
+        if server_addresses is not None:
+            return list(server_addresses)
+
+        llm_server_manager = getattr(self, "llm_server_manager", None)
+        get_addresses = getattr(llm_server_manager, "get_addresses", None)
+        if callable(get_addresses):
+            return list(get_addresses())
+
+        llm_client = getattr(self.async_rollout_manager, "llm_client", None)
+        client_addresses = getattr(llm_client, "server_addresses", None)
+        if client_addresses is not None:
+            return list(client_addresses)
+
+        raise AttributeError("Unable to locate rollout server addresses on the VERL rollout manager.")
+
+    def _set_lora_adapter_flag(self, batch: DataProto, *, no_lora_adapter: bool) -> None:
+        """Add the LoRA adapter routing flag expected by newer VERL engine workers."""
+        if "no_lora_adapter" not in batch.batch:
+            batch_size = batch.batch["input_ids"].shape[0]
+            batch.batch["no_lora_adapter"] = torch.full(
+                (batch_size,),
+                no_lora_adapter,
+                dtype=torch.bool,
+                device=batch.batch["input_ids"].device,
+            )
+
+    def _set_temperature(self, batch: DataProto) -> None:
+        """Add per-sample temperature expected by newer VERL FSDP engines."""
+        temperature = float(self.config.actor_rollout_ref.rollout.temperature)
+        if "temperature" in batch.batch:
+            batch.batch.pop("temperature")
+        batch.meta_info["temperature"] = temperature
+
     def _compute_reference_log_prob(self, batch: DataProto) -> DataProto:
         """Compute reference log probability using the correct worker based on LoRA configuration.
 
@@ -316,6 +360,11 @@ class AgentLightningTrainer(RayPPOTrainer):
         Raises:
             RuntimeError: If the required worker is not available.
         """
+        self._set_temperature(batch)
+        parent_compute_ref_log_prob = getattr(super(), "_compute_ref_log_prob", None)
+        if callable(parent_compute_ref_log_prob):
+            return parent_compute_ref_log_prob(batch)
+
         if getattr(self, "ref_in_actor", False):
             actor_worker = getattr(self, "actor_rollout_wg", None)
             if actor_worker is None:
@@ -344,9 +393,9 @@ class AgentLightningTrainer(RayPPOTrainer):
             # generate a batch
             with _timer("gen", timing_raw):
                 self._set_rollout_resources_awake(True)
-                self.async_rollout_manager.wake_up()
+                self._call_rollout_manager_lifecycle("wake_up")
                 self.agent_mode_daemon.set_up_data_and_server(
-                    gen_batch.non_tensor_batch, self.async_rollout_manager.server_addresses
+                    gen_batch.non_tensor_batch, self._get_rollout_server_addresses()
                 )
                 self.agent_mode_daemon.run_until_all_finished()
                 self._set_rollout_resources_awake(False)
@@ -366,7 +415,7 @@ class AgentLightningTrainer(RayPPOTrainer):
                 )
                 metrics.update(agent_metrics)
                 self.agent_mode_daemon.clear_data_and_server()
-                self.async_rollout_manager.sleep()
+                self._call_rollout_manager_lifecycle("sleep")
 
             if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                 with _timer("gen_max", timing_raw):
@@ -406,7 +455,15 @@ class AgentLightningTrainer(RayPPOTrainer):
 
             # recompute old_log_probs
             with _timer("old_log_prob", timing_raw):
-                old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
+                self._set_temperature(batch)
+                parent_compute_old_log_prob = getattr(super(), "_compute_old_log_prob", None)
+                if callable(parent_compute_old_log_prob):
+                    old_log_prob, old_log_prob_mfu = parent_compute_old_log_prob(batch)
+                    if old_log_prob_mfu is not None:
+                        metrics["perf/mfu/actor"] = old_log_prob_mfu
+                else:
+                    self._set_lora_adapter_flag(batch, no_lora_adapter=False)
+                    old_log_prob = self.actor_rollout_wg.compute_log_prob(batch)
                 entropys = old_log_prob.batch["entropys"]
                 response_masks = batch.batch["response_mask"]
                 loss_agg_mode = self.config.actor_rollout_ref.actor.loss_agg_mode
@@ -532,8 +589,13 @@ class AgentLightningTrainer(RayPPOTrainer):
             if self.config.trainer.critic_warmup <= self.global_steps:
                 # update actor
                 with _timer("update_actor", timing_raw):
-                    batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
-                    actor_output = self.actor_rollout_wg.update_actor(batch)
+                    self._set_temperature(batch)
+                    parent_update_actor = getattr(super(), "_update_actor", None)
+                    if callable(parent_update_actor):
+                        actor_output = parent_update_actor(batch)
+                    else:
+                        batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
+                        actor_output = self.actor_rollout_wg.update_actor(batch)
                 actor_output_metrics = reduce_metrics(actor_output.meta_info["metrics"])
                 metrics.update(actor_output_metrics)
 

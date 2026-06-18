@@ -24,7 +24,7 @@ class _FakeResponse:
     def __init__(self, content: str | None, tool_calls: list[dict[str, Any]] | None) -> None:
         self.payload = {
             "id": "chatcmpl-test",
-            "model": "glm-4.1v-9b-thinking",
+            "model": "qwen3.5-9b",
             "prompt_token_ids": [1, 2, 3],
             "choices": [
                 {
