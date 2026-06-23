@@ -15,6 +15,7 @@ from agents import (
     build_expert_state_prompt,
     build_expert_system_prompt,
 )
+from agents.prompts import build_expert_single_step_sft_system_prompt
 from config import load_example_config
 from schemas import ExpertName
 from tool_registry import ToolRegistry
@@ -35,6 +36,12 @@ def _extract_tools_schema(prompt: str) -> dict[str, object]:
     return cast(dict[str, object], payload)
 
 
+def _extract_tool_descriptions(prompt: str) -> str:
+    match = re.search(r"<tool_descriptions>\n(.*?)\n</tool_descriptions>", prompt, flags=re.DOTALL)
+    assert match is not None
+    return match.group(1)
+
+
 def test_all_expert_prompts_embed_the_same_complete_tool_schema() -> None:
     registry = _registry()
     prompts = {expert: build_expert_system_prompt(expert, registry) for expert in ExpertName}
@@ -52,6 +59,30 @@ def test_all_expert_prompts_embed_the_same_complete_tool_schema() -> None:
     action = cast(dict[str, object], action_value)
     assert action["enum"] == list(registry.actions)
     assert all(expert.value in prompts[expert] for expert in ExpertName)
+
+
+def test_expert_prompt_embeds_tool_descriptions_from_registry() -> None:
+    registry = _registry()
+    prompt = build_expert_system_prompt(ExpertName.FOG, registry)
+    descriptions = _extract_tool_descriptions(prompt)
+
+    assert "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in descriptions
+    assert "- hvicidnet: HVI-CIDNet low-light image enhancement model." in descriptions
+    assert "- stop: Stop the trajectory and keep the historical best restored image." in descriptions
+
+
+def test_single_step_prompt_hides_stop_description() -> None:
+    registry = _registry()
+    prompt = build_expert_single_step_sft_system_prompt(ExpertName.FOG, registry)
+    schema = _extract_tools_schema(prompt)
+    descriptions = _extract_tool_descriptions(prompt)
+
+    parameters = cast(dict[str, object], schema["parameters"])
+    properties = cast(dict[str, object], parameters["properties"])
+    action = cast(dict[str, object], properties["action"])
+    assert "stop" not in action["enum"]
+    assert "- stop:" not in descriptions
+    assert "- focalnet_dehaze:" in descriptions
 
 
 def test_diagnosis_prompt_uses_hermes_without_model_generated_route() -> None:

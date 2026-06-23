@@ -62,6 +62,18 @@ def test_tool_schema_can_hide_stop_for_early_training_turns() -> None:
     assert action_enum == list(registry.actions[:-1])
 
 
+def test_tool_descriptions_follow_stop_visibility() -> None:
+    config = load_example_config(EXAMPLE_DIR / "config" / "default.yaml")
+    registry = ToolRegistry.from_yaml(config.tools_config)
+
+    full_descriptions = registry.build_tool_descriptions()
+    early_descriptions = registry.build_tool_descriptions(include_stop=False)
+
+    assert "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in full_descriptions
+    assert "- stop: Stop the trajectory and keep the historical best restored image." in full_descriptions
+    assert "- stop:" not in early_descriptions
+
+
 def test_diagnosis_rejects_mismatched_route() -> None:
     with pytest.raises(ValidationError, match="must route"):
         DiagnosisResult(primary_type=DegradationType.FOG, route_to=ExpertName.RAIN)

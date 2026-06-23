@@ -136,10 +136,9 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "timeout_seconds": float(training["tool_runtime_lifecycle_timeout_seconds"]),
             },
             "trace_aggregator": {
-                # Default to trajectory-level aggregation so each sampled
-                # multi-turn rollout contributes one PPO/GRPO row. This matches
-                # the original VERL restoration setup and avoids dynamic row
-                # counts from variable-length tool-call trajectories.
+                # Transition aggregation keeps each decision turn paired with
+                # its latest visual observation. Dynamic turn counts are padded
+                # to actor.ppo_mini_batch_size inside AgentLightningTrainer.
                 "level": str(training["trace_aggregator_level"]),
                 "trajectory_max_prompt_length": int(training["trajectory_max_prompt_length"]),
                 "trajectory_max_response_length": int(training["trajectory_max_response_length"]),
@@ -219,9 +218,8 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "ppo_epochs": int(training["ppo_epochs"]),
                 "use_dynamic_bsz": bool(training["use_dynamic_bsz"]),
                 "ppo_max_token_len_per_gpu": int(training["ppo_max_token_len_per_gpu"]),
-                # In trajectory aggregation, each complete sampled rollout is
-                # one policy row. Average over generated assistant tokens while
-                # masking tool-observation tokens through response_mask.
+                # In transition aggregation, each policy row is one assistant
+                # decision turn paired with that turn's current image.
                 "loss_agg_mode": str(training["loss_agg_mode"]),
                 "shuffle": bool(training["shuffle"]),
                 "grad_clip": float(training["grad_clip"]),
@@ -286,15 +284,31 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
     return conf
 
 
-def _configure_swanlab_environment(run: dict[str, Any], *, smoke: bool) -> None:
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _effective_swanlab_mode(run: dict[str, Any], *, smoke: bool) -> str:
     swanlab = cast(dict[str, Any], run["swanlab"])
-    if not bool(swanlab["enabled"]):
-        return
-    mode = str(swanlab["smoke_mode"] if smoke else swanlab["mode"])
+    mode = os.getenv("GRPO_SWANLAB_MODE")
+    if mode is None:
+        mode = str(swanlab["smoke_mode"] if smoke else swanlab["mode"])
     # SwanLab 0.7.x uses "cloud" for online logging. Keep "online" as a
     # friendlier config alias because earlier project configs used it.
     if mode == "online":
         mode = "cloud"
+    valid_modes = {"cloud", "local", "offline", "disabled"}
+    if mode not in valid_modes:
+        choices = ", ".join(sorted(valid_modes | {"online"}))
+        raise ValueError(f"effective SwanLab mode must be one of {choices}, got {mode!r}")
+    return mode
+
+
+def _configure_swanlab_environment(run: dict[str, Any], *, smoke: bool) -> None:
+    swanlab = cast(dict[str, Any], run["swanlab"])
+    if not bool(swanlab["enabled"]):
+        return
+    mode = _effective_swanlab_mode(run, smoke=smoke)
     Path(str(run["output_dir"])).mkdir(parents=True, exist_ok=True)
     Path(str(swanlab["log_dir"])).mkdir(parents=True, exist_ok=True)
     os.environ["SWANLAB_LOG_DIR"] = str(swanlab["log_dir"])

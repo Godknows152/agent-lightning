@@ -156,31 +156,33 @@ class ImageRestorationController:
                 decision.validation_status = ValidationStatus.UNKNOWN_ACTION
                 state.invalid_action_count += 1
                 self._append_decision_failure(state, decision, str(error))
+                self._emit_step_reward(state.steps[-1], trace=trace)
                 self._terminate(state, "invalid_action")
                 break
             except InvalidToolCallError as error:
                 decision.validation_status = ValidationStatus.INVALID_TOOL_CALL
                 state.invalid_action_count += 1
                 self._append_decision_failure(state, decision, str(error))
+                self._emit_step_reward(state.steps[-1], trace=trace)
                 self._terminate(state, "invalid_tool_call")
                 break
 
             if action == STOP_ACTION:
                 stop_reward, reward_components = self._calculate_stop_reward(state)
-                state.steps.append(
-                    RestorationStep(
-                        step_index=decision.step_index,
-                        expert_name=state.expert_name,
-                        expert_decision=decision,
-                        tool_name=None,
-                        input_image=state.current_image,
-                        output_image=None,
-                        step_reward=stop_reward,
-                        reward_components=reward_components,
-                        success=True,
-                        latency_seconds=0.0,
-                    )
+                step = RestorationStep(
+                    step_index=decision.step_index,
+                    expert_name=state.expert_name,
+                    expert_decision=decision,
+                    tool_name=None,
+                    input_image=state.current_image,
+                    output_image=None,
+                    step_reward=stop_reward,
+                    reward_components=reward_components,
+                    success=True,
+                    latency_seconds=0.0,
                 )
+                state.steps.append(step)
+                self._emit_step_reward(step, trace=trace)
                 self._terminate(state, "expert_stop")
                 break
 
@@ -189,22 +191,22 @@ class ImageRestorationController:
             if restoration.status != ExecutionStatus.SUCCESS or restoration.output_path is None:
                 state.consecutive_failures += 1
                 step_reward, reward_components = self._calculate_failure_reward(state, action)
-                state.steps.append(
-                    RestorationStep(
-                        step_index=decision.step_index,
-                        expert_name=state.expert_name,
-                        expert_decision=decision,
-                        tool_name=action,
-                        input_image=state.current_image,
-                        output_image=None,
-                        restoration=restoration,
-                        step_reward=step_reward,
-                        reward_components=reward_components,
-                        success=False,
-                        latency_seconds=restoration.latency_seconds,
-                        error=restoration.error,
-                    )
+                step = RestorationStep(
+                    step_index=decision.step_index,
+                    expert_name=state.expert_name,
+                    expert_decision=decision,
+                    tool_name=action,
+                    input_image=state.current_image,
+                    output_image=None,
+                    restoration=restoration,
+                    step_reward=step_reward,
+                    reward_components=reward_components,
+                    success=False,
+                    latency_seconds=restoration.latency_seconds,
+                    error=restoration.error,
                 )
+                state.steps.append(step)
+                self._emit_step_reward(step, trace=trace)
                 if state.consecutive_failures >= self.settings.max_consecutive_failures:
                     self._terminate(state, "consecutive_worker_failures")
                     break
@@ -221,23 +223,23 @@ class ImageRestorationController:
             if evaluation.status != ExecutionStatus.SUCCESS:
                 state.consecutive_failures += 1
                 step_reward, reward_components = self._calculate_failure_reward(state, action)
-                state.steps.append(
-                    RestorationStep(
-                        step_index=decision.step_index,
-                        expert_name=state.expert_name,
-                        expert_decision=decision,
-                        tool_name=action,
-                        input_image=state.current_image,
-                        output_image=restoration.output_path,
-                        restoration=restoration,
-                        evaluation=evaluation,
-                        step_reward=step_reward,
-                        reward_components=reward_components,
-                        success=False,
-                        latency_seconds=restoration.latency_seconds,
-                        error=evaluation.error,
-                    )
+                step = RestorationStep(
+                    step_index=decision.step_index,
+                    expert_name=state.expert_name,
+                    expert_decision=decision,
+                    tool_name=action,
+                    input_image=state.current_image,
+                    output_image=restoration.output_path,
+                    restoration=restoration,
+                    evaluation=evaluation,
+                    step_reward=step_reward,
+                    reward_components=reward_components,
+                    success=False,
+                    latency_seconds=restoration.latency_seconds,
+                    error=evaluation.error,
                 )
+                state.steps.append(step)
+                self._emit_step_reward(step, trace=trace)
                 if state.consecutive_failures >= self.settings.max_consecutive_failures:
                     self._terminate(state, "consecutive_evaluation_failures")
                     break
@@ -255,22 +257,22 @@ class ImageRestorationController:
                 state.consecutive_no_improvement += 1
 
             step_reward, reward_components = self._calculate_success_reward(state, action, evaluation)
-            state.steps.append(
-                RestorationStep(
-                    step_index=decision.step_index,
-                    expert_name=state.expert_name,
-                    expert_decision=decision,
-                    tool_name=action,
-                    input_image=previous_image,
-                    output_image=restoration.output_path,
-                    restoration=restoration,
-                    evaluation=evaluation,
-                    step_reward=step_reward,
-                    reward_components=reward_components,
-                    success=True,
-                    latency_seconds=restoration.latency_seconds,
-                )
+            step = RestorationStep(
+                step_index=decision.step_index,
+                expert_name=state.expert_name,
+                expert_decision=decision,
+                tool_name=action,
+                input_image=previous_image,
+                output_image=restoration.output_path,
+                restoration=restoration,
+                evaluation=evaluation,
+                step_reward=step_reward,
+                reward_components=reward_components,
+                success=True,
+                latency_seconds=restoration.latency_seconds,
             )
+            state.steps.append(step)
+            self._emit_step_reward(step, trace=trace)
             if (
                 self.settings.no_improvement_limit is not None
                 and state.consecutive_no_improvement >= self.settings.no_improvement_limit
@@ -410,6 +412,23 @@ class ImageRestorationController:
                 latency_seconds=0.0,
                 error=error,
             )
+        )
+
+    @staticmethod
+    def _emit_step_reward(step: RestorationStep, *, trace: bool) -> None:
+        """Bind one step reward to the immediately preceding policy decision."""
+
+        if not trace:
+            return
+        agl.emit_reward(
+            float(step.step_reward),
+            attributes={
+                "restoration.reward_scope": "transition",
+                "restoration.step_index": step.step_index,
+                "restoration.expert_name": step.expert_name.value,
+                "restoration.tool_name": step.tool_name or "stop_or_invalid",
+                "restoration.success": step.success,
+            },
         )
 
     @staticmethod

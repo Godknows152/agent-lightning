@@ -4,12 +4,15 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
+import math
+import os
 import random
 from contextlib import contextmanager
 from copy import deepcopy
 from pprint import pprint
-from typing import Dict, Tuple, Type
+from typing import Any, Dict, Tuple, Type
 from urllib.request import Request, urlopen
 
 import numpy as np
@@ -227,6 +230,220 @@ def compute_trajectory_transition_grpo_advantage(
     return advantages, advantages.clone()
 
 
+def compute_transition_grpo_advantage(
+    token_level_rewards: torch.Tensor,
+    response_mask: torch.Tensor,
+    data_ids: np.ndarray,
+    turn_indices: np.ndarray,
+    *,
+    epsilon: float = 1e-6,
+    norm_by_std: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute GRPO advantage from each transition's own reward.
+
+    Rows are independent visual observations. To avoid comparing rewards from
+    different restoration depths, the baseline is computed within
+    ``(data_id, turn_index)`` groups: first actions for one input are compared
+    with other first actions, second actions with second actions, and so on.
+    """
+
+    if token_level_rewards.ndim != 2 or response_mask.shape != token_level_rewards.shape:
+        raise ValueError("token_level_rewards and response_mask must have the same 2D shape")
+    batch_size = token_level_rewards.shape[0]
+    if len(data_ids) != batch_size or len(turn_indices) != batch_size:
+        raise ValueError("data_ids and turn_indices must align with the reward batch")
+
+    sequence_rewards = token_level_rewards.sum(dim=-1)
+    transition_groups: dict[tuple[object, int], list[int]] = {}
+    for row_index, (data_id, turn_index_value) in enumerate(zip(data_ids, turn_indices, strict=True)):
+        transition_groups.setdefault((data_id, int(turn_index_value)), []).append(row_index)
+
+    row_advantages = torch.zeros_like(sequence_rewards)
+    with torch.no_grad():
+        for rows in transition_groups.values():
+            rewards = sequence_rewards[rows]
+            if len(rows) == 1:
+                mean = torch.zeros_like(rewards[0])
+                std = torch.ones_like(rewards[0])
+            else:
+                mean = rewards.mean()
+                std = rewards.std()
+            advantages = rewards - mean
+            if norm_by_std:
+                advantages = advantages / (std + epsilon)
+            row_advantages[rows] = advantages
+
+        advantages_tensor = row_advantages.unsqueeze(-1) * response_mask
+
+    return advantages_tensor, advantages_tensor.clone()
+
+
+def compute_effective_ppo_update_batch_size(ppo_mini_batch_size: int, rollout_n: int) -> int:
+    """Return the global PPO mini-batch size consumed by VERL actor/critic updates.
+
+    VERL expands the prompt-level ``ppo_mini_batch_size`` by ``rollout.n`` before
+    dispatching actor/critic updates. Agent Lightning's transition aggregation
+    produces a dynamic number of decision-turn rows, so the driver must pad or
+    drop to this effective size rather than the prompt-level config value.
+    """
+
+    return ppo_mini_batch_size * rollout_n
+
+
+def _as_positive_int(value: Any, default: int = 1) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _get_config_value(config: Any, key: str, default: Any = None) -> Any:
+    if config is None:
+        return default
+    getter = getattr(config, "get", None)
+    if callable(getter):
+        return getter(key, default)
+    return getattr(config, key, default)
+
+
+def _worker_world_size(worker: Any | None) -> int:
+    return _as_positive_int(getattr(worker, "world_size", None))
+
+
+def compute_worker_micro_batch_padding_divisor(
+    *,
+    worker_world_size: int | None,
+    micro_batch_size_per_gpu: int | None,
+    use_dynamic_bsz: bool = False,
+) -> int:
+    """Return the global batch divisor required by one VERL worker forward pass."""
+
+    world_size = _as_positive_int(worker_world_size)
+    if use_dynamic_bsz:
+        return world_size
+    return world_size * _as_positive_int(micro_batch_size_per_gpu)
+
+
+def compute_pre_advantage_padding_divisor(
+    *,
+    actor_world_size: int,
+    rollout_log_prob_micro_batch_size_per_gpu: int | None,
+    rollout_log_prob_use_dynamic_bsz: bool = False,
+    ref_world_size: int | None = None,
+    ref_log_prob_micro_batch_size_per_gpu: int | None = None,
+    ref_log_prob_use_dynamic_bsz: bool = False,
+    critic_world_size: int | None = None,
+    critic_forward_micro_batch_size_per_gpu: int | None = None,
+    critic_use_dynamic_bsz: bool = False,
+) -> int:
+    """Compute the batch divisor needed before old-log-prob/ref/value forwards."""
+
+    divisors = [
+        compute_worker_micro_batch_padding_divisor(
+            worker_world_size=actor_world_size,
+            micro_batch_size_per_gpu=rollout_log_prob_micro_batch_size_per_gpu,
+            use_dynamic_bsz=rollout_log_prob_use_dynamic_bsz,
+        )
+    ]
+    if ref_world_size is not None:
+        divisors.append(
+            compute_worker_micro_batch_padding_divisor(
+                worker_world_size=ref_world_size,
+                micro_batch_size_per_gpu=ref_log_prob_micro_batch_size_per_gpu,
+                use_dynamic_bsz=ref_log_prob_use_dynamic_bsz,
+            )
+        )
+    if critic_world_size is not None:
+        divisors.append(
+            compute_worker_micro_batch_padding_divisor(
+                worker_world_size=critic_world_size,
+                micro_batch_size_per_gpu=critic_forward_micro_batch_size_per_gpu,
+                use_dynamic_bsz=critic_use_dynamic_bsz,
+            )
+        )
+    return math.lcm(*divisors)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _format_host_port(host: str, port: str) -> str:
+    host = host.strip()
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{host}:{port}"
+
+
+def _split_rollout_address_host_port(address: str) -> tuple[str, str] | None:
+    text = address.strip()
+    if "://" in text:
+        # VERL currently reports host:port, but keep URL-shaped values safe.
+        return None
+    if text.startswith("["):
+        bracket_end = text.find("]")
+        if bracket_end != -1:
+            host = text[1:bracket_end]
+            remainder = text[bracket_end + 1 :]
+            if remainder.startswith(":") and remainder[1:].isdigit():
+                return host, remainder[1:]
+        return None
+    separator = text.rfind(":")
+    if separator == -1:
+        return None
+    host = text[:separator]
+    port = text[separator + 1 :]
+    if not host or not port.isdigit():
+        return None
+    return host, port
+
+
+def _is_loopback_rollout_host(host: str) -> bool:
+    normalized_host = host.strip().strip("[]").lower()
+    if normalized_host in {"localhost", "0.0.0.0", "::"}:
+        return True
+    try:
+        ip = ipaddress.ip_address(normalized_host)
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
+
+
+def _replace_loopback_rollout_address_host(address: str, local_host: str) -> str:
+    parsed = _split_rollout_address_host_port(address)
+    if parsed is None:
+        return address.strip()
+    host, port = parsed
+    if not _is_loopback_rollout_host(host):
+        return address.strip()
+    return _format_host_port(local_host, port)
+
+
+def normalize_local_rollout_server_addresses(
+    addresses: list[str],
+    *,
+    force: bool | None = None,
+    local_host: str | None = None,
+) -> list[str]:
+    """Rewrite loopback rollout server addresses to the configured local host.
+
+    VERL/Ray can publish local vLLM HTTP servers as localhost or wildcard
+    addresses. Opting in normalizes those local aliases while preserving each
+    published port. Concrete node IPs are intentionally left untouched because
+    vLLM may bind only to the Ray node address in tensor-parallel runs.
+    """
+
+    if force is None:
+        force = _env_flag_enabled("AGENTLIGHTNING_FORCE_LOCAL_ROLLOUT_SERVER")
+    if not force:
+        return addresses
+    host = local_host or os.getenv("AGENTLIGHTNING_LOCAL_ROLLOUT_HOST", "127.0.0.1")
+    return [_replace_loopback_rollout_address_host(address, host) for address in addresses]
+
+
 class AgentLightningTrainer(RayPPOTrainer):
     """
     Specialized PPO trainer for agent-based reinforcement learning.
@@ -311,17 +528,17 @@ class AgentLightningTrainer(RayPPOTrainer):
         """Return rollout server addresses across VERL rollout manager layouts."""
         server_addresses = getattr(self.async_rollout_manager, "server_addresses", None)
         if server_addresses is not None:
-            return list(server_addresses)
+            return normalize_local_rollout_server_addresses(list(server_addresses))
 
         llm_server_manager = getattr(self, "llm_server_manager", None)
         get_addresses = getattr(llm_server_manager, "get_addresses", None)
         if callable(get_addresses):
-            return list(get_addresses())
+            return normalize_local_rollout_server_addresses(list(get_addresses()))
 
         llm_client = getattr(self.async_rollout_manager, "llm_client", None)
         client_addresses = getattr(llm_client, "server_addresses", None)
         if client_addresses is not None:
-            return list(client_addresses)
+            return normalize_local_rollout_server_addresses(list(client_addresses))
 
         raise AttributeError("Unable to locate rollout server addresses on the VERL rollout manager.")
 
@@ -378,6 +595,42 @@ class AgentLightningTrainer(RayPPOTrainer):
                 "Ensure `use_reference_policy` is enabled and the VERL config exposes the ref worker."
             )
         return ref_worker.compute_ref_log_prob(batch)
+
+    def _pre_advantage_padding_divisor(self) -> int:
+        actor_world_size = _worker_world_size(self.actor_rollout_wg)
+        rollout_config = self.config.actor_rollout_ref.rollout
+        ref_config = self.config.actor_rollout_ref.ref
+        critic_config = _get_config_value(self.config, "critic", None)
+
+        ref_world_size = None
+        if self.use_reference_policy:
+            ref_worker = (
+                self.actor_rollout_wg if getattr(self, "ref_in_actor", False) else getattr(self, "ref_policy_wg", None)
+            )
+            ref_world_size = _worker_world_size(ref_worker)
+
+        critic_world_size = _worker_world_size(self.critic_wg) if self.use_critic else None
+        critic_micro_batch_size = _get_config_value(
+            critic_config,
+            "forward_micro_batch_size_per_gpu",
+            _get_config_value(critic_config, "ppo_micro_batch_size_per_gpu", None),
+        )
+
+        return compute_pre_advantage_padding_divisor(
+            actor_world_size=actor_world_size,
+            rollout_log_prob_micro_batch_size_per_gpu=_get_config_value(
+                rollout_config, "log_prob_micro_batch_size_per_gpu", None
+            ),
+            rollout_log_prob_use_dynamic_bsz=bool(_get_config_value(rollout_config, "log_prob_use_dynamic_bsz", False)),
+            ref_world_size=ref_world_size,
+            ref_log_prob_micro_batch_size_per_gpu=_get_config_value(
+                ref_config, "log_prob_micro_batch_size_per_gpu", None
+            ),
+            ref_log_prob_use_dynamic_bsz=bool(_get_config_value(ref_config, "log_prob_use_dynamic_bsz", False)),
+            critic_world_size=critic_world_size,
+            critic_forward_micro_batch_size_per_gpu=critic_micro_batch_size,
+            critic_use_dynamic_bsz=bool(_get_config_value(critic_config, "use_dynamic_bsz", False)),
+        )
 
     def _train_step(self, batch_dict: dict) -> dict:
         # Isolate in a separate method to automatically recycle the variables before validation.
@@ -451,7 +704,10 @@ class AgentLightningTrainer(RayPPOTrainer):
                 reward_extra_infos_dict = {}
 
             # for agent mode, pad the lengths to calculate old log prob, ref, and values
-            batch, pad_size = pad_dataproto_to_divisor(batch, self.actor_rollout_wg.world_size)
+            forward_padding_divisor = self._pre_advantage_padding_divisor()
+            batch, pad_size = pad_dataproto_to_divisor(batch, forward_padding_divisor)
+            metrics["training/pre_advantage_padding_divisor"] = forward_padding_divisor
+            metrics["training/n_triplets_pre_advantage_padded_remainder"] = pad_size
 
             # recompute old_log_probs
             with _timer("old_log_prob", timing_raw):
@@ -520,6 +776,18 @@ class AgentLightningTrainer(RayPPOTrainer):
                     )
                     batch.batch["advantages"] = advantages
                     batch.batch["returns"] = returns
+                elif self.config.agentlightning.trace_aggregator.level == "transition":
+                    if self.config.algorithm.adv_estimator != AdvantageEstimator.GRPO:
+                        raise ValueError("transition aggregation currently requires GRPO")
+                    advantages, returns = compute_transition_grpo_advantage(
+                        token_level_rewards=batch.batch["token_level_rewards"],
+                        response_mask=batch.batch["response_mask"],
+                        data_ids=batch.non_tensor_batch["data_id_list"],
+                        turn_indices=batch.non_tensor_batch["turn_index_list"],
+                        norm_by_std=norm_adv_by_std_in_grpo,
+                    )
+                    batch.batch["advantages"] = advantages
+                    batch.batch["returns"] = returns
                 else:
                     batch = compute_advantage(
                         batch,
@@ -540,10 +808,15 @@ class AgentLightningTrainer(RayPPOTrainer):
                 batch.batch["is_drop_mask"].shape[0] - keep_indices.shape[0]
             )
             batch = batch[keep_indices]
-            # next, round to minibatch size
-            mini_batch_size = self.config.actor_rollout_ref.actor.ppo_mini_batch_size
+            # next, round to the effective PPO update size. VERL multiplies the
+            # configured prompt-level mini-batch by rollout.n before actor/critic
+            # updates, so transition batches must align with the expanded size.
+            mini_batch_size = compute_effective_ppo_update_batch_size(
+                ppo_mini_batch_size=self.config.actor_rollout_ref.actor.ppo_mini_batch_size,
+                rollout_n=self.config.actor_rollout_ref.rollout.n,
+            )
             n_transition = len(batch)
-            if self.config.agentlightning.trace_aggregator.level == "trajectory_transition":
+            if self.config.agentlightning.trace_aggregator.level in {"transition", "trajectory_transition"}:
                 random_indices = list(range(n_transition))
                 random.shuffle(random_indices)
                 batch.reorder(torch.tensor(random_indices).type(torch.int32))

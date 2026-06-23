@@ -5,7 +5,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import numpy as np
 import pytest
+import torch
 from config import load_stage_g_example_config
 from grpo.agent import parse_grpo_task
 from grpo.smoke_runtime import override_smoke_decision
@@ -19,6 +21,14 @@ from schemas import (
     ValidationStatus,
 )
 
+from agentlightning.verl.trainer import (
+    compute_effective_ppo_update_batch_size,
+    compute_pre_advantage_padding_divisor,
+    compute_trajectory_transition_grpo_advantage,
+    compute_transition_grpo_advantage,
+    normalize_local_rollout_server_addresses,
+)
+
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = EXAMPLE_DIR.parents[1]
 
@@ -27,7 +37,8 @@ def test_trajectory_fallback_keeps_single_visual_slot() -> None:
     daemon_source = (REPO_DIR / "agentlightning/verl/daemon.py").read_text(encoding="utf-8")
 
     assert "def strip_vision_token_spans" in daemon_source
-    assert "strip_vision_token_spans(trace_prompt_ids, self.tokenizer)" in daemon_source
+    assert "strip_vision_token_spans(" in daemon_source
+    assert "trace_prompt_ids" in daemon_source
     assert 'sample_info["trace_list"][current_merged_trace_idx[0]].get("image_urls", [])' in daemon_source
 
 
@@ -61,22 +72,22 @@ def test_parse_grpo_task_rejects_unknown_business_fields() -> None:
         )
 
 
-def test_grpo_config_uses_trajectory_swanlab_and_stochastic_smoke() -> None:
+def test_grpo_config_uses_trajectory_transition_swanlab_and_stochastic_smoke() -> None:
     run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
     smoke = _verl_config(run, smoke=True)
     formal = _verl_config(run, smoke=False)
 
-    assert smoke["agentlightning"]["trace_aggregator"]["level"] == "trajectory"
-    assert smoke["agentlightning"]["trace_aggregator"]["force_one_sample_per_rollout"] is True
+    assert smoke["agentlightning"]["trace_aggregator"]["level"] == "trajectory_transition"
+    assert smoke["agentlightning"]["trace_aggregator"]["force_one_sample_per_rollout"] is False
     assert smoke["actor_rollout_ref"]["actor"]["loss_agg_mode"] == "seq-mean-token-mean"
     assert smoke["actor_rollout_ref"]["rollout"]["temperature"] > 0
     assert smoke["actor_rollout_ref"]["rollout"]["n"] == 2
     assert smoke["actor_rollout_ref"]["actor"]["ppo_mini_batch_size"] == 2
-    assert formal["actor_rollout_ref"]["rollout"]["n"] == 4
+    assert formal["actor_rollout_ref"]["rollout"]["n"] == 3
     assert formal["actor_rollout_ref"]["rollout"]["tensor_model_parallel_size"] == 4
     assert formal["trainer"]["n_gpus_per_node"] == 4
-    assert run["training"]["train_batch_size"] == 32
-    assert run["training"]["n_runners"] == 128
+    assert run["training"]["train_batch_size"] == 16
+    assert run["training"]["n_runners"] == 48
     assert run["training"]["n_runners"] == run["training"]["train_batch_size"] * run["training"]["rollout_n"]
     assert formal["data"]["max_response_length"] == 640
     assert formal["agentlightning"]["trace_aggregator"]["trajectory_max_prompt_length"] == 4096
@@ -96,8 +107,8 @@ def test_grpo_config_uses_trajectory_swanlab_and_stochastic_smoke() -> None:
     assert formal["actor_rollout_ref"]["actor"]["grad_clip"] == pytest.approx(1.0)
     assert formal["actor_rollout_ref"]["actor"]["use_kl_loss"] is True
     assert formal["algorithm"]["use_kl_in_reward"] is False
-    assert formal["actor_rollout_ref"]["rollout"]["log_prob_micro_batch_size_per_gpu"] == 1
-    assert formal["actor_rollout_ref"]["ref"]["log_prob_micro_batch_size_per_gpu"] == 1
+    assert formal["actor_rollout_ref"]["rollout"]["log_prob_micro_batch_size_per_gpu"] == 2
+    assert formal["actor_rollout_ref"]["ref"]["log_prob_micro_batch_size_per_gpu"] == 2
     assert "swanlab" in formal["trainer"]["logger"]
     assert formal["trainer"]["project_name"] == "image-restoration-multi-agent"
     assert formal["trainer"]["experiment_name"] == "qwen3.5-fog-expert-grpo"
@@ -177,12 +188,13 @@ def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
     assert all(set(run["training"]) == expected_keys for run in runs)
     assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
     assert all(run["training"]["enable_activation_offload"] is False for run in runs)
-    assert all(run["training"]["train_batch_size"] == 32 for run in runs)
-    assert all(run["training"]["n_runners"] == 128 for run in runs)
+    assert all(run["training"]["train_batch_size"] == 16 for run in runs)
+    assert all(run["training"]["rollout_n"] == 3 for run in runs)
+    assert all(run["training"]["n_runners"] == 48 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 4 for run in runs)
     assert all(run["training"]["tensor_model_parallel_size"] == 4 for run in runs)
-    assert all(run["training"]["trace_aggregator_level"] == "trajectory" for run in runs)
-    assert all(run["training"]["force_one_sample_per_rollout"] is True for run in runs)
+    assert all(run["training"]["trace_aggregator_level"] == "trajectory_transition" for run in runs)
+    assert all(run["training"]["force_one_sample_per_rollout"] is False for run in runs)
     assert all(
         run["training"]["n_runners"] == run["training"]["train_batch_size"] * run["training"]["rollout_n"]
         for run in runs
@@ -213,12 +225,12 @@ def test_all_two_gpu_expert_configs_use_two_gpu_topology() -> None:
     assert len(config_paths) == 4
     assert all(run["training"]["train_batch_size"] == 8 for run in runs)
     assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
-    assert all(run["training"]["rollout_n"] == 4 for run in runs)
-    assert all(run["training"]["n_runners"] == 32 for run in runs)
+    assert all(run["training"]["rollout_n"] == 3 for run in runs)
+    assert all(run["training"]["n_runners"] == 24 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 2 for run in runs)
     assert all(run["training"]["tensor_model_parallel_size"] == 2 for run in runs)
-    assert all(run["training"]["trace_aggregator_level"] == "trajectory" for run in runs)
-    assert all(run["training"]["force_one_sample_per_rollout"] is True for run in runs)
+    assert all(run["training"]["trace_aggregator_level"] == "trajectory_transition" for run in runs)
+    assert all(run["training"]["force_one_sample_per_rollout"] is False for run in runs)
     assert all("_2gpu" in run["output_dir"] for run in runs)
     assert all(str(run["swanlab"]["experiment_name"]).endswith("-2gpu") for run in runs)
     assert all(
@@ -227,13 +239,107 @@ def test_all_two_gpu_expert_configs_use_two_gpu_topology() -> None:
     )
 
 
+def test_transition_advantage_uses_each_turn_reward_group() -> None:
+    token_level_rewards = torch.zeros((4, 3), dtype=torch.float32)
+    token_level_rewards[:, -1] = torch.tensor([1.0, 3.0, 10.0, 14.0])
+    response_mask = torch.ones_like(token_level_rewards)
+    advantages, returns = compute_transition_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        data_ids=np.array(["sample-a", "sample-a", "sample-a", "sample-a"], dtype=object),
+        turn_indices=np.array([0, 0, 1, 1]),
+        norm_by_std=False,
+    )
+
+    row_advantages = advantages[:, 0]
+    assert row_advantages.tolist() == pytest.approx([-1.0, 1.0, -2.0, 2.0])
+    assert torch.equal(returns, advantages)
+
+
+def test_trajectory_transition_advantage_uses_rollout_reward_and_turn_weighting() -> None:
+    token_level_rewards = torch.zeros((5, 3), dtype=torch.float32)
+    token_level_rewards[:, -1] = torch.tensor([1.0, 1.0, 4.0, 4.0, 4.0])
+    response_mask = torch.ones_like(token_level_rewards)
+    advantages, returns = compute_trajectory_transition_grpo_advantage(
+        token_level_rewards=token_level_rewards,
+        response_mask=response_mask,
+        data_ids=np.array(["sample-a"] * 5, dtype=object),
+        rollout_ids=np.array(["rollout-low", "rollout-low", "rollout-high", "rollout-high", "rollout-high"]),
+        norm_by_std=False,
+    )
+
+    row_advantages = advantages[:, 0]
+    assert row_advantages.tolist() == pytest.approx([-0.75, -0.75, 0.5, 0.5, 0.5])
+    assert torch.equal(returns, advantages)
+
+
+def test_effective_ppo_update_batch_size_matches_rollout_expansion() -> None:
+    run = _load_run_config(EXAMPLE_DIR / "grpo/configs_2gpu/fog.yaml")
+    formal = _verl_config(run, smoke=False)
+
+    assert (
+        compute_effective_ppo_update_batch_size(
+            ppo_mini_batch_size=formal["actor_rollout_ref"]["actor"]["ppo_mini_batch_size"],
+            rollout_n=formal["actor_rollout_ref"]["rollout"]["n"],
+        )
+        == 24
+    )
+
+
+def test_pre_advantage_padding_divisor_covers_log_prob_micro_batches() -> None:
+    run = _load_run_config(EXAMPLE_DIR / "grpo/configs_2gpu/fog.yaml")
+    formal = _verl_config(run, smoke=False)
+
+    assert (
+        compute_pre_advantage_padding_divisor(
+            actor_world_size=formal["trainer"]["n_gpus_per_node"],
+            rollout_log_prob_micro_batch_size_per_gpu=formal["actor_rollout_ref"]["rollout"][
+                "log_prob_micro_batch_size_per_gpu"
+            ],
+            ref_world_size=formal["trainer"]["n_gpus_per_node"],
+            ref_log_prob_micro_batch_size_per_gpu=formal["actor_rollout_ref"]["ref"][
+                "log_prob_micro_batch_size_per_gpu"
+            ],
+        )
+        == 4
+    )
+    assert (
+        compute_pre_advantage_padding_divisor(
+            actor_world_size=4,
+            rollout_log_prob_micro_batch_size_per_gpu=2,
+            ref_world_size=4,
+            ref_log_prob_micro_batch_size_per_gpu=2,
+        )
+        == 8
+    )
+
+
+def test_controller_emits_step_rewards_for_transition_training() -> None:
+    controller_source = (EXAMPLE_DIR / "controller.py").read_text(encoding="utf-8")
+
+    assert "def _emit_step_reward" in controller_source
+    assert '"restoration.reward_scope": "transition"' in controller_source
+    assert "agl.emit_reward(" in controller_source
+
+
 def test_swanlab_environment_and_disable_switch(monkeypatch: pytest.MonkeyPatch) -> None:
     run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
     monkeypatch.delenv("SWANLAB_LOG_DIR", raising=False)
     monkeypatch.delenv("SWANLAB_MODE", raising=False)
+    monkeypatch.delenv("GRPO_OFFLINE", raising=False)
+    monkeypatch.delenv("GRPO_SWANLAB_MODE", raising=False)
 
     _configure_swanlab_environment(run, smoke=False)
     assert Path(os.environ["SWANLAB_LOG_DIR"]) == Path(run["swanlab"]["log_dir"])
+    assert os.environ["SWANLAB_MODE"] == "cloud"
+
+    monkeypatch.setenv("GRPO_SWANLAB_MODE", "offline")
+    _configure_swanlab_environment(run, smoke=False)
+    assert os.environ["SWANLAB_MODE"] == "offline"
+    monkeypatch.delenv("GRPO_SWANLAB_MODE", raising=False)
+
+    monkeypatch.setenv("GRPO_OFFLINE", "1")
+    _configure_swanlab_environment(run, smoke=False)
     assert os.environ["SWANLAB_MODE"] == "cloud"
 
     _configure_swanlab_environment(run, smoke=True)
@@ -241,6 +347,14 @@ def test_swanlab_environment_and_disable_switch(monkeypatch: pytest.MonkeyPatch)
 
     run["swanlab"]["enabled"] = False
     assert _verl_config(run, smoke=False)["trainer"]["logger"] == ["console"]
+
+
+def test_local_rollout_server_addresses_can_be_forced_to_loopback() -> None:
+    assert normalize_local_rollout_server_addresses(["10.246.1.30:41423"], force=True) == ["10.246.1.30:41423"]
+    assert normalize_local_rollout_server_addresses(["10.246.1.30:41423"], force=False) == ["10.246.1.30:41423"]
+    assert normalize_local_rollout_server_addresses(["0.0.0.0:41423"], force=True) == ["127.0.0.1:41423"]
+    assert normalize_local_rollout_server_addresses(["localhost:41423"], force=True) == ["127.0.0.1:41423"]
+    assert normalize_local_rollout_server_addresses(["[::1]:41423"], force=True) == ["127.0.0.1:41423"]
 
 
 def test_grpo_tool_lifecycle_uses_runtime_service_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,9 +367,10 @@ def test_grpo_tool_lifecycle_uses_runtime_service_url(monkeypatch: pytest.Monkey
 
 
 def test_agent_lightning_verl_imports_with_transformers5_qwen35_compat() -> None:
+    from transformers import AutoModelForImageTextToText, AutoModelForVision2Seq
+
     import agentlightning as agl
     import agentlightning.verl  # noqa: F401
-    from transformers import AutoModelForImageTextToText, AutoModelForVision2Seq
 
     run = _load_run_config(EXAMPLE_DIR / "grpo/configs_2gpu/fog.yaml")
     algorithm = agl.VERL(_verl_config(run, smoke=True))

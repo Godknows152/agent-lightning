@@ -90,6 +90,7 @@ def build_expert_system_prompt(
     degradation_type = EXPERT_DEGRADATION[expert_name]
     function_schema = tool_registry.build_tool_schema(include_stop=allow_stop)["function"]
     serialized_schema = json.dumps(function_schema, ensure_ascii=False, separators=(",", ":"))
+    tool_descriptions = tool_registry.build_tool_descriptions(include_stop=allow_stop)
     if allow_stop:
         stop_instruction = """The example action illustrates syntax only. Determine the action from the actual image,
 history, and IQA feedback. To finish the trajectory, use action stop:
@@ -120,7 +121,16 @@ You are provided with one function signature inside <tools></tools> tags:
 {serialized_schema}
 </tools>
 
-Return exactly one Hermes tool call and no other output:
+The available actions have the following intended uses:
+<tool_descriptions>
+{tool_descriptions}
+</tool_descriptions>
+
+Return one brief thinking block followed by exactly one Hermes tool call:
+<think>
+The image has fog-like degradation, so I will choose a dehazing action that can improve visibility.
+</think>
+
 <tool_call>
 {{"name":"restore_image","arguments":{{"action":"focalnet_dehaze"}}}}
 </tool_call>
@@ -128,12 +138,12 @@ Return exactly one Hermes tool call and no other output:
 {stop_instruction}
 
 Rules:
-1. Emit exactly one <tool_call></tool_call> block per turn.
+1. Emit exactly one <think></think> block followed by exactly one <tool_call></tool_call> block per turn.
 2. The name field must be exactly restore_image.
 3. The arguments object must contain exactly one field named action.
 4. action must be one of the enum values in the supplied schema.
 5. {stop_rule}
-6. Do not emit an IQA score, explanation, or extra text.
+6. Keep the thinking block concise: mention the visible degradation and why the selected tool is appropriate.
 7. Do not wrap the tool call in a Markdown code fence or emit bare JSON.
 8. Do not claim an action improved the image before receiving the next IQA result.
 9. Avoid repeating an action that already degraded quality unless later evidence justifies it.
@@ -146,6 +156,7 @@ def build_expert_single_step_sft_system_prompt(expert_name: ExpertName, tool_reg
     degradation_type = EXPERT_DEGRADATION[expert_name]
     function_schema = tool_registry.build_tool_schema(include_stop=False)["function"]
     serialized_schema = json.dumps(function_schema, ensure_ascii=False, separators=(",", ":"))
+    tool_descriptions = tool_registry.build_tool_descriptions(include_stop=False)
     return f"""Prompt version: {EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION}
 
 You are {expert_name.value}, the restoration policy specialized through training data for
@@ -161,7 +172,16 @@ You are provided with one function signature inside <tools></tools> tags:
 {serialized_schema}
 </tools>
 
-Return exactly one Hermes tool call and no other output:
+The available actions have the following intended uses:
+<tool_descriptions>
+{tool_descriptions}
+</tool_descriptions>
+
+Return one brief thinking block followed by exactly one Hermes tool call:
+<think>
+The image has fog-like degradation, so I will choose a dehazing action that can improve visibility.
+</think>
+
 <tool_call>
 {{"name":"restore_image","arguments":{{"action":"focalnet_dehaze"}}}}
 </tool_call>
@@ -169,19 +189,19 @@ Return exactly one Hermes tool call and no other output:
 The example action illustrates syntax only. Determine the action from the actual image.
 
 Rules:
-1. Emit exactly one <tool_call></tool_call> block.
+1. Emit exactly one <think></think> block followed by exactly one <tool_call></tool_call> block.
 2. The name field must be exactly restore_image.
 3. The arguments object must contain exactly one field named action.
 4. action must be one of the enum values in the supplied schema.
 5. Do not output stop in this initial single-step SFT task.
-6. Do not emit an IQA score, feedback, explanation, action history, or extra text.
+6. Keep the thinking block concise: mention the visible degradation and why the selected tool is appropriate.
 7. Do not wrap the tool call in a Markdown code fence or emit bare JSON."""
 
 
 def build_expert_single_step_sft_user_prompt() -> str:
     """Build the image-only initial-state instruction used by expert SFT."""
 
-    return "<image>\nSelect exactly one restoration action for this image using one Hermes tool call."
+    return "<image>\nSelect exactly one restoration action for this image using a brief thinking block and one Hermes tool call."
 
 
 def build_expert_state_prompt(
@@ -209,4 +229,4 @@ Workflow state:
 - latest_iqa_feedback: {latest_feedback}
 - action_and_evaluation_history_json: {history_json}
 
-Respond with exactly one Hermes <tool_call> block following the system instructions."""
+Respond with one brief <think> block followed by exactly one Hermes <tool_call> block following the system instructions."""

@@ -135,3 +135,11 @@ class ToolRegistry:
                 },
             },
         }
+
+    def build_tool_descriptions(self, *, include_stop: bool = True) -> str:
+        """Build a compact action-to-purpose list for model-facing prompts."""
+
+        lines = [f"- {tool.name}: {tool.description}" for tool in self._tools.values()]
+        if include_stop:
+            lines.append("- stop: Stop the trajectory and keep the historical best restored image.")
+        return "\n".join(lines)

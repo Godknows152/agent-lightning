@@ -15,11 +15,11 @@ swanlab:
   log_dir: ../outputs/qwen3_5/snow/swanlab
 training:
   # Dataset batch and GRPO candidate generation.
-  train_batch_size: 32
-  rollout_n: 4
+  train_batch_size: 16
+  rollout_n: 3
   # Keep every GRPO candidate trajectory in flight so vLLM can continuously
   # batch requests from the same dialogue turn and pipeline later turns.
-  n_runners: 128
+  n_runners: 48
   n_gpus_per_node: 4
 
   # Model and LoRA.
@@ -39,18 +39,19 @@ training:
 
   # vLLM rollout engine and sampling.
   tensor_model_parallel_size: 4
-  gpu_memory_utilization: 0.25
+  gpu_memory_utilization: 0.2
   max_num_batched_tokens: 8192
   max_num_seqs: 1024
   layered_summon: true
   enable_chunked_prefill: false
   enable_prefix_caching: true
   enforce_eager: false
+  disable_custom_all_reduce: true
   free_cache_engine: false
   max_prompt_length: 4096
   max_response_length: 640
-  trace_aggregator_level: trajectory
-  force_one_sample_per_rollout: true
+  trace_aggregator_level: trajectory_transition
+  force_one_sample_per_rollout: false
   trajectory_max_prompt_length: 4096
   trajectory_max_response_length: 4096
   max_model_len: 16384
@@ -60,7 +61,7 @@ training:
   do_sample: true
   ignore_eos: false
 
-  # PPO update. In trajectory mode, the mini-batch counts complete sampled trajectories.
+  # PPO update. In trajectory-transition mode, sampled turns share their trajectory advantage.
   ppo_mini_batch_size: 8
   ppo_micro_batch_size_per_gpu: 1
   ppo_epochs: 1
@@ -74,16 +75,16 @@ training:
   grad_clip: 1.0
 
   # Actor old-log-prob and reference-policy forward batches.
-  rollout_log_prob_micro_batch_size_per_gpu: 1
+  rollout_log_prob_micro_batch_size_per_gpu: 2
   rollout_log_prob_use_dynamic_bsz: false
   rollout_log_prob_max_token_len_per_gpu: 16384
-  ref_log_prob_micro_batch_size_per_gpu: 1
+  ref_log_prob_micro_batch_size_per_gpu: 2
   ref_log_prob_use_dynamic_bsz: false
   ref_log_prob_max_token_len_per_gpu: 16384
   ref_param_offload: true
 
   # Optimizer and regularization.
-  learning_rate: 0.00003
+  learning_rate: 0.00001
   weight_decay: 0.01
   lr_scheduler_type: constant
   lr_warmup_steps_ratio: 0.0
@@ -91,7 +92,7 @@ training:
   kl_loss_coef: 0.05
   kl_loss_type: low_var_kl
   use_kl_in_reward: false
-  entropy_coeff: 0.05
+  entropy_coeff: 0.01
 
   # FSDP memory controls.
   fsdp_param_offload: true

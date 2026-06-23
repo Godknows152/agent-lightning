@@ -3,7 +3,7 @@ workflow:
   max_consecutive_failures: 2
   no_improvement_limit: 3
   improvement_epsilon: 0.000001
-  tool_call_cost: 0.01
+  tool_call_cost: 0.0
   invalid_action_penalty: 1.0
   failure_penalty: 0.25
 

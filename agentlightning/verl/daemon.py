@@ -22,6 +22,7 @@ from verl import DataProto
 from agentlightning import LLM, AgentLightningServer, NamedResources, RolloutLegacy
 from agentlightning.adapter.triplet import TracerTraceToTriplet, TraceToTripletBase
 from agentlightning.llm_proxy import LLMProxy, ModelConfig
+from agentlightning.reward import find_final_reward
 from agentlightning.store.base import LightningStore
 from agentlightning.types import EnqueueRolloutRequest, Rollout, RolloutConfig, Task
 
@@ -177,6 +178,37 @@ def strip_vision_token_spans(token_ids: List[int], tokenizer: Any) -> Tuple[List
         stripped.append(token_id)
 
     return stripped, removed
+
+
+def count_vision_placeholders(token_ids: List[int], tokenizer: Any) -> int:
+    """Count visual placeholders in a tokenized multimodal prompt."""
+
+    vision_start_id = _convert_token_to_id(tokenizer, "<|vision_start|>")
+    vision_end_id = _convert_token_to_id(tokenizer, "<|vision_end|>")
+    standalone_vision_ids = {
+        token_id
+        for token_id in (
+            _convert_token_to_id(tokenizer, "<|image_pad|>"),
+            _convert_token_to_id(tokenizer, "<|video_pad|>"),
+            _convert_token_to_id(tokenizer, "<image>"),
+            _convert_token_to_id(tokenizer, "<|image|>"),
+        )
+        if token_id is not None
+    }
+    count = 0
+    in_vision_span = False
+    for token_id in token_ids:
+        if vision_start_id is not None and token_id == vision_start_id:
+            count += 1
+            in_vision_span = True
+            continue
+        if in_vision_span:
+            if vision_end_id is not None and token_id == vision_end_id:
+                in_vision_span = False
+            continue
+        elif token_id in standalone_vision_ids:
+            count += 1
+    return count
 
 
 def get_left_padded_ids_and_attention_mask(
@@ -696,7 +728,8 @@ class AgentModeDaemon:
 
         1. Task: construct from Rollout
         2. Triplets: obtained by querying spans and feeding into the adapter
-        3. Final reward: extracted from last triplet's reward, searching backwards if not found
+        3. Final reward: extracted from the terminal reward span first, then
+           falls back to the last transition reward for legacy traces
         """
         # Query spans for this rollout (latest attempt)
         spans = await self.store.query_spans(rollout.rollout_id, attempt_id="latest")
@@ -708,14 +741,18 @@ class AgentModeDaemon:
         else:
             triplets = self.adapter.adapt(spans)
 
-        # Extract final reward from triplets
-        final_reward: Optional[float] = None
+        # Prefer the rollout-level reward emitted after the agent returns. This
+        # keeps trajectory-level GRPO from accidentally using the final turn's
+        # local step reward as the trajectory reward.
+        final_reward = find_final_reward(spans)
         if triplets:
-            # Search backwards through triplets for the first non-None reward
-            for triplet in reversed(triplets):
-                if triplet.reward is not None:
-                    final_reward = triplet.reward
-                    break
+            if final_reward is None:
+                # Search backwards through triplets for the first non-None
+                # reward to preserve behavior for older traces.
+                for triplet in reversed(triplets):
+                    if triplet.reward is not None:
+                        final_reward = triplet.reward
+                        break
 
         # Construct the Task object from Rollout
         task = Task(
@@ -914,6 +951,7 @@ class AgentModeDaemon:
                     "prompt_ids": t.prompt.get("token_ids", []),
                     "response_ids": t.response.get("token_ids", []),
                     "image_urls": t.prompt.get("image_urls", []),
+                    "reward": t.reward,
                 }
                 for t in rollout.triplets
             ]
@@ -947,6 +985,9 @@ class AgentModeDaemon:
         image_grid_thw_list: List[Optional[torch.Tensor]] = []  # For Qwen2-VL mrope
         multi_modal_inputs_list: List[Dict[str, torch.Tensor]] = []
         image_count_list: List[int] = []
+        image_placeholder_count_list: List[int] = []
+        image_placeholder_mismatch_count = 0
+        missing_transition_reward_count = 0
         n_trunc_sample_because_of_response = 0
 
         aggregation_level = self.trace_aggregator.get("level", "transition")
@@ -954,15 +995,29 @@ class AgentModeDaemon:
             for rollout_id, sample_info in finished_id_to_sample_info.items():
                 for turn_index, trace in enumerate(sample_info["trace_list"]):
 
-                    reward_list.append(sample_info["reward"])
+                    if aggregation_level == "transition":
+                        transition_reward = trace.get("reward", None)
+                        if transition_reward is None:
+                            missing_transition_reward_count += 1
+                            transition_reward = self.reward_fillna_value
+                    else:
+                        transition_reward = sample_info["reward"]
+                    reward_list.append(float(transition_reward))
                     prompt_ids, response_ids = trace["prompt_ids"], trace["response_ids"]
+                    image_urls = trace.get("image_urls", [])
+                    image_count = len(image_urls)
+                    image_placeholder_count = count_vision_placeholders(prompt_ids, self.tokenizer)
+                    has_image_placeholder_mismatch = image_count != image_placeholder_count
+                    image_count_list.append(image_count)
+                    image_placeholder_count_list.append(image_placeholder_count)
+                    image_placeholder_mismatch_count += int(has_image_placeholder_mismatch)
 
                     # Mark samples with prompts exceeding max_prompt_length to be dropped later
                     if len(prompt_ids) > max_prompt_length:
                         prompt_ids = prompt_ids[:max_prompt_length]
                         is_drop_list.append(True)
                     else:
-                        is_drop_list.append(False)
+                        is_drop_list.append(has_image_placeholder_mismatch)
 
                     # Truncate responses that exceed max_response_length
                     if len(response_ids) > max_response_length:
@@ -985,8 +1040,6 @@ class AgentModeDaemon:
                     rollout_id_list.append(rollout_id)
                     turn_index_list.append(turn_index)
 
-                    image_urls = trace.get("image_urls", [])
-                    image_count_list.append(len(image_urls))
                     multi_modal_inputs = self._get_multi_modal_inputs(image_urls)
                     multi_modal_inputs_list.append(multi_modal_inputs or {})
                     if self._use_mrope:
@@ -1220,15 +1273,21 @@ class AgentModeDaemon:
             ),
             **(
                 {
-                    "training/n_trajectory_transition_rollouts": len(finished_id_to_sample_info),
+                    f"training/n_{aggregation_level}_rollouts": len(finished_id_to_sample_info),
                     "training/n_triplets_by_turn": n_transition,
                     "training/avg_turns_per_rollout": (
                         n_transition / len(finished_id_to_sample_info) if finished_id_to_sample_info else 0.0
                     ),
                     "training/avg_images_per_transition": np.mean(image_count_list) if image_count_list else 0.0,
                     "training/max_images_per_transition": max(image_count_list, default=0),
+                    "training/avg_image_placeholders_per_transition": (
+                        np.mean(image_placeholder_count_list) if image_placeholder_count_list else 0.0
+                    ),
+                    "training/max_image_placeholders_per_transition": max(image_placeholder_count_list, default=0),
+                    "training/n_image_placeholder_mismatch": image_placeholder_mismatch_count,
+                    "training/n_missing_transition_rewards": missing_transition_reward_count,
                 }
-                if aggregation_level == "trajectory_transition"
+                if aggregation_level in {"transition", "trajectory_transition"}
                 else {}
             ),
             **(

@@ -73,6 +73,18 @@ def run_ppo(
         for name in (
             "LD_LIBRARY_PATH",
             "PATH",
+            "AGENTLIGHTNING_FORCE_LOCAL_ROLLOUT_SERVER",
+            "AGENTLIGHTNING_LOCAL_ROLLOUT_HOST",
+            "AGENTLIGHTNING_RAY_NODE_IP_ADDRESS",
+            "GRPO_OFFLINE",
+            "GRPO_SWANLAB_MODE",
+            "HF_DATASETS_OFFLINE",
+            "HF_HUB_OFFLINE",
+            "RAY_NODE_IP_ADDRESS",
+            "SWANLAB_LOG_DIR",
+            "SWANLAB_MODE",
+            "TRANSFORMERS_OFFLINE",
+            "WANDB_MODE",
             "http_proxy",
             "https_proxy",
             "all_proxy",
@@ -87,14 +99,18 @@ def run_ppo(
         for name, value in os.environ.items():
             if name.startswith("VLLM_") and value:
                 ray_env_vars[name] = value
-        ray.init(
-            runtime_env={"env_vars": ray_env_vars},
-            num_cpus=num_cpus,
+        ray_init_kwargs: dict[str, Any] = {
+            "runtime_env": {"env_vars": ray_env_vars},
+            "num_cpus": num_cpus,
             # Agent Lightning already exposes training metrics through the
             # configured experiment logger. Avoid starting Ray's optional
             # dashboard and MetricsHead subprocesses on training nodes.
-            include_dashboard=False,
-        )
+            "include_dashboard": False,
+        }
+        node_ip_address = os.environ.get("AGENTLIGHTNING_RAY_NODE_IP_ADDRESS") or os.environ.get("RAY_NODE_IP_ADDRESS")
+        if node_ip_address and "_node_ip_address" in inspect.signature(ray.init).parameters:
+            ray_init_kwargs["_node_ip_address"] = node_ip_address
+        ray.init(**ray_init_kwargs)
 
     runner = TaskRunner.remote()
     ray.get(
