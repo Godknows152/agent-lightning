@@ -43,6 +43,7 @@ class VERL(Algorithm):
             "level": "trajectory",
             "trajectory_max_prompt_length": 4096,
             "trajectory_max_response_length": 34384,
+            "trajectory_image_source": "latest",
         }
         ```
 
@@ -56,12 +57,15 @@ class VERL(Algorithm):
         [this blog post](https://agent-lightning.github.io/posts/trajectory_level_aggregation/)
         for more details.
 
-        For multimodal agents that should see only the latest image at each
-        decision, use `level="transition"`. Each turn remains an independent
-        visual sample and uses the reward emitted for that turn. GRPO normalizes
-        transition rewards inside `(data_id, turn_index)` groups so first-step
-        actions are compared with first-step actions, second-step actions with
-        second-step actions, and so on.
+        For restoration-style multimodal trajectories, `trajectory_image_source="latest"`
+        keeps one visual slot in the merged sample and binds it to the latest
+        reported turn image, mirroring the original VERL latest-image context.
+        If each decision must be trained against its own exact visual state, use
+        `level="transition"`. Each turn remains an independent visual sample and
+        uses the reward emitted for that turn. GRPO normalizes transition rewards
+        inside `(data_id, turn_index)` groups so first-step actions are compared
+        with first-step actions, second-step actions with second-step actions,
+        and so on.
 
         `level="trajectory_transition"` is the older hybrid mode: each turn is
         an independent visual sample, but all turns from one rollout share the

@@ -80,6 +80,14 @@ def _load_run_config(path: Path) -> dict[str, Any]:
         choices = ", ".join(sorted(valid_trace_aggregator_levels))
         raise ValueError(f"training.trace_aggregator_level must be one of {choices}, got {trace_aggregator_level!r}")
     training["trace_aggregator_level"] = trace_aggregator_level
+    trajectory_image_source = str(
+        training.get("trajectory_image_source", "latest" if trace_aggregator_level == "trajectory" else "first")
+    )
+    if trajectory_image_source not in {"first", "latest"}:
+        choices = "first, latest"
+        message = f"training.trajectory_image_source must be one of {choices}, got {trajectory_image_source!r}"
+        raise ValueError(message)
+    training["trajectory_image_source"] = trajectory_image_source
     rollout_concurrency = int(training["train_batch_size"]) * int(training["rollout_n"])
     if int(training["n_runners"]) != rollout_concurrency:
         raise ValueError(
@@ -108,10 +116,13 @@ def _load_dataset(path: str, expert_name: ExpertName, *, limit: int | None = Non
 def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
     training = cast(dict[str, Any], run["training"])
     swanlab = cast(dict[str, Any], run["swanlab"])
+    trace_aggregator_level = str(training["trace_aggregator_level"])
     rollout_n = 2 if smoke else int(training["rollout_n"])
     train_batch_size = 1 if smoke else int(training["train_batch_size"])
     max_response_length = 128 if smoke else int(training["max_response_length"])
-    ppo_mini_batch_size = 2 if smoke else int(training["ppo_mini_batch_size"])
+    ppo_mini_batch_size = (
+        1 if smoke and trace_aggregator_level == "trajectory" else 2 if smoke else int(training["ppo_mini_batch_size"])
+    )
     output_dir = str(Path(run["output_dir"]) / ("smoke" if smoke else "full"))
     experiment_name = str(swanlab["experiment_name"]) + ("-smoke" if smoke else "")
     loggers = ["console"]
@@ -136,14 +147,20 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "timeout_seconds": float(training["tool_runtime_lifecycle_timeout_seconds"]),
             },
             "trace_aggregator": {
-                # Transition aggregation keeps each decision turn paired with
-                # its latest visual observation. Dynamic turn counts are padded
-                # to actor.ppo_mini_batch_size inside AgentLightningTrainer.
-                "level": str(training["trace_aggregator_level"]),
+                # Trajectory aggregation matches the original VERL restoration
+                # setup: each sampled multi-turn rollout becomes one masked PPO
+                # row, while later visual markers are stripped during merging.
+                "level": trace_aggregator_level,
                 "trajectory_max_prompt_length": int(training["trajectory_max_prompt_length"]),
                 "trajectory_max_response_length": int(training["trajectory_max_response_length"]),
+                "trajectory_image_source": str(
+                    training.get(
+                        "trajectory_image_source",
+                        "latest" if trace_aggregator_level == "trajectory" else "first",
+                    )
+                ),
                 "force_one_sample_per_rollout": bool(
-                    training.get("force_one_sample_per_rollout", training["trace_aggregator_level"] == "trajectory")
+                    training.get("force_one_sample_per_rollout", trace_aggregator_level == "trajectory")
                 ),
                 "debug": False,
             },
@@ -218,8 +235,8 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "ppo_epochs": int(training["ppo_epochs"]),
                 "use_dynamic_bsz": bool(training["use_dynamic_bsz"]),
                 "ppo_max_token_len_per_gpu": int(training["ppo_max_token_len_per_gpu"]),
-                # In transition aggregation, each policy row is one assistant
-                # decision turn paired with that turn's current image.
+                # In trajectory aggregation, response_mask trains assistant
+                # tokens and masks prompt/tool-observation text in the rollout.
                 "loss_agg_mode": str(training["loss_agg_mode"]),
                 "shuffle": bool(training["shuffle"]),
                 "grad_clip": float(training["grad_clip"]),

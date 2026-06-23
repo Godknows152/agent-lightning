@@ -50,8 +50,9 @@ training:
   free_cache_engine: false
   max_prompt_length: 4096
   max_response_length: 640
-  trace_aggregator_level: trajectory_transition
-  force_one_sample_per_rollout: false
+  trace_aggregator_level: trajectory
+  force_one_sample_per_rollout: true
+  trajectory_image_source: latest
   trajectory_max_prompt_length: 4096
   trajectory_max_response_length: 4096
   max_model_len: 16384
@@ -61,7 +62,7 @@ training:
   do_sample: true
   ignore_eos: false
 
-  # PPO update. In trajectory-transition mode, sampled turns share their trajectory advantage.
+  # PPO update. In trajectory mode, each sampled rollout contributes one masked sequence.
   ppo_mini_batch_size: 8
   ppo_micro_batch_size_per_gpu: 1
   ppo_epochs: 1

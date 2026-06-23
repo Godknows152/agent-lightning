@@ -39,7 +39,14 @@ def test_trajectory_fallback_keeps_single_visual_slot() -> None:
     assert "def strip_vision_token_spans" in daemon_source
     assert "strip_vision_token_spans(" in daemon_source
     assert "trace_prompt_ids" in daemon_source
-    assert 'sample_info["trace_list"][current_merged_trace_idx[0]].get("image_urls", [])' in daemon_source
+    assert (
+        'trajectory_image_source = str(self.trace_aggregator.get("trajectory_image_source", "first"))' in daemon_source
+    )
+    assert 'current_merged_trace_idx[-1] if trajectory_image_source == "latest"' in daemon_source
+    assert (
+        "image_placeholder_count = count_vision_placeholders(prompt_ids + response_ids, self.tokenizer)"
+        in daemon_source
+    )
 
 
 def test_parse_grpo_task_accepts_agent_lightning_metadata() -> None:
@@ -72,17 +79,18 @@ def test_parse_grpo_task_rejects_unknown_business_fields() -> None:
         )
 
 
-def test_grpo_config_uses_trajectory_transition_swanlab_and_stochastic_smoke() -> None:
+def test_grpo_config_uses_verl_style_trajectory_swanlab_and_stochastic_smoke() -> None:
     run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
     smoke = _verl_config(run, smoke=True)
     formal = _verl_config(run, smoke=False)
 
-    assert smoke["agentlightning"]["trace_aggregator"]["level"] == "trajectory_transition"
-    assert smoke["agentlightning"]["trace_aggregator"]["force_one_sample_per_rollout"] is False
+    assert smoke["agentlightning"]["trace_aggregator"]["level"] == "trajectory"
+    assert smoke["agentlightning"]["trace_aggregator"]["force_one_sample_per_rollout"] is True
+    assert smoke["agentlightning"]["trace_aggregator"]["trajectory_image_source"] == "latest"
     assert smoke["actor_rollout_ref"]["actor"]["loss_agg_mode"] == "seq-mean-token-mean"
     assert smoke["actor_rollout_ref"]["rollout"]["temperature"] > 0
     assert smoke["actor_rollout_ref"]["rollout"]["n"] == 2
-    assert smoke["actor_rollout_ref"]["actor"]["ppo_mini_batch_size"] == 2
+    assert smoke["actor_rollout_ref"]["actor"]["ppo_mini_batch_size"] == 1
     assert formal["actor_rollout_ref"]["rollout"]["n"] == 3
     assert formal["actor_rollout_ref"]["rollout"]["tensor_model_parallel_size"] == 4
     assert formal["trainer"]["n_gpus_per_node"] == 4
@@ -92,6 +100,7 @@ def test_grpo_config_uses_trajectory_transition_swanlab_and_stochastic_smoke() -
     assert formal["data"]["max_response_length"] == 640
     assert formal["agentlightning"]["trace_aggregator"]["trajectory_max_prompt_length"] == 4096
     assert formal["agentlightning"]["trace_aggregator"]["trajectory_max_response_length"] == 4096
+    assert formal["agentlightning"]["trace_aggregator"]["trajectory_image_source"] == "latest"
     assert formal["actor_rollout_ref"]["model"]["enable_gradient_checkpointing"] is True
     assert formal["actor_rollout_ref"]["model"]["enable_activation_offload"] is False
     assert formal["agentlightning"]["rollout_resource_control"] == {
@@ -184,6 +193,7 @@ def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
         "resume_mode",
         "trace_aggregator_level",
         "force_one_sample_per_rollout",
+        "trajectory_image_source",
     } <= expected_keys
     assert all(set(run["training"]) == expected_keys for run in runs)
     assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
@@ -193,8 +203,9 @@ def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
     assert all(run["training"]["n_runners"] == 48 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 4 for run in runs)
     assert all(run["training"]["tensor_model_parallel_size"] == 4 for run in runs)
-    assert all(run["training"]["trace_aggregator_level"] == "trajectory_transition" for run in runs)
-    assert all(run["training"]["force_one_sample_per_rollout"] is False for run in runs)
+    assert all(run["training"]["trace_aggregator_level"] == "trajectory" for run in runs)
+    assert all(run["training"]["force_one_sample_per_rollout"] is True for run in runs)
+    assert all(run["training"]["trajectory_image_source"] == "latest" for run in runs)
     assert all(
         run["training"]["n_runners"] == run["training"]["train_batch_size"] * run["training"]["rollout_n"]
         for run in runs
@@ -229,8 +240,9 @@ def test_all_two_gpu_expert_configs_use_two_gpu_topology() -> None:
     assert all(run["training"]["n_runners"] == 24 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 2 for run in runs)
     assert all(run["training"]["tensor_model_parallel_size"] == 2 for run in runs)
-    assert all(run["training"]["trace_aggregator_level"] == "trajectory_transition" for run in runs)
-    assert all(run["training"]["force_one_sample_per_rollout"] is False for run in runs)
+    assert all(run["training"]["trace_aggregator_level"] == "trajectory" for run in runs)
+    assert all(run["training"]["force_one_sample_per_rollout"] is True for run in runs)
+    assert all(run["training"]["trajectory_image_source"] == "latest" for run in runs)
     assert all("_2gpu" in run["output_dir"] for run in runs)
     assert all(str(run["swanlab"]["experiment_name"]).endswith("-2gpu") for run in runs)
     assert all(

@@ -1048,6 +1048,12 @@ class AgentModeDaemon:
                         )
 
         elif aggregation_level == "trajectory":
+            trajectory_image_source = str(self.trace_aggregator.get("trajectory_image_source", "first"))
+            if trajectory_image_source not in {"first", "latest"}:
+                raise ValueError(
+                    "trace_aggregator.trajectory_image_source must be one of first, latest, "
+                    f"got {trajectory_image_source!r}"
+                )
             response_mask_list: List[List[int]] = []
             unmerged_count: int = 0
             template_mismatch_count, retoken_mismatch_count, others_mismatch_count = 0, 0, 0
@@ -1126,10 +1132,9 @@ class AgentModeDaemon:
                         ):
                             prompt_delta = trace_prompt_ids[len(current_context) :]
                         else:
-                            prompt_delta, removed_vision_tokens = strip_vision_token_spans(
-                                trace_prompt_ids, self.tokenizer
-                            )
-                            stripped_vision_token_count += removed_vision_tokens
+                            prompt_delta = trace_prompt_ids
+                        prompt_delta, removed_vision_tokens = strip_vision_token_spans(prompt_delta, self.tokenizer)
+                        stripped_vision_token_count += removed_vision_tokens
                         response_ids += prompt_delta
                         response_ids += trace["response_ids"]
                         response_mask += [0] * len(prompt_delta)
@@ -1138,17 +1143,30 @@ class AgentModeDaemon:
                     reward_list.append(sample_info["reward"])
 
                     # Mark samples with prompts exceeding max_prompt_length to be dropped later
+                    prompt_too_long = False
                     if len(prompt_ids) > max_prompt_length:
                         prompt_ids = prompt_ids[:max_prompt_length]
-                        is_drop_list.append(True)
-                    else:
-                        is_drop_list.append(False)
+                        prompt_too_long = True
 
                     # Truncate responses that exceed max_response_length
                     if len(response_ids) > max_response_length:
                         response_ids = response_ids[:max_response_length]
                         response_mask = response_mask[:max_response_length]
                         n_trunc_sample_because_of_response += 1
+
+                    image_trace_index = (
+                        current_merged_trace_idx[-1]
+                        if trajectory_image_source == "latest"
+                        else current_merged_trace_idx[0]
+                    )
+                    image_urls = sample_info["trace_list"][image_trace_index].get("image_urls", [])
+                    image_count = len(image_urls)
+                    image_placeholder_count = count_vision_placeholders(prompt_ids + response_ids, self.tokenizer)
+                    has_image_placeholder_mismatch = image_count != image_placeholder_count
+                    image_count_list.append(image_count)
+                    image_placeholder_count_list.append(image_placeholder_count)
+                    image_placeholder_mismatch_count += int(has_image_placeholder_mismatch)
+                    is_drop_list.append(prompt_too_long or has_image_placeholder_mismatch)
 
                     # Pad prompts to the left and responses to the right
                     one_input_ids, one_input_attention_mask = get_left_padded_ids_and_attention_mask(
@@ -1172,9 +1190,7 @@ class AgentModeDaemon:
                     # original VERL restoration agent loop. Later non-prefix
                     # prompts are appended as text observations with their
                     # duplicated vision tokens stripped above, so multimodal
-                    # inputs must correspond to the first prompt's image tokens.
-                    image_urls = sample_info["trace_list"][current_merged_trace_idx[0]].get("image_urls", [])
-                    image_count_list.append(len(image_urls))
+                    # inputs must correspond to the remaining visual slot.
                     multi_modal_inputs = self._get_multi_modal_inputs(image_urls)
                     multi_modal_inputs_list.append(multi_modal_inputs or {})
                     if self._use_mrope:
@@ -1267,6 +1283,12 @@ class AgentModeDaemon:
                     "training/n_stripped_vision_tokens": stripped_vision_token_count,  # type: ignore
                     "training/avg_images_per_trajectory": np.mean(image_count_list) if image_count_list else 0.0,
                     "training/max_images_per_trajectory": max(image_count_list, default=0),
+                    "training/avg_image_placeholders_per_trajectory": (
+                        np.mean(image_placeholder_count_list) if image_placeholder_count_list else 0.0
+                    ),
+                    "training/max_image_placeholders_per_trajectory": max(image_placeholder_count_list, default=0),
+                    "training/n_image_placeholder_mismatch": image_placeholder_mismatch_count,
+                    "training/trajectory_image_source_latest": int(trajectory_image_source == "latest"),  # type: ignore
                 }
                 if aggregation_level == "trajectory"
                 else {}
