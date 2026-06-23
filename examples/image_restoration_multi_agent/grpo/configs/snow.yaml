@@ -47,14 +47,14 @@ training:
   enable_prefix_caching: true
   enforce_eager: false
   disable_custom_all_reduce: true
-  free_cache_engine: false
+  free_cache_engine: true
   max_prompt_length: 4096
   max_response_length: 640
   trace_aggregator_level: trajectory
   force_one_sample_per_rollout: true
   trajectory_image_source: latest
   trajectory_max_prompt_length: 4096
-  trajectory_max_response_length: 4096
+  trajectory_max_response_length: 6144
   max_model_len: 16384
   temperature: 1.0
   top_k: -1
@@ -76,10 +76,10 @@ training:
   grad_clip: 1.0
 
   # Actor old-log-prob and reference-policy forward batches.
-  rollout_log_prob_micro_batch_size_per_gpu: 2
+  rollout_log_prob_micro_batch_size_per_gpu: 1
   rollout_log_prob_use_dynamic_bsz: false
   rollout_log_prob_max_token_len_per_gpu: 16384
-  ref_log_prob_micro_batch_size_per_gpu: 2
+  ref_log_prob_micro_batch_size_per_gpu: 1
   ref_log_prob_use_dynamic_bsz: false
   ref_log_prob_max_token_len_per_gpu: 16384
   ref_param_offload: true
@@ -93,7 +93,7 @@ training:
   kl_loss_coef: 0.05
   kl_loss_type: low_var_kl
   use_kl_in_reward: false
-  entropy_coeff: 0.01
+  entropy_coeff: 0.005
 
   # FSDP memory controls.
   fsdp_param_offload: true

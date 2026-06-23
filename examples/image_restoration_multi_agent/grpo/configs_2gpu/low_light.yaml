@@ -93,7 +93,7 @@ training:
   kl_loss_coef: 0.05
   kl_loss_type: low_var_kl
   use_kl_in_reward: false
-  entropy_coeff: 0.01
+  entropy_coeff: 0.005
 
   # FSDP memory controls.
   fsdp_param_offload: true

@@ -30,6 +30,7 @@ __all__ = [
     "AgentModeDaemon",
     "get_left_padded_ids_and_attention_mask",
     "get_right_padded_ids_and_attention_mask",
+    "get_trajectory_prompt_delta_ids",
     "strip_vision_token_spans",
 ]
 
@@ -111,6 +112,57 @@ def log_mismatch_detail(
             )
             print(full_ids, file=f)
             print(prefix_ids, file=f)
+
+
+def _longest_common_prefix_len(left: List[int], right: List[int]) -> int:
+    length = 0
+    for left_id, right_id in zip(left, right):
+        if left_id != right_id:
+            break
+        length += 1
+    return length
+
+
+def _longest_suffix_prefix_len(suffix_source: List[int], prefix_source: List[int]) -> int:
+    max_length = min(len(suffix_source), len(prefix_source))
+    for length in range(max_length, 0, -1):
+        if suffix_source[-length:] == prefix_source[:length]:
+            return length
+    return 0
+
+
+def get_trajectory_prompt_delta_ids(
+    trace_prompt_ids: List[int],
+    current_context: List[int],
+    base_prompt_ids: List[int],
+    *,
+    max_unmatched_prompt_delta_length: int,
+    min_overlap_tokens: int = 8,
+) -> Tuple[List[int], bool, bool]:
+    """Return only the prompt tokens newly needed before the next trajectory response.
+
+    Well-formed multi-turn traces have ``trace_prompt_ids`` starting with the
+    already-packed ``current_context``. Restoration traces can be retokenized or
+    rebuilt as standalone prompts, so exact prefix matching often fails. In that
+    case, avoid appending the full prompt again: first try suffix-prefix overlap,
+    then remove the shared base prompt prefix, and finally keep only a bounded
+    tail of the unmatched prompt.
+    """
+
+    if len(trace_prompt_ids) >= len(current_context) and trace_prompt_ids[: len(current_context)] == current_context:
+        return trace_prompt_ids[len(current_context) :], True, False
+
+    overlap_len = _longest_suffix_prefix_len(current_context, trace_prompt_ids)
+    if overlap_len >= min_overlap_tokens:
+        return trace_prompt_ids[overlap_len:], True, False
+
+    base_prefix_len = _longest_common_prefix_len(base_prompt_ids, trace_prompt_ids)
+    prompt_delta = trace_prompt_ids[base_prefix_len:]
+    truncated = False
+    if max_unmatched_prompt_delta_length > 0 and len(prompt_delta) > max_unmatched_prompt_delta_length:
+        prompt_delta = prompt_delta[-max_unmatched_prompt_delta_length:]
+        truncated = True
+    return prompt_delta, False, truncated
 
 
 def _convert_token_to_id(tokenizer: Any, token: str) -> Optional[int]:
@@ -1059,6 +1111,11 @@ class AgentModeDaemon:
             template_mismatch_count, retoken_mismatch_count, others_mismatch_count = 0, 0, 0
             response_per_turn_list: List[int] = []
             stripped_vision_token_count: int = 0
+            unmatched_prompt_delta_count: int = 0
+            truncated_unmatched_prompt_delta_count: int = 0
+            max_unmatched_prompt_delta_length = int(
+                self.trace_aggregator.get("trajectory_max_unmatched_prompt_delta_length", 512)
+            )
 
             for rollout_id, sample_info in finished_id_to_sample_info.items():
                 merged_trace_idx: List[List[int]] = []
@@ -1109,6 +1166,7 @@ class AgentModeDaemon:
                 # Merge all trace segments in merged_trace_idx into training samples
                 for current_merged_trace_idx in merged_trace_idx:
                     prompt_ids = sample_info["trace_list"][current_merged_trace_idx[0]]["prompt_ids"]
+                    base_prompt_ids = list(prompt_ids)
 
                     # if the merged_trace_idx doesn't start with the beginning of the prompt_ids, we need to adjust it
                     if current_merged_trace_idx[0] > 0 and len(prompt_ids) > max_prompt_length:
@@ -1126,13 +1184,14 @@ class AgentModeDaemon:
                         trace = sample_info["trace_list"][turn_index]
                         current_context = prompt_ids + response_ids
                         trace_prompt_ids = trace["prompt_ids"]
-                        if (
-                            len(trace_prompt_ids) >= len(current_context)
-                            and trace_prompt_ids[: len(current_context)] == current_context
-                        ):
-                            prompt_delta = trace_prompt_ids[len(current_context) :]
-                        else:
-                            prompt_delta = trace_prompt_ids
+                        prompt_delta, matched_context, truncated_delta = get_trajectory_prompt_delta_ids(
+                            trace_prompt_ids,
+                            current_context,
+                            base_prompt_ids,
+                            max_unmatched_prompt_delta_length=max_unmatched_prompt_delta_length,
+                        )
+                        unmatched_prompt_delta_count += int(not matched_context)
+                        truncated_unmatched_prompt_delta_count += int(truncated_delta)
                         prompt_delta, removed_vision_tokens = strip_vision_token_spans(prompt_delta, self.tokenizer)
                         stripped_vision_token_count += removed_vision_tokens
                         response_ids += prompt_delta
@@ -1281,6 +1340,8 @@ class AgentModeDaemon:
                     "training/max_response_length_by_turn": np.max(response_per_turn_list),  # type: ignore
                     "training/min_response_length_by_turn": np.min(response_per_turn_list),  # type: ignore
                     "training/n_stripped_vision_tokens": stripped_vision_token_count,  # type: ignore
+                    "training/n_unmatched_prompt_deltas": unmatched_prompt_delta_count,  # type: ignore
+                    "training/n_truncated_unmatched_prompt_deltas": truncated_unmatched_prompt_delta_count,  # type: ignore
                     "training/avg_images_per_trajectory": np.mean(image_count_list) if image_count_list else 0.0,
                     "training/max_images_per_trajectory": max(image_count_list, default=0),
                     "training/avg_image_placeholders_per_trajectory": (

@@ -483,19 +483,23 @@ class AgentLightningTrainer(RayPPOTrainer):
         test_data = next(iter(self.val_dataloader))
         test_batch = DataProto.from_single_dict(test_data)
 
-        self._set_rollout_resources_awake(True)
-        self._call_rollout_manager_lifecycle("wake_up")
-        self.agent_mode_daemon.set_up_data_and_server(
-            test_batch.non_tensor_batch,
-            self._get_rollout_server_addresses(),
-            is_train=False,
-        )
-        self.agent_mode_daemon.run_until_all_finished()
-        self._set_rollout_resources_awake(False)
-        test_metrics = self.agent_mode_daemon.get_test_metrics()
-        self.agent_mode_daemon.clear_data_and_server()
-        self._call_rollout_manager_lifecycle("sleep")
-        return test_metrics
+        try:
+            self._set_rollout_replicas_awake(True)
+            self._set_rollout_resources_awake(True)
+            self.agent_mode_daemon.set_up_data_and_server(
+                test_batch.non_tensor_batch,
+                self._get_rollout_server_addresses(),
+                is_train=False,
+            )
+            self.agent_mode_daemon.run_until_all_finished()
+        finally:
+            self._set_rollout_resources_awake(False)
+            self._set_rollout_replicas_awake(False)
+
+        try:
+            return self.agent_mode_daemon.get_test_metrics()
+        finally:
+            self.agent_mode_daemon.clear_data_and_server()
 
     def _set_rollout_resources_awake(self, awake: bool) -> None:
         """Wake external rollout resources or release them before policy updates."""
@@ -523,6 +527,20 @@ class AgentLightningTrainer(RayPPOTrainer):
         method = getattr(self.async_rollout_manager, method_name, None)
         if callable(method):
             method()
+
+    def _set_rollout_replicas_awake(self, awake: bool) -> None:
+        """Wake or sleep vLLM rollout replicas when VERL exposes a checkpoint manager."""
+        rollout_config = self.config.actor_rollout_ref.rollout
+        method_name = "wake_up_replicas" if awake else "sleep_replicas"
+        checkpoint_manager = getattr(self, "checkpoint_manager", None)
+        method = getattr(checkpoint_manager, method_name, None)
+
+        if bool(_get_config_value(rollout_config, "free_cache_engine", False)) and callable(method):
+            print(f"{'Waking' if awake else 'Sleeping'} vLLM rollout replicas.", flush=True)
+            method()
+            return
+
+        self._call_rollout_manager_lifecycle("wake_up" if awake else "sleep")
 
     def _get_rollout_server_addresses(self) -> list[str]:
         """Return rollout server addresses across VERL rollout manager layouts."""
@@ -645,36 +663,45 @@ class AgentLightningTrainer(RayPPOTrainer):
 
             # generate a batch
             with _timer("gen", timing_raw):
-                self._set_rollout_resources_awake(True)
-                self._call_rollout_manager_lifecycle("wake_up")
-                self.agent_mode_daemon.set_up_data_and_server(
-                    gen_batch.non_tensor_batch, self._get_rollout_server_addresses()
-                )
-                self.agent_mode_daemon.run_until_all_finished()
-                self._set_rollout_resources_awake(False)
-                batch, agent_metrics = self.agent_mode_daemon.get_train_data_batch(
-                    max_prompt_length=(
-                        self.config.agentlightning.trace_aggregator.trajectory_max_prompt_length
-                        if self.config.agentlightning.trace_aggregator.level == "trajectory"
-                        else self.config.data.max_prompt_length
-                    ),
-                    max_response_length=(
-                        self.config.agentlightning.trace_aggregator.trajectory_max_response_length
-                        if self.config.agentlightning.trace_aggregator.level == "trajectory"
-                        else self.config.data.max_response_length
-                    ),
-                    device=gen_batch.batch["fake_ids"].device,
-                    global_steps=self.global_steps,
-                )
+                try:
+                    self._set_rollout_replicas_awake(True)
+                    self._set_rollout_resources_awake(True)
+                    self.agent_mode_daemon.set_up_data_and_server(
+                        gen_batch.non_tensor_batch, self._get_rollout_server_addresses()
+                    )
+                    self.agent_mode_daemon.run_until_all_finished()
+                finally:
+                    self._set_rollout_resources_awake(False)
+                    self._set_rollout_replicas_awake(False)
+
+                try:
+                    batch, agent_metrics = self.agent_mode_daemon.get_train_data_batch(
+                        max_prompt_length=(
+                            self.config.agentlightning.trace_aggregator.trajectory_max_prompt_length
+                            if self.config.agentlightning.trace_aggregator.level == "trajectory"
+                            else self.config.data.max_prompt_length
+                        ),
+                        max_response_length=(
+                            self.config.agentlightning.trace_aggregator.trajectory_max_response_length
+                            if self.config.agentlightning.trace_aggregator.level == "trajectory"
+                            else self.config.data.max_response_length
+                        ),
+                        device=gen_batch.batch["fake_ids"].device,
+                        global_steps=self.global_steps,
+                    )
+                finally:
+                    self.agent_mode_daemon.clear_data_and_server()
                 metrics.update(agent_metrics)
-                self.agent_mode_daemon.clear_data_and_server()
-                self._call_rollout_manager_lifecycle("sleep")
 
             if self.config.algorithm.adv_estimator == AdvantageEstimator.REMAX:
                 with _timer("gen_max", timing_raw):
                     gen_baseline_batch = deepcopy(gen_batch)
                     gen_baseline_batch.meta_info["do_sample"] = False
-                    gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
+                    try:
+                        self._set_rollout_replicas_awake(True)
+                        gen_baseline_output = self.async_rollout_manager.generate_sequences(gen_baseline_batch)
+                    finally:
+                        self._set_rollout_replicas_awake(False)
 
                     batch = batch.union(gen_baseline_output)
                     reward_baseline_tensor = self.reward_fn(batch)
