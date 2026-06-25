@@ -19,6 +19,43 @@ def _unwrap_ray_remote(cls):
     return cls
 
 
+def _mapping_get(value, key):
+    if isinstance(value, dict):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _chat_completion_supports_chat_template_kwargs():
+    fields = getattr(ChatCompletionRequest, "model_fields", None)
+    if isinstance(fields, dict):
+        return "chat_template_kwargs" in fields
+    fields = getattr(ChatCompletionRequest, "__fields__", None)
+    return isinstance(fields, dict) and "chat_template_kwargs" in fields
+
+
+def _configured_chat_template_kwargs(config):
+    agentlightning_config = _mapping_get(config, "agentlightning")
+    value = _mapping_get(agentlightning_config, "chat_template_kwargs")
+    if hasattr(value, "items"):
+        return dict(value.items())
+    return {}
+
+
+def _apply_configured_chat_template_kwargs(request_json, config):
+    if not _chat_completion_supports_chat_template_kwargs():
+        request_json.pop("chat_template_kwargs", None)
+        return
+
+    configured_kwargs = _configured_chat_template_kwargs(config)
+    if not configured_kwargs:
+        return
+
+    request_kwargs = request_json.get("chat_template_kwargs")
+    merged_kwargs = dict(request_kwargs.items()) if hasattr(request_kwargs, "items") else {}
+    merged_kwargs.update(configured_kwargs)
+    request_json["chat_template_kwargs"] = merged_kwargs
+
+
 @ray.remote(num_cpus=1)
 class PatchedvLLMServer(_unwrap_ray_remote(AsyncvLLMServer)):
 
@@ -35,6 +72,7 @@ class PatchedvLLMServer(_unwrap_ray_remote(AsyncvLLMServer)):
         API reference: [OpenAI-compatible server documentation](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html)
         """
         request_json = await raw_request.json()
+        _apply_configured_chat_template_kwargs(request_json, self.config)
         request = ChatCompletionRequest(**request_json)
         generator = await self.openai_serving_chat.create_chat_completion(request, raw_request)
 

@@ -141,6 +141,28 @@ if [[ "$SMOKE" == false ]]; then
     TOOL_WAITED=$((TOOL_WAITED + 2))
   done
   echo "Persistent restoration/IQA service is ready at $TOOL_URL."
+  # Release tool model GPU memory before FSDP actor/ref initialization.
+  TOOL_SLEEP_TIMEOUT=600
+  TOOL_SLEEP_WAITED=0
+  echo "Sleeping persistent tool models to free GPU memory for FSDP initialization..."
+  until "$TOOL_PYTHON" -c "
+import json, sys, urllib.request
+req=urllib.request.Request(sys.argv[1], data=b'{}', headers={'Content-Type':'application/json'}, method='POST')
+resp=json.load(urllib.request.urlopen(req, timeout=10))
+assert resp.get('status')=='sleeping', f'unexpected sleep status: {resp}'
+" "$TOOL_URL/sleep" >/dev/null 2>&1; do
+    if ! kill -0 "$TOOL_SERVER_PID" 2>/dev/null; then
+      echo "Persistent tool service exited during sleep. See $TOOL_LOG_FILE" >&2
+      exit 1
+    fi
+    if (( TOOL_SLEEP_WAITED >= TOOL_SLEEP_TIMEOUT )); then
+      echo "Persistent tool sleep did not succeed within ${TOOL_SLEEP_TIMEOUT}s." >&2
+      exit 1
+    fi
+    sleep 2
+    TOOL_SLEEP_WAITED=$((TOOL_SLEEP_WAITED + 2))
+  done
+  echo "Persistent tool models unloaded; GPU memory freed for training."
 fi
 
 conda run --no-capture-output -n "$GRPO_CONDA_ENV" \

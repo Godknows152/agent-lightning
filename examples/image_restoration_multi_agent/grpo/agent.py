@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import shutil
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +28,17 @@ import agentlightning as agl
 from agentlightning.semconv import LightningSpanAttributes
 
 _AGENT_LIGHTNING_TASK_FIELDS = {"index", "data_id"}
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ArtifactRetentionConfig:
+    """Retention policy for GRPO rollout artifacts."""
+
+    enabled: bool = True
+    keep_sample_dirs: int = 256
+    min_age_seconds: float = 7200.0
+    cleanup_interval_rollouts: int = 48
 
 
 class PromptImageTracingExpert:
@@ -47,6 +62,75 @@ def parse_grpo_task(task: dict[str, Any]) -> GRPORestorationTask:
     return GRPORestorationTask.model_validate({key: task[key] for key in model_fields if key in task})
 
 
+def cleanup_rollout_artifacts(
+    output_root: Path,
+    *,
+    current_sample_dir: Path | None,
+    retention: ArtifactRetentionConfig,
+) -> int:
+    """Remove old rollout sample directories under one expert artifact root."""
+
+    if not retention.enabled or retention.keep_sample_dirs < 0:
+        return 0
+    root = output_root.expanduser().resolve()
+    if not root.is_dir():
+        return 0
+
+    lock_file = root / ".artifact_cleanup.lock"
+    try:
+        import fcntl
+
+        with lock_file.open("w", encoding="utf-8") as lock:
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return 0
+            return _cleanup_rollout_artifacts_unlocked(root, current_sample_dir, retention)
+    except OSError as exc:
+        logger.warning("Failed to acquire rollout artifact cleanup lock at %s: %s", lock_file, exc)
+        return 0
+
+
+def _cleanup_rollout_artifacts_unlocked(
+    output_root: Path,
+    current_sample_dir: Path | None,
+    retention: ArtifactRetentionConfig,
+) -> int:
+    now = time.time()
+    current = current_sample_dir.expanduser().resolve() if current_sample_dir is not None else None
+    sample_dirs: list[tuple[float, Path]] = []
+    for child in output_root.iterdir():
+        if not child.is_dir():
+            continue
+        if child.name.startswith("."):
+            continue
+        resolved = child.resolve()
+        if current is not None and resolved == current:
+            continue
+        try:
+            mtime = child.stat().st_mtime
+        except OSError:
+            continue
+        sample_dirs.append((mtime, resolved))
+
+    sample_dirs.sort(key=lambda item: item[0], reverse=True)
+    delete_candidates = sample_dirs[retention.keep_sample_dirs :]
+    removed = 0
+    for mtime, sample_dir in delete_candidates:
+        if now - mtime < retention.min_age_seconds:
+            continue
+        try:
+            shutil.rmtree(sample_dir)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Failed to remove old rollout artifact directory %s: %s", sample_dir, exc)
+    if removed:
+        logger.info("Removed %s old rollout artifact sample directories from %s", removed, output_root)
+    return removed
+
+
 class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
     """Run one oracle-routed expert trajectory and return one scalar reward."""
 
@@ -58,6 +142,7 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         expert_name: ExpertName,
         tokenizer: object,
         smoke_override_actions: list[str] | None = None,
+        artifact_retention: ArtifactRetentionConfig | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -65,6 +150,8 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         self.expert_name = expert_name
         self.tokenizer = tokenizer
         self.smoke_override_actions = smoke_override_actions
+        self.artifact_retention = artifact_retention or ArtifactRetentionConfig()
+        self._rollouts_since_cleanup = 0
         self.results: dict[str, WorkflowResult] = {}
 
     def rollout(
@@ -84,7 +171,6 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
             )
         attempted_rollout = cast(agl.AttemptedRollout, rollout)
         llm = cast(agl.LLM, resources["main_llm"])
-        sampling = llm.sampling_parameters
         settings = self.config.expert_vlm.model_copy(
             update={
                 "base_url": llm.get_base_url(
@@ -93,9 +179,6 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
                 ),
                 "api_key": llm.api_key or "EMPTY",
                 "model": llm.model,
-                "temperature": float(sampling.get("temperature", self.config.expert_vlm.temperature)),
-                "top_p": float(sampling.get("top_p", self.config.expert_vlm.top_p)),
-                "max_tokens": int(sampling.get("max_tokens", self.config.expert_vlm.max_tokens)),
                 "seed": int.from_bytes(
                     hashlib.sha256(attempted_rollout.rollout_id.encode("utf-8")).digest()[:4],
                     byteorder="big",
@@ -135,6 +218,7 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
             / attempted_rollout.rollout_id
             / attempted_rollout.attempt.attempt_id
         )
+        self._maybe_cleanup_artifacts(Path(parsed_task.output_root), output_dir.parents[1])
         controller_task = StageFRestorationTask(
             image_path=parsed_task.image_path,
             degradation_type=parsed_task.degradation_type,
@@ -161,4 +245,25 @@ class GRPOImageRestorationAgent(agl.LitAgent[dict[str, Any]]):
         self.results[attempted_rollout.rollout_id] = result
         if result.state.final_reward is None:
             raise RuntimeError("GRPO controller completed without a trajectory reward")
+        agl.emit_annotation(
+            {
+                "image_restoration.termination_reason": result.state.termination_reason or "unknown",
+                "image_restoration.turn_count": len(result.state.steps),
+                "image_restoration.final_reward": float(result.state.final_reward),
+            }
+        )
         return result.state.final_reward
+
+    def _maybe_cleanup_artifacts(self, output_root: Path, current_sample_dir: Path) -> None:
+        retention = self.artifact_retention
+        if not retention.enabled:
+            return
+        self._rollouts_since_cleanup += 1
+        if self._rollouts_since_cleanup < retention.cleanup_interval_rollouts:
+            return
+        self._rollouts_since_cleanup = 0
+        cleanup_rollout_artifacts(
+            output_root,
+            current_sample_dir=current_sample_dir,
+            retention=retention,
+        )

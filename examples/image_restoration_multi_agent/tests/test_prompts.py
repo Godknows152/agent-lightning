@@ -58,7 +58,10 @@ def test_all_expert_prompts_embed_the_same_complete_tool_schema() -> None:
     assert isinstance(action_value, dict)
     action = cast(dict[str, object], action_value)
     assert action["enum"] == list(registry.actions)
-    assert all(expert.value in prompts[expert] for expert in ExpertName)
+    assert all(expert.value not in prompts[expert] for expert in ExpertName)
+    assert all("primary degradation is" not in prompt for prompt in prompts.values())
+    assert all("specialized through training data" not in prompt for prompt in prompts.values())
+    assert all("You are an image restoration expert." in prompt for prompt in prompts.values())
 
 
 def test_expert_prompt_embeds_tool_descriptions_from_registry() -> None:
@@ -102,7 +105,8 @@ def test_expert_prompt_locks_the_vllm_hermes_wire_format() -> None:
     prompt = build_expert_system_prompt(ExpertName.FOG, _registry())
 
     assert EXPERT_PROMPT_VERSION in prompt
-    assert '<tool_call>\n{"name":"restore_image","arguments":{"action":"focalnet_dehaze"}}\n</tool_call>' in prompt
+    assert '<tool_call>\n{"name":"restore_image","arguments":{"action":"<action_enum_value>"}}\n</tool_call>' in prompt
+    assert "replace\n<action_enum_value> with one action enum value from the supplied schema" in prompt
     assert '<tool_call>\n{"name":"restore_image","arguments":{"action":"stop"}}\n</tool_call>' in prompt
     assert "must be exactly restore_image" in prompt
     assert "arguments object must contain exactly one field named action" in prompt

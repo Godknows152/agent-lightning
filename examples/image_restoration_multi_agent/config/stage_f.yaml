@@ -75,4 +75,5 @@ expert_vlm:
   top_p: 1.0
   seed: 0
   return_token_ids: true
+  enable_thinking: false
   decision_mode: replay

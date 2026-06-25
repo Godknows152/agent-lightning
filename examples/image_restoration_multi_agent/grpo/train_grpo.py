@@ -24,9 +24,9 @@ DEFAULT_CHAT_TEMPLATE = EXAMPLE_DIR / "grpo/templates/qwen35_hermes_nothink.jinj
 if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
 
-from config import load_stage_g_example_config  # noqa: E402
+from config import StageGExampleConfig, load_stage_g_example_config  # noqa: E402
 from factory import RealControllerFactory  # noqa: E402
-from grpo.agent import GRPOImageRestorationAgent  # noqa: E402
+from grpo.agent import ArtifactRetentionConfig, GRPOImageRestorationAgent  # noqa: E402
 from grpo.smoke_runtime import SmokeControllerFactory  # noqa: E402
 from schemas import ExpertName, GRPORestorationTask  # noqa: E402
 from tool_registry import ToolRegistry  # noqa: E402
@@ -74,6 +74,24 @@ def _load_run_config(path: Path) -> dict[str, Any]:
     training = payload.get("training")
     if not isinstance(training, dict):
         raise ValueError(f"GRPO run config must contain a training mapping: {path}")
+    expert_vlm = payload.get("expert_vlm", {})
+    if expert_vlm is None:
+        expert_vlm = {}
+    if not isinstance(expert_vlm, dict):
+        raise ValueError(f"GRPO run config expert_vlm must be a mapping: {path}")
+    enable_thinking = training.get("enable_thinking", False)
+    if not isinstance(enable_thinking, bool):
+        raise ValueError(f"training.enable_thinking must be a boolean, got {enable_thinking!r}")
+    training["enable_thinking"] = enable_thinking
+    expert_vlm = dict(expert_vlm)
+    expert_vlm.setdefault("temperature", training["temperature"])
+    expert_vlm.setdefault("top_p", training["top_p"])
+    expert_vlm.setdefault("max_tokens", training["max_response_length"])
+    payload["expert_vlm"] = {
+        "max_tokens": int(expert_vlm["max_tokens"]),
+        "temperature": float(expert_vlm["temperature"]),
+        "top_p": float(expert_vlm["top_p"]),
+    }
     trace_aggregator_level = str(training.get("trace_aggregator_level", "trajectory"))
     valid_trace_aggregator_levels = {"trajectory", "trajectory_transition", "transition"}
     if trace_aggregator_level not in valid_trace_aggregator_levels:
@@ -95,7 +113,40 @@ def _load_run_config(path: Path) -> dict[str, Any]:
             f"to keep the complete GRPO rollout batch in flight; expected {rollout_concurrency}, "
             f"got {training['n_runners']}"
         )
+    artifact_cleanup_enabled = training.get("artifact_cleanup_enabled", True)
+    if not isinstance(artifact_cleanup_enabled, bool):
+        raise ValueError(f"training.artifact_cleanup_enabled must be a boolean, got {artifact_cleanup_enabled!r}")
+    training["artifact_cleanup_enabled"] = artifact_cleanup_enabled
+    training["artifact_keep_sample_dirs"] = int(training.get("artifact_keep_sample_dirs", 256))
+    training["artifact_min_age_seconds"] = float(training.get("artifact_min_age_seconds", 7200.0))
+    training["artifact_cleanup_interval_rollouts"] = int(training.get("artifact_cleanup_interval_rollouts", 48))
+    if training["artifact_keep_sample_dirs"] < 0:
+        raise ValueError("training.artifact_keep_sample_dirs must be >= 0")
+    if training["artifact_min_age_seconds"] < 0:
+        raise ValueError("training.artifact_min_age_seconds must be >= 0")
+    if training["artifact_cleanup_interval_rollouts"] <= 0:
+        raise ValueError("training.artifact_cleanup_interval_rollouts must be > 0")
     return cast(dict[str, Any], payload)
+
+
+def _artifact_retention_config(run: dict[str, Any], *, smoke: bool) -> ArtifactRetentionConfig:
+    training = cast(dict[str, Any], run["training"])
+    return ArtifactRetentionConfig(
+        enabled=bool(training["artifact_cleanup_enabled"]) and not smoke,
+        keep_sample_dirs=int(training["artifact_keep_sample_dirs"]),
+        min_age_seconds=float(training["artifact_min_age_seconds"]),
+        cleanup_interval_rollouts=int(training["artifact_cleanup_interval_rollouts"]),
+    )
+
+
+def _apply_expert_vlm_overrides(config: StageGExampleConfig, run: dict[str, Any]) -> StageGExampleConfig:
+    """Apply visible GRPO run sampling overrides to the expert VLM endpoint settings."""
+
+    expert_vlm = cast(dict[str, Any], run["expert_vlm"])
+    config.expert_vlm.max_tokens = int(expert_vlm["max_tokens"])
+    config.expert_vlm.temperature = float(expert_vlm["temperature"])
+    config.expert_vlm.top_p = float(expert_vlm["top_p"])
+    return config
 
 
 def _load_dataset(path: str, expert_name: ExpertName, *, limit: int | None = None) -> list[dict[str, Any]]:
@@ -132,12 +183,17 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
     if not chat_template_path.is_absolute():
         chat_template_path = (EXAMPLE_DIR / chat_template_path).resolve()
     chat_template = chat_template_path.read_text(encoding="utf-8")
+    chat_template_kwargs = {"enable_thinking": bool(training["enable_thinking"])}
     conf = {
         "algorithm": {
             "adv_estimator": "grpo",
             "use_kl_in_reward": bool(training["use_kl_in_reward"]),
         },
         "agentlightning": {
+            # VERL does not expose vLLM's default-chat-template-kwargs in this
+            # path. PatchedvLLMServer consumes this and injects request-level
+            # chat_template_kwargs only when the installed vLLM supports them.
+            "chat_template_kwargs": chat_template_kwargs,
             "rollout_resource_control": {
                 "enabled": bool(training["tool_runtime_lifecycle_enabled"]) and not smoke,
                 "base_url": os.getenv(
@@ -341,7 +397,7 @@ def main() -> int:
     config_path = args.config.expanduser().resolve()
     run = _load_run_config(config_path)
     expert_name = ExpertName(run["expert_name"])
-    stage_config = load_stage_g_example_config(run["stage_config"])
+    stage_config = _apply_expert_vlm_overrides(load_stage_g_example_config(run["stage_config"]), run)
     if args.smoke:
         stage_config.workflow.max_steps = 2
         stage_config.workflow.no_improvement_limit = 2
@@ -356,6 +412,7 @@ def main() -> int:
         expert_name=expert_name,
         tokenizer=tokenizer,
         smoke_override_actions=["scunet", "stop"] if args.smoke else None,
+        artifact_retention=_artifact_retention_config(run, smoke=args.smoke),
     )
     train_dataset = _load_dataset(run["train_data"], expert_name, limit=1 if args.smoke else None)
     val_dataset = _load_dataset(run["val_data"], expert_name, limit=1 if args.smoke else None)

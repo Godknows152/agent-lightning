@@ -5,14 +5,17 @@ adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_expe
 chat_template: ../templates/qwen35_hermes_nothink.jinja
 train_data: ../data/rain_train.jsonl
 val_data: ../data/rain_val.jsonl
-output_dir: ../outputs/qwen3_5/rain_2gpu
+output_dir: ../outputs/qwen3_5_fresh/rain_2gpu
+expert_vlm:
+  # temperature/top_p inherit from training.temperature/top_p below.
+  max_tokens: 128
 swanlab:
   enabled: true
   project_name: image-restoration-multi-agent
   experiment_name: qwen3.5-rain-expert-grpo-2gpu
   mode: online
   smoke_mode: offline
-  log_dir: ../outputs/qwen3_5/rain_2gpu/swanlab
+  log_dir: ../outputs/qwen3_5_fresh/rain_2gpu/swanlab
 training:
   # Dataset batch and GRPO candidate generation.
   train_batch_size: 8
@@ -20,6 +23,11 @@ training:
   # Keep every GRPO candidate trajectory in flight so vLLM can continuously
   # batch requests from the same dialogue turn and pipeline later turns.
   n_runners: 24
+  # Periodically delete old rollout artifact sample directories under grpo/artifacts.
+  artifact_cleanup_enabled: true
+  artifact_keep_sample_dirs: 256
+  artifact_min_age_seconds: 7200
+  artifact_cleanup_interval_rollouts: 48
   n_gpus_per_node: 2
 
   # Model and LoRA.
@@ -30,6 +38,7 @@ training:
   use_remove_padding: false
   enable_gradient_checkpointing: true
   enable_activation_offload: false
+  enable_thinking: false
 
   # Release restoration/IQA GPU memory after rollout and reload it before the
   # next rollout phase. The HTTP service process itself remains alive.
@@ -56,7 +65,7 @@ training:
   trajectory_max_prompt_length: 4096
   trajectory_max_response_length: 4096
   max_model_len: 16384
-  temperature: 1.0
+  temperature: 0.5
   top_k: -1
   top_p: 0.9
   do_sample: true

@@ -34,6 +34,33 @@ __all__ = [
     "strip_vision_token_spans",
 ]
 
+_IMAGE_RESTORATION_TERMINATION_REASON_KEY = "image_restoration.termination_reason"
+_IMAGE_RESTORATION_TURN_COUNT_KEY = "image_restoration.turn_count"
+_IMAGE_RESTORATION_FINAL_REWARD_KEY = "image_restoration.final_reward"
+
+
+def _extract_image_restoration_metadata(spans: List[Any]) -> Dict[str, Any]:
+    """Extract optional image-restoration rollout metadata emitted as trace annotations."""
+
+    metadata: Dict[str, Any] = {}
+    for span in spans:
+        attributes = getattr(span, "attributes", None)
+        if not isinstance(attributes, Mapping):
+            continue
+
+        termination_reason = attributes.get(_IMAGE_RESTORATION_TERMINATION_REASON_KEY)
+        if isinstance(termination_reason, str):
+            metadata[_IMAGE_RESTORATION_TERMINATION_REASON_KEY] = termination_reason
+
+        turn_count = attributes.get(_IMAGE_RESTORATION_TURN_COUNT_KEY)
+        if isinstance(turn_count, (int, float)) and not isinstance(turn_count, bool):
+            metadata[_IMAGE_RESTORATION_TURN_COUNT_KEY] = int(turn_count)
+
+        final_reward = attributes.get(_IMAGE_RESTORATION_FINAL_REWARD_KEY)
+        if isinstance(final_reward, (int, float)) and not isinstance(final_reward, bool):
+            metadata[_IMAGE_RESTORATION_FINAL_REWARD_KEY] = float(final_reward)
+    return metadata
+
 
 def ids_startswith(
     full_ids: List[int], prefix_ids: List[int], tokenizer: Any, debug: bool = False
@@ -806,13 +833,16 @@ class AgentModeDaemon:
                         final_reward = triplet.reward
                         break
 
+        rollout_metadata = dict(rollout.metadata or {})
+        rollout_metadata.update(_extract_image_restoration_metadata(spans))
+
         # Construct the Task object from Rollout
         task = Task(
             rollout_id=rollout.rollout_id,
             input=rollout.input,
             mode=rollout.mode,
             resources_id=rollout.resources_id,
-            metadata=rollout.metadata or {},
+            metadata=rollout_metadata,
         )
 
         # Create the Rollout object (without trace and logs as per user's note)
@@ -821,7 +851,7 @@ class AgentModeDaemon:
             task=task,
             final_reward=final_reward,
             triplets=triplets,
-            metadata=rollout.metadata or {},
+            metadata=rollout_metadata,
         )
 
         # Run the same validation as v0
@@ -984,11 +1014,23 @@ class AgentModeDaemon:
         # 1. Reconstruct the `finished_id_to_sample_info` structure from completed rollouts
         finished_id_to_sample_info: Dict[str, Dict[str, Any]] = {}
         finished_id_to_final_reward: Dict[str, float] = {}
+        non_invalid_tool_call_rewards: List[float] = []
+        turn_count_list: List[int] = []
         sample_with_reward_count = 0
         for rollout_id, rollout in self._completed_rollouts_v0.items():
             original_sample = self._task_id_to_original_sample[rollout_id]
             sample_with_reward_count += int(rollout.final_reward is not None)
             final_reward = self._fillna_reward(rollout)
+            rollout_metadata = rollout.metadata or {}
+            turn_count = len(rollout.triplets or [])
+            metadata_turn_count = rollout_metadata.get(_IMAGE_RESTORATION_TURN_COUNT_KEY)
+            if isinstance(metadata_turn_count, (int, float)) and not isinstance(metadata_turn_count, bool):
+                turn_count = int(metadata_turn_count)
+            turn_count_list.append(turn_count)
+
+            termination_reason = rollout_metadata.get(_IMAGE_RESTORATION_TERMINATION_REASON_KEY)
+            if termination_reason != "invalid_tool_call":
+                non_invalid_tool_call_rewards.append(final_reward)
 
             if not rollout.triplets:
                 finished_id_to_final_reward[rollout_id] = final_reward
@@ -1326,6 +1368,11 @@ class AgentModeDaemon:
 
         data_metrics = {
             "training/reward": np.mean(list(finished_id_to_final_reward.values())),
+            "training/reward_non_invalid_tool_call": (
+                np.mean(non_invalid_tool_call_rewards) if non_invalid_tool_call_rewards else float("nan")
+            ),
+            "training/n_rollouts_non_invalid_tool_call": len(non_invalid_tool_call_rewards),
+            "training/avg_turns_per_trajectory": np.mean(turn_count_list) if turn_count_list else 0.0,
             "training/n_rollouts": len(finished_id_to_final_reward),
             "training/n_rollouts_w_trace": len(finished_id_to_sample_info),
             "training/n_rollouts_w_reward": sample_with_reward_count,

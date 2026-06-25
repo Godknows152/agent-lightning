@@ -13,7 +13,7 @@ workflow:
   # missing fields, multiple calls, and unregistered actions.
   invalid_action_penalty: 10.0
   failure_penalty: 0.50
-  stop_min_tool_calls: 5
+  stop_min_tool_calls: 3
   stop_min_best_gain: 0.05
   valid_stop_reward: 0.25
   premature_stop_penalty: 5.0
@@ -92,4 +92,5 @@ expert_vlm:
   top_p: 0.95
   seed: 0
   return_token_ids: true
+  enable_thinking: false
   decision_mode: vlm_strict

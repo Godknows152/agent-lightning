@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 from config import load_stage_g_example_config
-from grpo.agent import parse_grpo_task
+from grpo.agent import ArtifactRetentionConfig, cleanup_rollout_artifacts, parse_grpo_task
 from grpo.smoke_runtime import override_smoke_decision
-from grpo.train_grpo import _configure_swanlab_environment, _load_run_config, _verl_config
+from grpo.train_grpo import _apply_expert_vlm_overrides, _configure_swanlab_environment, _load_run_config, _verl_config
 from schemas import (
     DegradationType,
     ExpertDecisionRecord,
@@ -21,6 +22,7 @@ from schemas import (
     ValidationStatus,
 )
 
+from agentlightning.verl.daemon import _extract_image_restoration_metadata
 from agentlightning.verl.trainer import (
     compute_effective_ppo_update_batch_size,
     compute_pre_advantage_padding_divisor,
@@ -42,11 +44,27 @@ def test_trajectory_fallback_keeps_single_visual_slot() -> None:
     assert (
         'trajectory_image_source = str(self.trace_aggregator.get("trajectory_image_source", "first"))' in daemon_source
     )
-    assert 'current_merged_trace_idx[-1] if trajectory_image_source == "latest"' in daemon_source
+    assert "current_merged_trace_idx[-1]" in daemon_source
+    assert 'if trajectory_image_source == "latest"' in daemon_source
     assert (
         "image_placeholder_count = count_vision_placeholders(prompt_ids + response_ids, self.tokenizer)"
         in daemon_source
     )
+
+
+def test_image_restoration_trace_metadata_extraction() -> None:
+    class SpanWithAttributes:
+        attributes = {
+            "image_restoration.termination_reason": "expert_stop",
+            "image_restoration.turn_count": 4,
+            "image_restoration.final_reward": 1.25,
+        }
+
+    metadata = _extract_image_restoration_metadata([SpanWithAttributes()])
+
+    assert metadata["image_restoration.termination_reason"] == "expert_stop"
+    assert metadata["image_restoration.turn_count"] == 4
+    assert metadata["image_restoration.final_reward"] == pytest.approx(1.25)
 
 
 def test_parse_grpo_task_accepts_agent_lightning_metadata() -> None:
@@ -91,16 +109,24 @@ def test_grpo_config_uses_verl_style_trajectory_swanlab_and_stochastic_smoke() -
     assert smoke["actor_rollout_ref"]["rollout"]["temperature"] > 0
     assert smoke["actor_rollout_ref"]["rollout"]["n"] == 2
     assert smoke["actor_rollout_ref"]["actor"]["ppo_mini_batch_size"] == 1
-    assert formal["actor_rollout_ref"]["rollout"]["n"] == 3
+    assert formal["actor_rollout_ref"]["rollout"]["n"] == 4
     assert formal["actor_rollout_ref"]["rollout"]["tensor_model_parallel_size"] == 4
     assert formal["trainer"]["n_gpus_per_node"] == 4
-    assert run["training"]["train_batch_size"] == 16
-    assert run["training"]["n_runners"] == 48
+    assert run["training"]["train_batch_size"] == 32
+    assert run["training"]["n_runners"] == 128
     assert run["training"]["n_runners"] == run["training"]["train_batch_size"] * run["training"]["rollout_n"]
+    assert run["training"]["temperature"] == pytest.approx(1.0)
+    assert run["expert_vlm"] == {"max_tokens": 128, "temperature": 1.0, "top_p": 0.9}
+    assert run["training"]["artifact_cleanup_enabled"] is True
+    assert run["training"]["artifact_keep_sample_dirs"] == 256
+    assert run["training"]["artifact_min_age_seconds"] == pytest.approx(7200.0)
+    assert run["training"]["artifact_cleanup_interval_rollouts"] == 48
     assert formal["data"]["max_response_length"] == 640
+    assert formal["actor_rollout_ref"]["rollout"]["temperature"] == pytest.approx(1.0)
     assert formal["agentlightning"]["trace_aggregator"]["trajectory_max_prompt_length"] == 4096
-    assert formal["agentlightning"]["trace_aggregator"]["trajectory_max_response_length"] == 4096
+    assert formal["agentlightning"]["trace_aggregator"]["trajectory_max_response_length"] == 6144
     assert formal["agentlightning"]["trace_aggregator"]["trajectory_image_source"] == "latest"
+    assert formal["agentlightning"]["chat_template_kwargs"] == {"enable_thinking": False}
     assert formal["actor_rollout_ref"]["model"]["enable_gradient_checkpointing"] is True
     assert formal["actor_rollout_ref"]["model"]["enable_activation_offload"] is False
     assert formal["agentlightning"]["rollout_resource_control"] == {
@@ -116,13 +142,48 @@ def test_grpo_config_uses_verl_style_trajectory_swanlab_and_stochastic_smoke() -
     assert formal["actor_rollout_ref"]["actor"]["grad_clip"] == pytest.approx(1.0)
     assert formal["actor_rollout_ref"]["actor"]["use_kl_loss"] is True
     assert formal["algorithm"]["use_kl_in_reward"] is False
-    assert formal["actor_rollout_ref"]["rollout"]["log_prob_micro_batch_size_per_gpu"] == 2
-    assert formal["actor_rollout_ref"]["ref"]["log_prob_micro_batch_size_per_gpu"] == 2
+    assert formal["actor_rollout_ref"]["rollout"]["log_prob_micro_batch_size_per_gpu"] == 1
+    assert formal["actor_rollout_ref"]["ref"]["log_prob_micro_batch_size_per_gpu"] == 1
     assert "swanlab" in formal["trainer"]["logger"]
     assert formal["trainer"]["project_name"] == "image-restoration-multi-agent"
     assert formal["trainer"]["experiment_name"] == "qwen3.5-fog-expert-grpo"
     assert smoke["trainer"]["experiment_name"] == "qwen3.5-fog-expert-grpo-smoke"
     assert formal["trainer"]["max_actor_ckpt_to_keep"] == 2
+
+
+def test_rollout_artifact_cleanup_keeps_recent_and_current_sample_dirs(tmp_path: Path) -> None:
+    root = tmp_path / "rollouts" / "fog"
+    root.mkdir(parents=True)
+    now = time.time()
+    old_dirs = [root / f"fog-{index:06d}" for index in range(4)]
+    recent_dir = root / "fog-999998"
+    current_dir = root / "fog-999999"
+    for index, sample_dir in enumerate([*old_dirs, recent_dir, current_dir]):
+        (sample_dir / "rollout" / "attempt").mkdir(parents=True)
+        (sample_dir / "rollout" / "attempt" / "trajectory.json").write_text("{}", encoding="utf-8")
+        mtime = now - 1000 + index
+        os.utime(sample_dir, (mtime, mtime))
+    os.utime(recent_dir, (now, now))
+    os.utime(current_dir, (now - 1000, now - 1000))
+
+    removed = cleanup_rollout_artifacts(
+        root,
+        current_sample_dir=current_dir,
+        retention=ArtifactRetentionConfig(
+            enabled=True,
+            keep_sample_dirs=2,
+            min_age_seconds=10,
+            cleanup_interval_rollouts=1,
+        ),
+    )
+
+    assert removed == 3
+    assert old_dirs[0].exists() is False
+    assert old_dirs[1].exists() is False
+    assert old_dirs[2].exists() is False
+    assert old_dirs[3].exists()
+    assert recent_dir.exists()
+    assert current_dir.exists()
 
 
 def test_grpo_chat_template_uses_qwen35_hermes_nothink() -> None:
@@ -132,11 +193,13 @@ def test_grpo_chat_template_uses_qwen35_hermes_nothink() -> None:
 
     expected_generation_prompt = "add_generation_prompt"
     assert expected_generation_prompt in template
-    assert "<think>" not in template
+    assert "<think>\\n\\n</think>\\n\\n" in template
+    assert "enable_thinking is not defined or enable_thinking is false" in template
     assert "<|vision_start|><|image_pad|><|vision_end|>" in template
     assert formal["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"]["chat_template"] == str(
         EXAMPLE_DIR / "grpo/templates/qwen35_hermes_nothink.jinja"
     )
+    assert "chat_template_kwargs" not in formal["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"]
 
 
 def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
@@ -144,6 +207,8 @@ def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
 
     assert config.workflow.max_steps == 6
     assert config.workflow.invalid_action_penalty == 10.0
+    assert config.expert_vlm.max_tokens == 512
+    assert config.expert_vlm.temperature == pytest.approx(1.0)
     assert config.runtime.evaluator.device == "cuda:0"
     assert config.runtime.restoration.device == "cuda:1"
     assert config.runtime.evaluator.service_url == "http://127.0.0.1:8767"
@@ -170,6 +235,15 @@ def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
     assert "remaining experts will not be started" in two_gpu_script
 
 
+def test_grpo_run_config_overrides_expert_vlm_sampling() -> None:
+    run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
+    config = _apply_expert_vlm_overrides(load_stage_g_example_config(run["stage_config"]), run)
+
+    assert config.expert_vlm.max_tokens == 128
+    assert config.expert_vlm.temperature == pytest.approx(1.0)
+    assert config.expert_vlm.top_p == pytest.approx(0.9)
+
+
 def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
     config_paths = sorted((EXAMPLE_DIR / "grpo/configs").glob("*.yaml"))
     runs = [_load_run_config(path) for path in config_paths]
@@ -194,13 +268,26 @@ def test_all_expert_grpo_configs_expose_the_same_training_parameters() -> None:
         "trace_aggregator_level",
         "force_one_sample_per_rollout",
         "trajectory_image_source",
+        "artifact_cleanup_enabled",
+        "artifact_keep_sample_dirs",
+        "artifact_min_age_seconds",
+        "artifact_cleanup_interval_rollouts",
     } <= expected_keys
     assert all(set(run["training"]) == expected_keys for run in runs)
     assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
     assert all(run["training"]["enable_activation_offload"] is False for run in runs)
-    assert all(run["training"]["train_batch_size"] == 16 for run in runs)
-    assert all(run["training"]["rollout_n"] == 3 for run in runs)
-    assert all(run["training"]["n_runners"] == 48 for run in runs)
+    assert all(run["training"]["enable_thinking"] is False for run in runs)
+    assert all(run["training"]["temperature"] == pytest.approx(1.0) for run in runs)
+    assert all(run["training"]["artifact_cleanup_enabled"] is True for run in runs)
+    assert all(run["training"]["artifact_keep_sample_dirs"] == 256 for run in runs)
+    assert all(run["training"]["artifact_min_age_seconds"] == pytest.approx(7200.0) for run in runs)
+    assert all(run["training"]["artifact_cleanup_interval_rollouts"] == 48 for run in runs)
+    assert all(run["expert_vlm"]["max_tokens"] == 128 for run in runs)
+    assert all(run["expert_vlm"]["temperature"] == pytest.approx(run["training"]["temperature"]) for run in runs)
+    assert all(run["expert_vlm"]["top_p"] == pytest.approx(run["training"]["top_p"]) for run in runs)
+    assert all(run["training"]["train_batch_size"] == 32 for run in runs)
+    assert all(run["training"]["rollout_n"] == 4 for run in runs)
+    assert all(run["training"]["n_runners"] == 128 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 4 for run in runs)
     assert all(run["training"]["tensor_model_parallel_size"] == 4 for run in runs)
     assert all(run["training"]["trace_aggregator_level"] == "trajectory" for run in runs)
@@ -236,6 +323,15 @@ def test_all_two_gpu_expert_configs_use_two_gpu_topology() -> None:
     assert len(config_paths) == 4
     assert all(run["training"]["train_batch_size"] == 8 for run in runs)
     assert all(run["training"]["enable_gradient_checkpointing"] is True for run in runs)
+    assert all(run["training"]["enable_thinking"] is False for run in runs)
+    assert all(run["training"]["temperature"] == pytest.approx(0.5) for run in runs)
+    assert all(run["training"]["artifact_cleanup_enabled"] is True for run in runs)
+    assert all(run["training"]["artifact_keep_sample_dirs"] == 256 for run in runs)
+    assert all(run["training"]["artifact_min_age_seconds"] == pytest.approx(7200.0) for run in runs)
+    assert all(run["training"]["artifact_cleanup_interval_rollouts"] == 48 for run in runs)
+    assert all(run["expert_vlm"]["max_tokens"] == 128 for run in runs)
+    assert all(run["expert_vlm"]["temperature"] == pytest.approx(run["training"]["temperature"]) for run in runs)
+    assert all(run["expert_vlm"]["top_p"] == pytest.approx(run["training"]["top_p"]) for run in runs)
     assert all(run["training"]["rollout_n"] == 3 for run in runs)
     assert all(run["training"]["n_runners"] == 24 for run in runs)
     assert all(run["training"]["n_gpus_per_node"] == 2 for run in runs)

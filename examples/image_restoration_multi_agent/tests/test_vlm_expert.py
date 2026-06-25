@@ -244,6 +244,10 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
     assert request is not None
     assert request["tool_choice"] == "auto"
     assert request["tools"] == [_registry().build_tool_schema()]
+    assert request["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False},
+        "return_token_ids": True,
+    }
     messages = request["messages"]
     image_parts = [
         part

@@ -5,21 +5,29 @@ adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_expe
 chat_template: ../templates/qwen35_hermes_nothink.jinja
 train_data: ../data/rain_train.jsonl
 val_data: ../data/rain_val.jsonl
-output_dir: ../outputs/qwen3_5/rain
+output_dir: ../outputs/qwen3_5_20260625_fresh/rain
+expert_vlm:
+  # temperature/top_p inherit from training.temperature/top_p below.
+  max_tokens: 128
 swanlab:
   enabled: true
   project_name: image-restoration-multi-agent
   experiment_name: qwen3.5-rain-expert-grpo
   mode: online
   smoke_mode: offline
-  log_dir: ../outputs/qwen3_5/rain/swanlab
+  log_dir: ../outputs/qwen3_5_20260625_fresh/rain/swanlab
 training:
   # Dataset batch and GRPO candidate generation.
-  train_batch_size: 16
-  rollout_n: 3
+  train_batch_size: 32
+  rollout_n: 4
   # Keep every GRPO candidate trajectory in flight so vLLM can continuously
   # batch requests from the same dialogue turn and pipeline later turns.
-  n_runners: 48
+  n_runners: 128
+  # Periodically delete old rollout artifact sample directories under grpo/artifacts.
+  artifact_cleanup_enabled: true
+  artifact_keep_sample_dirs: 256
+  artifact_min_age_seconds: 7200
+  artifact_cleanup_interval_rollouts: 48
   n_gpus_per_node: 4
 
   # Model and LoRA.
@@ -30,6 +38,7 @@ training:
   use_remove_padding: false
   enable_gradient_checkpointing: true
   enable_activation_offload: false
+  enable_thinking: false
 
   # Release restoration/IQA GPU memory after rollout and reload it before the
   # next rollout phase. The HTTP service process itself remains alive.
@@ -85,7 +94,7 @@ training:
   ref_param_offload: true
 
   # Optimizer and regularization.
-  learning_rate: 0.00001
+  learning_rate: 0.00003
   weight_decay: 0.01
   lr_scheduler_type: constant
   lr_warmup_steps_ratio: 0.0
@@ -93,7 +102,7 @@ training:
   kl_loss_coef: 0.05
   kl_loss_type: low_var_kl
   use_kl_in_reward: false
-  entropy_coeff: 0.005
+  entropy_coeff: 0.05
 
   # FSDP memory controls.
   fsdp_param_offload: true
@@ -104,7 +113,7 @@ training:
   # Trainer lifecycle.
   total_epochs: 3
   save_freq: 10
-  test_freq: 20
-  resume_mode: auto
+  test_freq: 10
+  resume_mode: disable
   max_actor_ckpt_to_keep: 2
   val_before_train: false

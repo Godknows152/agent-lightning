@@ -272,8 +272,10 @@ class VLMRestorationExpertAgent:
                 "top_p": self.settings.top_p,
                 "seed": self.settings.seed,
             }
+            extra_body: dict[str, Any] = {"chat_template_kwargs": {"enable_thinking": self.settings.enable_thinking}}
             if self.settings.return_token_ids:
-                request["extra_body"] = {"return_token_ids": True}
+                extra_body["return_token_ids"] = True
+            request["extra_body"] = extra_body
             response: _DumpableResponse = self.client.chat.completions.create(**request)
         except APITimeoutError as error:
             return self._failed_decision(

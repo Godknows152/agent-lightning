@@ -142,6 +142,7 @@ class ExpertVLMSettings(VLMEndpointSettings):
     """Stage F expert VLM endpoint and default decision path."""
 
     decision_mode: ExpertDecisionMode = ExpertDecisionMode.REPLAY
+    enable_thinking: bool = False
 
 
 class ExpertResourceConfig(StrictModel):
