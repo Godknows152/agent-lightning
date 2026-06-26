@@ -67,9 +67,9 @@ class Qwen2_5VLSelfAttention(SelfAttention):
         inference_context = deprecate_inference_params(inference_context, inference_params)
 
         if inference_context and inference_context.is_dynamic_batching():
-            assert flash_decode_and_prefill_kernel is not None, (
-                "Internal use only: install package `nvidia_chunked_flash_attn`."
-            )
+            assert (
+                flash_decode_and_prefill_kernel is not None
+            ), "Internal use only: install package `nvidia_chunked_flash_attn`."
 
         # hidden_states: [sq, b, h]
         if self.config.flash_decode and not self.training and inference_context is not None:

@@ -30,13 +30,13 @@ from PIL import Image
 # 注意顺序：fog/snow/rain 子类必须在 'rain' 兜底之前检查，
 # 否则路径中的 /train/ 目录名会被 'rain' 误匹配。
 _DEGRADATION_KEYWORDS = {
-    'night':       ['night', 'dark', 'low_light', 'lowlight', 'lol'],
-    'rain_drop':   ['rain_drop', 'raindrop'],
-    'rain_streak': ['rain_streak', 'rainstreak', 'streak'],
-    'rain_drive':  ['rain_drive', 'driving', 'drive'],
-    'snow':        ['snow'],
-    'fog':         ['fog', 'haze', 'hazy'],
-    'rain':        ['rain_series', '/rain/'],  # 兜底：仅匹配实际 rain 目录，避免误匹配 /train/
+    "night": ["night", "dark", "low_light", "lowlight", "lol"],
+    "rain_drop": ["rain_drop", "raindrop"],
+    "rain_streak": ["rain_streak", "rainstreak", "streak"],
+    "rain_drive": ["rain_drive", "driving", "drive"],
+    "snow": ["snow"],
+    "fog": ["fog", "haze", "hazy"],
+    "rain": ["rain_series", "/rain/"],  # 兜底：仅匹配实际 rain 目录，避免误匹配 /train/
 }
 
 
@@ -52,7 +52,7 @@ def detect_degradation_type(image_path: str) -> str:
     for deg_type, keywords in _DEGRADATION_KEYWORDS.items():
         if any(kw in path_lower for kw in keywords):
             # 'rain' 兜底映射到 rain_streak
-            return 'rain_streak' if deg_type == 'rain' else deg_type
+            return "rain_streak" if deg_type == "rain" else deg_type
     return "unknown"
 
 
@@ -95,8 +95,8 @@ def make_map_fn(data_source: str, system_prompt: str):
 
     def process_fn(example, idx):
         # Normalise images field — may be ndarray, list, or string
-        raw_image = example['images']
-        if hasattr(raw_image, '__getitem__') and not isinstance(raw_image, str):
+        raw_image = example["images"]
+        if hasattr(raw_image, "__getitem__") and not isinstance(raw_image, str):
             image_path = str(raw_image[0]) if len(raw_image) > 0 else ""
             image_paths = [str(raw_image[i]) for i in range(len(raw_image))]
         else:
@@ -106,7 +106,7 @@ def make_map_fn(data_source: str, system_prompt: str):
         # Load images as bytes (verl dataset format)
         images_list = [load_image_as_bytes(p) for p in image_paths]
 
-        user_prompt = example['problem']
+        user_prompt = example["problem"]
         degradation_type = detect_degradation_type(image_path)
 
         # Ensure each image has an <image> placeholder in the user message.
@@ -124,7 +124,7 @@ def make_map_fn(data_source: str, system_prompt: str):
             "agent_name": "tool_agent",
             "prompt": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_content},
+                {"role": "user", "content": user_content},
             ],
             "images": images_list,
             "reward_model": {
@@ -176,7 +176,7 @@ def convert_dataset(
     df = pd.read_parquet(input_parquet)
     print(f"Read {len(df)} rows from {input_parquet}")
 
-    for col in ('images', 'problem'):
+    for col in ("images", "problem"):
         if col not in df.columns:
             raise ValueError(f"Input parquet is missing required column: '{col}'")
 
@@ -198,10 +198,10 @@ def convert_dataset(
     else:
         split = int(len(dataset) * train_ratio)
         train_ds = dataset.select(range(split))
-        test_ds  = dataset.select(range(split, len(dataset)))
+        test_ds = dataset.select(range(split, len(dataset)))
 
         train_path = os.path.join(output_dir, f"{input_basename}_train.parquet")
-        test_path  = os.path.join(output_dir, f"{input_basename}_test.parquet")
+        test_path = os.path.join(output_dir, f"{input_basename}_test.parquet")
 
         train_ds.to_parquet(train_path)
         test_ds.to_parquet(test_path)
@@ -212,7 +212,7 @@ def convert_dataset(
     print("\nDegradation type breakdown:")
     counts: dict = {}
     for item in dataset:
-        dtype = item['extra_info']['degradation_type']
+        dtype = item["extra_info"]["degradation_type"]
         counts[dtype] = counts.get(dtype, 0) + 1
     for dtype, count in sorted(counts.items()):
         print(f"  {dtype}: {count}")
@@ -297,9 +297,7 @@ def migrate_existing_dataset(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Convert an image restoration dataset to verl multi-turn RL format"
-    )
+    parser = argparse.ArgumentParser(description="Convert an image restoration dataset to verl multi-turn RL format")
     subparsers = parser.add_subparsers(dest="mode", help="Operation mode")
 
     # ---- migrate mode: patch already-converted parquets in data/train & data/test ----
@@ -311,37 +309,35 @@ def main():
         ),
     )
     migrate_parser.add_argument(
-        "--data_dir", type=str, default="data",
-        help="Root directory containing train/ and test/ sub-folders (default: data)"
+        "--data_dir",
+        type=str,
+        default="data",
+        help="Root directory containing train/ and test/ sub-folders (default: data)",
     )
     migrate_parser.add_argument(
-        "--output_dir", type=str, default="data/restoration",
-        help="Output directory (default: data/restoration)"
+        "--output_dir", type=str, default="data/restoration", help="Output directory (default: data/restoration)"
     )
 
     # ---- convert mode: convert raw parquet (has 'images' path + 'problem' columns) ----
     convert_parser = subparsers.add_parser(
-        "convert",
-        help="Convert a raw restoration parquet (with 'images' path and 'problem' columns)"
+        "convert", help="Convert a raw restoration parquet (with 'images' path and 'problem' columns)"
     )
-    convert_parser.add_argument("--input_parquet", type=str, required=True,
-                                help="Input raw parquet file path")
-    convert_parser.add_argument("--output_dir", type=str, default="data/restoration",
-                                help="Output directory (default: data/restoration)")
-    convert_parser.add_argument("--train_ratio", type=float, default=0.9,
-                                help="Training split ratio (default: 0.9; 1.0 = no split)")
-    convert_parser.add_argument("--data_source", type=str, default="restoration",
-                                help="data_source label (default: restoration)")
+    convert_parser.add_argument("--input_parquet", type=str, required=True, help="Input raw parquet file path")
+    convert_parser.add_argument(
+        "--output_dir", type=str, default="data/restoration", help="Output directory (default: data/restoration)"
+    )
+    convert_parser.add_argument(
+        "--train_ratio", type=float, default=0.9, help="Training split ratio (default: 0.9; 1.0 = no split)"
+    )
+    convert_parser.add_argument(
+        "--data_source", type=str, default="restoration", help="data_source label (default: restoration)"
+    )
 
     # ---- backward-compat: if called without sub-command, fall back to convert mode ----
-    parser.add_argument("--input_parquet", type=str, default=None,
-                        help="[legacy] Input raw parquet file path")
-    parser.add_argument("--output_dir", type=str, default="data/restoration",
-                        help="[legacy] Output directory")
-    parser.add_argument("--train_ratio", type=float, default=0.9,
-                        help="[legacy] Training split ratio")
-    parser.add_argument("--data_source", type=str, default="restoration",
-                        help="[legacy] data_source label")
+    parser.add_argument("--input_parquet", type=str, default=None, help="[legacy] Input raw parquet file path")
+    parser.add_argument("--output_dir", type=str, default="data/restoration", help="[legacy] Output directory")
+    parser.add_argument("--train_ratio", type=float, default=0.9, help="[legacy] Training split ratio")
+    parser.add_argument("--data_source", type=str, default="restoration", help="[legacy] data_source label")
 
     args = parser.parse_args()
 

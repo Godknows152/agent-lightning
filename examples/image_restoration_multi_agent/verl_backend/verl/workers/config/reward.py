@@ -53,14 +53,14 @@ class RewardManagerConfig(BaseConfig):
         if self.source == "register":
             from verl.experimental.reward_loop.reward_manager.registry import REWARD_MANAGER
 
-            assert self.name in REWARD_MANAGER, (
-                f"Reward manager is not registered: {self.name=} ,{REWARD_MANAGER.keys()=}"
-            )
+            assert (
+                self.name in REWARD_MANAGER
+            ), f"Reward manager is not registered: {self.name=} ,{REWARD_MANAGER.keys()=}"
         elif self.source == "importlib":
             # NOTE: The existence is not checked since it depends on which machine the config is initialized on.
-            assert self.module is not None and self.module.path is not None, (
-                "When source is importlib, module.path should be set."
-            )
+            assert (
+                self.module is not None and self.module.path is not None
+            ), "When source is importlib, module.path should be set."
 
 
 @dataclass

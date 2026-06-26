@@ -314,9 +314,9 @@ class EngineRegistry:
         assert model_type in cls._engines, f"Unknown model_type: {model_type}"
         assert backend in cls._engines[model_type], f"Unknown backend: {backend}"
         device = get_device_name()
-        assert device in cls._engines[model_type][backend], (
-            f"Unknown device: {device} for model_type: {model_type} and backend: {backend}"
-        )
+        assert (
+            device in cls._engines[model_type][backend]
+        ), f"Unknown device: {device} for model_type: {model_type} and backend: {backend}"
         return cls._engines[model_type][backend][device]
 
     @classmethod

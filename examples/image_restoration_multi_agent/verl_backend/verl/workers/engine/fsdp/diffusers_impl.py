@@ -762,9 +762,11 @@ class DiffusersFSDPEngine(BaseEngine):
             per_tensor_param = (
                 (
                     name,
-                    param.to(device, non_blocking=True).full_tensor().to(torch.bfloat16, non_blocking=True)
-                    if isinstance(param, DTensor)
-                    else param,
+                    (
+                        param.to(device, non_blocking=True).full_tensor().to(torch.bfloat16, non_blocking=True)
+                        if isinstance(param, DTensor)
+                        else param
+                    ),
                 )
                 for name, param in params.items()
             )

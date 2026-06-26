@@ -197,9 +197,9 @@ class vLLMHttpServer:
 
     async def launch_server(self, master_address: str = None, master_port: int = None, dp_rpc_port: int = None):
         if self.node_rank != 0:
-            assert master_address and master_port and dp_rpc_port, (
-                "non-master node should provide master_address, master_port and dp_rpc_port"
-            )
+            assert (
+                master_address and master_port and dp_rpc_port
+            ), "non-master node should provide master_address, master_port and dp_rpc_port"
             self._master_address = master_address
             self._master_port = master_port
             self._dp_rpc_port = dp_rpc_port
@@ -296,9 +296,9 @@ class vLLMHttpServer:
             args["speculative_config"] = speculative_config
 
         if self.config.data_parallel_size > 1:
-            assert self.gpus_per_node % self.config.tensor_model_parallel_size == 0, (
-                "gpus_per_node should be divisible by tensor_model_parallel_size"
-            )
+            assert (
+                self.gpus_per_node % self.config.tensor_model_parallel_size == 0
+            ), "gpus_per_node should be divisible by tensor_model_parallel_size"
             data_parallel_size_local = self.gpus_per_node // self.config.tensor_model_parallel_size
             assert len(self.workers) == data_parallel_size_local * self.config.tensor_model_parallel_size, (
                 f"num workers ({len(self.workers)}) should be equal to "
@@ -479,9 +479,9 @@ class vLLMHttpServer:
         # Clamp max_tokens to the valid range [0, max_possible_tokens]
         max_tokens = max(0, min(max_tokens, max_possible_tokens))
 
-        assert max_tokens <= max_possible_tokens, (
-            f"max_tokens {max_tokens} exceeds available context space {max_possible_tokens}"
-        )
+        assert (
+            max_tokens <= max_possible_tokens
+        ), f"max_tokens {max_tokens} exceeds available context space {max_possible_tokens}"
         sampling_params = apply_multimodal_generation_token_bias(
             sampling_params=sampling_params,
             processor=self.model_config.processor,
@@ -892,9 +892,9 @@ class vLLMReplica(RolloutReplica):
 
     async def launch_servers(self):
         """Launch http server in each node."""
-        assert len(self.workers) == self.world_size, (
-            f"worker number {len(self.workers)} not equal to world size {self.world_size}"
-        )
+        assert (
+            len(self.workers) == self.world_size
+        ), f"worker number {len(self.workers)} not equal to world size {self.world_size}"
 
         self._validate_launch_requirements()
 
@@ -1035,9 +1035,9 @@ class vLLMReplica(RolloutReplica):
         # NOTE: We always use MP Executor backend whether it's single-node or multi-node.
         # For multi-node without DP (e.g TP=16), need vllm>=0.11.1, https://github.com/vllm-project/vllm/pull/23691
         if self.config.data_parallel_size == 1 and self.nnodes > 1:
-            assert _VLLM_VERSION >= version.parse("0.11.1"), (
-                "For multi-node MP Executor, either (1) set data_parallel_size > 1 or (2) upgrade vLLM to >= 0.11.1"
-            )
+            assert _VLLM_VERSION >= version.parse(
+                "0.11.1"
+            ), "For multi-node MP Executor, either (1) set data_parallel_size > 1 or (2) upgrade vLLM to >= 0.11.1"
 
     def _get_server_name_prefix(self) -> str:
         """Return the Ray actor name prefix (e.g. 'vllm_' or 'vllm_omni_')."""

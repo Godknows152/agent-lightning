@@ -82,9 +82,9 @@ def _verify_group_integrity(batch_idx_list: list[list[int]], force_group_size: i
             sample_to_mb[idx] = mb_id
 
     # Every sample must be assigned.
-    assert set(sample_to_mb.keys()) == set(range(batch_size)), (
-        f"Not all samples covered. Missing: {set(range(batch_size)) - set(sample_to_mb.keys())}"
-    )
+    assert set(sample_to_mb.keys()) == set(
+        range(batch_size)
+    ), f"Not all samples covered. Missing: {set(range(batch_size)) - set(sample_to_mb.keys())}"
 
     # Samples within the same group must share the same micro-batch.
     num_groups = batch_size // force_group_size

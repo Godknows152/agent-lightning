@@ -314,9 +314,9 @@ class RolloutConfig(BaseConfig):
             )
 
         if self.name != "trtllm" and self.expert_parallel_size > 1:
-            assert self.expert_parallel_size == (self.tensor_model_parallel_size * self.data_parallel_size), (
-                "expert_parallel_size must be equal to tensor_model_parallel_size * data_parallel_size"
-            )
+            assert self.expert_parallel_size == (
+                self.tensor_model_parallel_size * self.data_parallel_size
+            ), "expert_parallel_size must be equal to tensor_model_parallel_size * data_parallel_size"
 
         if self.moe_tensor_parallel_size is not None and self.moe_tensor_parallel_size > 1:
             assert self.name == "trtllm", "moe_tensor_parallel_size is only supported for trtllm"

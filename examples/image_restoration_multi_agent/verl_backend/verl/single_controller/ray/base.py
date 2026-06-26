@@ -251,9 +251,9 @@ def extract_pg_from_exist(
     searching_idx = 0
     for request_process, original_idx in sorted_process_on_nodes:
         assert searching_idx < len(sorted_src_pgs), f"no enough nodes for request: searching {searching_idx} th node"
-        assert request_process <= sorted_src_pgs[searching_idx].bundle_count, (
-            f"requesting {request_process} processes, bundle count cannot satisfy"
-        )
+        assert (
+            request_process <= sorted_src_pgs[searching_idx].bundle_count
+        ), f"requesting {request_process} processes, bundle count cannot satisfy"
         unsorted_pgs.append((original_idx, sorted_src_pgs[searching_idx]))
         searching_idx += 1
 
@@ -946,9 +946,9 @@ def _bind_workers_method_to_parent(cls, key, user_defined_cls):
             try:
                 # bind direct rollout method to class without prefix
                 if attrs["dispatch_mode"] == Dispatch.DIRECT_ROLLOUT_METHOD and "rollout" in key:
-                    assert not hasattr(cls, method_name), (
-                        f"conflict direct rollout method {method_name} with role {key}"
-                    )
+                    assert not hasattr(
+                        cls, method_name
+                    ), f"conflict direct rollout method {method_name} with role {key}"
                     setattr(cls, method_name, func)
                     print(f"bind role {key} method {method_name} to class {cls}")
                 else:
@@ -1084,9 +1084,9 @@ def create_colocated_worker_raw_cls(class_dict: dict[str, RayClassWithInitArgs])
             cls_name = names[0]
             method_name = names[1]
 
-            assert cls_name in self.fused_worker_dict, (
-                f"calling {cls_name}'s {method_name}, but {cls_name} not in fused_worker_dict"
-            )
+            assert (
+                cls_name in self.fused_worker_dict
+            ), f"calling {cls_name}'s {method_name}, but {cls_name} not in fused_worker_dict"
             udc_method = getattr(self.fused_worker_dict[cls_name], method_name)
             return udc_method(*args, **kwargs)
 

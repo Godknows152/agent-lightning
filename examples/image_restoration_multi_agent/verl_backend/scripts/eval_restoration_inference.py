@@ -278,7 +278,9 @@ def resolve_runtime_config(args: argparse.Namespace) -> ResolvedConfig:
     if not data_paths and input_mode == "dataset":
         raise ValueError("data path is empty; pass --data-path or set data.val_files in train config")
 
-    tool_config_path = args.tool_config or OmegaConf.select(train_cfg, "actor_rollout_ref.rollout.multi_turn.tool_config_path")
+    tool_config_path = args.tool_config or OmegaConf.select(
+        train_cfg, "actor_rollout_ref.rollout.multi_turn.tool_config_path"
+    )
     if not tool_config_path:
         raise ValueError(
             "tool config path is empty; pass --tool-config or set rollout.multi_turn.tool_config_path in train config"
@@ -286,7 +288,9 @@ def resolve_runtime_config(args: argparse.Namespace) -> ResolvedConfig:
 
     max_assistant_turns = args.max_assistant_turns
     if max_assistant_turns is None:
-        max_assistant_turns = int(OmegaConf.select(train_cfg, "actor_rollout_ref.rollout.multi_turn.max_assistant_turns") or 6)
+        max_assistant_turns = int(
+            OmegaConf.select(train_cfg, "actor_rollout_ref.rollout.multi_turn.max_assistant_turns") or 6
+        )
 
     response_length = args.response_length
     if response_length is None:
@@ -472,9 +476,7 @@ def collect_input_image_paths(config: ResolvedConfig) -> list[str]:
             raise NotADirectoryError(f"Image directory not found: {config.image_dir}")
         iterator = root.rglob("*") if config.recursive else root.glob("*")
         image_paths = sorted(
-            str(path.resolve())
-            for path in iterator
-            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+            str(path.resolve()) for path in iterator if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
         )
         if not image_paths:
             raise FileNotFoundError(f"No images found under directory: {config.image_dir}")
@@ -549,8 +551,7 @@ def named_iqa_scores(scores: list[float] | None) -> dict[str, float] | None:
     if scores is None:
         return None
     return {
-        metric_name: float(metric_value)
-        for metric_name, metric_value in zip(IQA_METRIC_NAMES, scores, strict=False)
+        metric_name: float(metric_value) for metric_name, metric_value in zip(IQA_METRIC_NAMES, scores, strict=False)
     }
 
 
@@ -828,7 +829,9 @@ async def evaluate_sample(
     tool_kwargs = copy.deepcopy(sample.get("tools_kwargs", {}))
     create_kwargs = copy.deepcopy(tool_kwargs.get(tool.name, {}).get("create_kwargs", {}))
     image_path = create_kwargs.get("image_path") or sample.get("extra_info", {}).get("image_path")
-    degradation_type = create_kwargs.get("degradation_type") or sample.get("extra_info", {}).get("degradation_type", "unknown")
+    degradation_type = create_kwargs.get("degradation_type") or sample.get("extra_info", {}).get(
+        "degradation_type", "unknown"
+    )
     instance_id, _ = await tool.create(**create_kwargs)
 
     tool_rewards: list[float] = []
@@ -1066,8 +1069,7 @@ async def async_main() -> None:
             iterator = enumerate(eval_samples, start=1)
         else:
             iterator = (
-                (offset, eval_samples[row_idx])
-                for offset, row_idx in enumerate(range(start_index, end_index), start=1)
+                (offset, eval_samples[row_idx]) for offset, row_idx in enumerate(range(start_index, end_index), start=1)
             )
 
         for sample_idx, sample in iterator:

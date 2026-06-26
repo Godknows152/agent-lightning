@@ -44,18 +44,10 @@ def parse_log(log_path):
     instances = {}
 
     # 正则模式
-    create_pattern = re.compile(
-        r"Created restoration instance ([\w-]+) for: .+ \(degradation=(\w+)"
-    )
-    apply_pattern = re.compile(
-        r"Instance ([\w-]+): applying '(\w+)'"
-    )
-    done_pattern = re.compile(
-        r"Instance ([\w-]+): '(\w+)' done, step=(\d+), reward=([-\d.]+)"
-    )
-    stop_pattern = re.compile(
-        r"Instance ([\w-]+): stop action at step (\d+)"
-    )
+    create_pattern = re.compile(r"Created restoration instance ([\w-]+) for: .+ \(degradation=(\w+)")
+    apply_pattern = re.compile(r"Instance ([\w-]+): applying '(\w+)'")
+    done_pattern = re.compile(r"Instance ([\w-]+): '(\w+)' done, step=(\d+), reward=([-\d.]+)")
+    stop_pattern = re.compile(r"Instance ([\w-]+): stop action at step (\d+)")
 
     with open(log_path, "r") as f:
         for line in f:
@@ -77,12 +69,14 @@ def parse_log(log_path):
                 instance_id = m.group(1)
                 action = m.group(2)
                 if instance_id in instances:
-                    instances[instance_id]["actions"].append({
-                        "action": action,
-                        "step": None,
-                        "reward": None,
-                        "type": "apply",
-                    })
+                    instances[instance_id]["actions"].append(
+                        {
+                            "action": action,
+                            "step": None,
+                            "reward": None,
+                            "type": "apply",
+                        }
+                    )
                 continue
 
             # 工具完成
@@ -107,12 +101,14 @@ def parse_log(log_path):
                 instance_id = m.group(1)
                 step = int(m.group(2))
                 if instance_id in instances:
-                    instances[instance_id]["actions"].append({
-                        "action": "stop",
-                        "step": step,
-                        "reward": None,
-                        "type": "stop",
-                    })
+                    instances[instance_id]["actions"].append(
+                        {
+                            "action": "stop",
+                            "step": step,
+                            "reward": None,
+                            "type": "stop",
+                        }
+                    )
                 continue
 
     return instances
@@ -200,7 +196,9 @@ def print_results(results):
     overall = results["_overall"]
     print(f"\n📊 总体统计:")
     print(f"  总实例数: {overall['total_instances']}")
-    print(f"  至少调用一次专用工具: {overall['total_with_specialized']} ({overall['overall_specialized_rate']*100:.1f}%)")
+    print(
+        f"  至少调用一次专用工具: {overall['total_with_specialized']} ({overall['overall_specialized_rate']*100:.1f}%)"
+    )
 
     print(f"\n📋 各退化类型详细统计:")
     print("-" * 80)
@@ -233,11 +231,11 @@ def print_results(results):
     print("结论:")
     print("=" * 80)
 
-    if overall['overall_specialized_rate'] >= 0.95:
+    if overall["overall_specialized_rate"] >= 0.95:
         print("✅ 几乎所有图片都至少调用了一次对应去退化工具")
-    elif overall['overall_specialized_rate'] >= 0.8:
+    elif overall["overall_specialized_rate"] >= 0.8:
         print("⚠️ 大部分图片至少调用了一次对应去退化工具，但仍有改进空间")
-    elif overall['overall_specialized_rate'] >= 0.5:
+    elif overall["overall_specialized_rate"] >= 0.5:
         print("❌ 只有约一半的图片至少调用了一次对应去退化工具，问题较严重")
     else:
         print("❌ 大部分图片没有调用对应去退化工具，策略塌缩严重")

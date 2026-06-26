@@ -245,9 +245,9 @@ class ReplayBuffer:
         Returns:
             KVBatchMeta: A batch of data.
         """
-        assert (global_steps is not None or batch_size) and (not (global_steps is not None and batch_size)), (
-            "Either global_steps or batch_size must be specified, but not both."
-        )
+        assert (global_steps is not None or batch_size) and (
+            not (global_steps is not None and batch_size)
+        ), "Either global_steps or batch_size must be specified, but not both."
 
         while True:
             time.sleep(self.poll_interval)

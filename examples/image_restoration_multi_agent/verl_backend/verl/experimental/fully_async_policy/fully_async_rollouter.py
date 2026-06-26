@@ -66,9 +66,9 @@ class FullyAsyncRollouter(SeparateRayPPOTrainer):
         assert self.config.data.train_batch_size == 0, "train_batch_size must be zero"
         assert self.config.data.gen_batch_size == 1, "gen_batch_size must be one"
         assert self.config.async_training.staleness_threshold >= 0, "staleness_threshold must larger than 0"
-        assert self.config.async_training.trigger_parameter_sync_step >= 1, (
-            "trigger_parameter_sync_step must larger or equal than 1"
-        )
+        assert (
+            self.config.async_training.trigger_parameter_sync_step >= 1
+        ), "trigger_parameter_sync_step must larger or equal than 1"
 
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
@@ -334,12 +334,12 @@ class FullyAsyncRollouter(SeparateRayPPOTrainer):
                 print("[FullyAsyncRollouter] Training from scratch (no checkpoint found)")
                 return 0
         elif self.config.trainer.resume_mode == "resume_path":
-            assert isinstance(self.config.trainer.resume_from_path, str), (
-                "[FullyAsyncRollouter] resume_from_path must be str type"
-            )
-            assert "global_step_" in self.config.trainer.resume_from_path, (
-                "[FullyAsyncRollouter] resume_from_path must specify the global_steps"
-            )
+            assert isinstance(
+                self.config.trainer.resume_from_path, str
+            ), "[FullyAsyncRollouter] resume_from_path must be str type"
+            assert (
+                "global_step_" in self.config.trainer.resume_from_path
+            ), "[FullyAsyncRollouter] resume_from_path must specify the global_steps"
             global_step_folder = self.config.trainer.resume_from_path
             if not os.path.isabs(global_step_folder):
                 working_dir = os.getcwd()

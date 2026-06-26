@@ -554,9 +554,9 @@ class RobDataParallelSACActor(BaseSACActor):
             "data/reward_mean": valid_mean(critic_batch["rewards"], critic_batch["valids"]).detach().item(),
             "data/valid_ratio": critic_batch["valids"].float().mean().item(),
             "sac/critic_replay_sampled_ratio": critic_replay_sample_info["actual_positive_sample_ratio"],
-            "sac/actor_replay_sampled_ratio": actor_replay_sample_info["actual_positive_sample_ratio"]
-            if update_actor
-            else 0.0,
+            "sac/actor_replay_sampled_ratio": (
+                actor_replay_sample_info["actual_positive_sample_ratio"] if update_actor else 0.0
+            ),
             "sac/replay_pool_positive_size": critic_replay_sample_info["positive_size"],
             "sac/replay_pool_negative_size": critic_replay_sample_info["negative_size"],
             "sac/replay_task_count": critic_replay_sample_info["task_count"],
@@ -595,15 +595,15 @@ class RobDataParallelSACActor(BaseSACActor):
                     "actor/qvalue_mean": valid_mean(torch.cat(actor_qvalues_list), actor_batch["valids"])
                     .detach()
                     .item(),
-                    "sac/alpha_lr": self.alpha_optimizer.param_groups[0]["lr"]
-                    if self.auto_entropy and actor_logprobs_list
-                    else 0.0,
-                    "sac/alpha_loss": sum(alpha_loss_list) / len(alpha_loss_list)
-                    if self.auto_entropy and alpha_loss_list
-                    else 0.0,
-                    "sac/alpha_grad_norm": alpha_grad_norm.detach().item()
-                    if self.auto_entropy and actor_logprobs_list
-                    else 0.0,
+                    "sac/alpha_lr": (
+                        self.alpha_optimizer.param_groups[0]["lr"] if self.auto_entropy and actor_logprobs_list else 0.0
+                    ),
+                    "sac/alpha_loss": (
+                        sum(alpha_loss_list) / len(alpha_loss_list) if self.auto_entropy and alpha_loss_list else 0.0
+                    ),
+                    "sac/alpha_grad_norm": (
+                        alpha_grad_norm.detach().item() if self.auto_entropy and actor_logprobs_list else 0.0
+                    ),
                 }
             )
             metrics.update({f"actor/{k}": v for k, v in actor_forward_metrics.items()})

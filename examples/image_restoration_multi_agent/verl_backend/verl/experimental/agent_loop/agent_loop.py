@@ -747,9 +747,9 @@ class AgentLoopWorker:
             name="agent_loop",
             trace=trace,
         ):
-            assert agent_name in _agent_loop_registry, (
-                f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
-            )
+            assert (
+                agent_name in _agent_loop_registry
+            ), f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
 
             agent_loop_config = _agent_loop_registry[agent_name]
             agent_loop = hydra.utils.instantiate(
@@ -1290,8 +1290,7 @@ class AgentLoopManager:
         # to a real device instead of an empty value.
         # Keep this fractional by default to allow co-location with rollout servers.
         agent_num_gpus = float(
-            OmegaConf.select(self.config, "actor_rollout_ref.rollout.agent.num_gpus_per_worker", default=0.0)
-            or 0.0
+            OmegaConf.select(self.config, "actor_rollout_ref.rollout.agent.num_gpus_per_worker", default=0.0) or 0.0
         )
         for i in range(num_workers):
             # Round-robin scheduling over the all nodes

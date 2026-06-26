@@ -479,9 +479,9 @@ class AutomodelEngineWithLMHead(AutomodelEngine):
         temperature = micro_batch["temperature"]
         temperature_item = temperature
         if use_fused_kernels:
-            assert not isinstance(temperature, torch.Tensor), (
-                "use_fused_kernels does not support per sample temperature yet"
-            )
+            assert not isinstance(
+                temperature, torch.Tensor
+            ), "use_fused_kernels does not support per sample temperature yet"
         assert pad_mode == DatasetPadMode.NO_PADDING, f"pad_mode {pad_mode} not supported"
 
         multi_modal_inputs = extract_multi_modal_inputs(micro_batch.get("multi_modal_inputs", []))

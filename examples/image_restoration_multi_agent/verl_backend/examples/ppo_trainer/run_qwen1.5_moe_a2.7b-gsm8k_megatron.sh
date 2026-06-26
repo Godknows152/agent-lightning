@@ -70,4 +70,3 @@ python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megat
     trainer.save_freq=20 \
     trainer.test_freq=5 \
     trainer.total_epochs=100 $@
-

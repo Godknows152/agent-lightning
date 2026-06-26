@@ -131,12 +131,12 @@ def _transfer_and_validate(weight_specs, bucket_size_mb, use_shm):
         expected, summaries, strict=False
     ):
         assert exp_name == recv_name, f"Name mismatch: expected {exp_name}, got {recv_name}"
-        assert tuple(exp_tensor.shape) == recv_shape, (
-            f"Shape mismatch for {exp_name}: expected {tuple(exp_tensor.shape)}, got {recv_shape}"
-        )
-        assert exp_tensor.dtype == recv_dtype, (
-            f"Dtype mismatch for {exp_name}: expected {exp_tensor.dtype}, got {recv_dtype}"
-        )
+        assert (
+            tuple(exp_tensor.shape) == recv_shape
+        ), f"Shape mismatch for {exp_name}: expected {tuple(exp_tensor.shape)}, got {recv_shape}"
+        assert (
+            exp_tensor.dtype == recv_dtype
+        ), f"Dtype mismatch for {exp_name}: expected {exp_tensor.dtype}, got {recv_dtype}"
         exp_sum = exp_tensor.float().sum().item()
         assert exp_sum == recv_cksum, f"Data mismatch for {exp_name}"
 

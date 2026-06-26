@@ -341,12 +341,12 @@ def test_mask_mode():
 
     # KEY FIX: Weights should be safety-bounded ratios (NOT zeroed)
     assert torch.all(weights[0, :] > 0), "Weights should remain as safety-bounded ratios (not zeroed)"
-    assert torch.allclose(weights[0, 0], torch.tensor(0.368, device=device), atol=0.01), (
-        "First seq ratio should be ≈0.37"
-    )
-    assert torch.allclose(weights[1, 0], torch.tensor(1.649, device=device), atol=0.01), (
-        "Second seq ratio should be ≈1.65"
-    )
+    assert torch.allclose(
+        weights[0, 0], torch.tensor(0.368, device=device), atol=0.01
+    ), "First seq ratio should be ≈0.37"
+    assert torch.allclose(
+        weights[1, 0], torch.tensor(1.649, device=device), atol=0.01
+    ), "Second seq ratio should be ≈1.65"
 
     # Rejection should be applied via response_mask
     assert torch.all(modified_response_mask[0, :] == 0), "First sequence should be rejected via mask"

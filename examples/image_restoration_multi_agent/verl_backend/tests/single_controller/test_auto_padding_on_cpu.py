@@ -51,9 +51,9 @@ def test_auto_padding():
         padding_size = (chunk_size - (test_size % chunk_size)) if (test_size % chunk_size > 0) else 0
         local_data.padding(padding_size)
         # print(f"after padding, local_data = {local_data}")
-        assert len(local_data) == len(local_data) + len(local_data) % chunk_size, (
-            f"expecting padded length to be {len(local_data) + len(local_data) % chunk_size}, but got {len(local_data)}"
-        )
+        assert (
+            len(local_data) == len(local_data) + len(local_data) % chunk_size
+        ), f"expecting padded length to be {len(local_data) + len(local_data) % chunk_size}, but got {len(local_data)}"
         chunked = local_data.chunk(chunk_size)
         assert len(chunked) == chunk_size, f"during test_size = {test_size}, expecting {chunk_size}, got {chunked}"
         for dp in chunked:

@@ -290,9 +290,9 @@ def qwen2_vl_attn_forward(
         mrope_section = self.rope_scaling.get("mrope_section", None)
     else:
         # for transformers >= 5.0.0, only rope_parameters present in the config
-        assert getattr(self, "rope_parameters", None) is not None, (
-            "Either rope_scaling or rope_parameters should be defined in the config for Qwen2 VL."
-        )
+        assert (
+            getattr(self, "rope_parameters", None) is not None
+        ), "Either rope_scaling or rope_parameters should be defined in the config for Qwen2 VL."
         mrope_section = self.rope_parameters.get("mrope_section", None)
     query_states, key_states = apply_multimodal_rotary_pos_emb(query_states, key_states, cos, sin, mrope_section)
     key_states = repeat_kv(key_states, self.num_key_value_groups)

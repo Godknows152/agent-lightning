@@ -191,9 +191,9 @@ def _convert_to_nested_tensor(v, input_ids_lengths):
         return v
 
     batch_size = v.shape[0]
-    assert len(input_ids_lengths) == batch_size, (
-        f"len(input_ids_lengths)={len(input_ids_lengths)} != batch_size={batch_size}"
-    )
+    assert (
+        len(input_ids_lengths) == batch_size
+    ), f"len(input_ids_lengths)={len(input_ids_lengths)} != batch_size={batch_size}"
 
     v_split_list = []
     for i in range(batch_size):

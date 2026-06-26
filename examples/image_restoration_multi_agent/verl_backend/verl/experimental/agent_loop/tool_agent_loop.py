@@ -472,9 +472,9 @@ class ToolAgentLoop(AgentLoopBase):
                 response_ids=response_ids[: self.response_length],
                 response_mask=agent_data.response_mask[: self.response_length],
                 multi_modal_data=multi_modal_data,
-                response_logprobs=agent_data.response_logprobs[: self.response_length]
-                if agent_data.response_logprobs
-                else None,
+                response_logprobs=(
+                    agent_data.response_logprobs[: self.response_length] if agent_data.response_logprobs else None
+                ),
                 num_turns=agent_data.user_turns + agent_data.assistant_turns + 1,
                 metrics=agent_data.metrics,
                 routed_experts=agent_data.routed_experts,
@@ -603,9 +603,7 @@ class ToolAgentLoop(AgentLoopBase):
         use_current_restoration_prompt = self._uses_current_restoration_prompt(agent_data)
 
         # Process tool responses and update multi_modal_data.
-        for tool_call_name, (tool_response, tool_reward, tool_metrics) in zip(
-            tool_call_names, responses, strict=False
-        ):
+        for tool_call_name, (tool_response, tool_reward, tool_metrics) in zip(tool_call_names, responses, strict=False):
             if not use_current_restoration_prompt:
                 # Create message from tool response
                 if tool_response.image or tool_response.video:

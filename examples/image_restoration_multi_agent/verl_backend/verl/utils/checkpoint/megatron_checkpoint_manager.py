@@ -479,9 +479,9 @@ class MegatronCheckpointManager(BaseCheckpointManager):
             log_with_rank(f"Loaded HF model checkpoint from {hf_model_path} with bridge", rank=self.rank, logger=logger)
 
         if self.should_load_optimizer:
-            assert "optimizer" in state_dict, (
-                f"Optimizer state dict not found in {state_dict.keys()}. Please check the checkpoint file {local_path}."
-            )
+            assert (
+                "optimizer" in state_dict
+            ), f"Optimizer state dict not found in {state_dict.keys()}. Please check the checkpoint file {local_path}."
             optimizer_state_dict = state_dict["optimizer"]
             self.optimizer.load_state_dict(optimizer_state_dict)
             log_with_rank(f"Loaded optimizer checkpoint from {local_path}", rank=self.rank, logger=logger)
@@ -496,9 +496,9 @@ class MegatronCheckpointManager(BaseCheckpointManager):
                     log_with_rank(f"Loaded LR scheduler checkpoint from {local_path}", rank=self.rank, logger=logger)
 
         if self.should_load_extra:
-            assert "rng_state" in state_dict, (
-                f"RNG state dict not found in {state_dict.keys()}. Please check the checkpoint file {local_path}."
-            )
+            assert (
+                "rng_state" in state_dict
+            ), f"RNG state dict not found in {state_dict.keys()}. Please check the checkpoint file {local_path}."
             rng_state = state_dict["rng_state"]
             self.load_rng_states(rng_state)
             log_with_rank(f"Loaded RNG states from {local_path}", rank=self.rank, logger=logger)

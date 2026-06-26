@@ -103,4 +103,3 @@ python3 -m verl.trainer.main_ppo --config-path=./config --config-name='ppo_megat
     critic.megatron.dist_checkpointing_path=$DIST_CKPT_PATH \
     trainer.val_before_train=False \
     trainer.total_epochs=100 $@
-

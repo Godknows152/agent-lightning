@@ -99,4 +99,3 @@ $COMMAND \
     trainer.total_epochs=1 \
     trainer.default_local_dir="${ckpts_home}" \
     trainer.resume_mode=${RESUME_MODE}
-

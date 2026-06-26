@@ -92,9 +92,10 @@ class MultiTurnSFTDataset(Dataset):
         # Set defaults and extract parameters from config if provided
         config = config or {}
         self.pad_mode = config.get("pad_mode", "right")
-        assert self.pad_mode in ["right", "no_padding"], (
-            f"Expect pad_mode to be 'right' or 'no_padding'. Got {self.pad_mode}"
-        )
+        assert self.pad_mode in [
+            "right",
+            "no_padding",
+        ], f"Expect pad_mode to be 'right' or 'no_padding'. Got {self.pad_mode}"
         self.truncation = config.get("truncation", "error")
         # for right padding
         self.max_length = config.get("max_length", 1024)
@@ -314,9 +315,9 @@ class MultiTurnSFTDataset(Dataset):
         input_ids = torch.cat(input_ids, dim=0)
         loss_mask = torch.cat(loss_mask, dim=0)
         attention_mask = torch.cat(attention_mask, dim=0)
-        assert input_ids.shape == loss_mask.shape == attention_mask.shape, (
-            f"Shape mismatch: {input_ids.shape}, {loss_mask.shape}, {attention_mask.shape}"
-        )
+        assert (
+            input_ids.shape == loss_mask.shape == attention_mask.shape
+        ), f"Shape mismatch: {input_ids.shape}, {loss_mask.shape}, {attention_mask.shape}"
 
         print_assembled_message(self.tokenizer, messages, input_ids, loss_mask, attention_mask, tools)
         self.sanity_check(input_ids, messages, tools, enable_thinking)

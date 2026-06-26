@@ -33,34 +33,34 @@ TEST_MODELS = [
 
 
 def check_config_converter_results(tf_config: TransformerConfig | MLATransformerConfig, hf_config: PretrainedConfig):
-    assert tf_config.num_layers == hf_config.num_hidden_layers, (
-        f"Number of layers mismatch: {tf_config.num_layers} != {hf_config.num_hidden_layers}"
-    )
-    assert tf_config.hidden_size == hf_config.hidden_size, (
-        f"Hidden size mismatch: {tf_config.hidden_size} != {hf_config.hidden_size}"
-    )
-    assert tf_config.num_attention_heads == hf_config.num_attention_heads, (
-        f"Number of attention heads mismatch: {tf_config.num_attention_heads} != {hf_config.num_attention_heads}"
-    )
-    assert tf_config.num_query_groups == hf_config.num_key_value_heads, (
-        f"Number of query groups mismatch: {tf_config.num_query_groups} != {hf_config.num_key_value_heads}"
-    )
-    assert tf_config.ffn_hidden_size == hf_config.intermediate_size, (
-        f"FFN hidden size mismatch: {tf_config.ffn_hidden_size} != {hf_config.intermediate_size}"
-    )
-    assert tf_config.attention_dropout == hf_config.attention_dropout, (
-        f"Attention dropout mismatch: {tf_config.attention_dropout} != {hf_config.attention_dropout}"
-    )
-    assert tf_config.hidden_dropout == getattr(hf_config, "hidden_dropout", 0.0), (
-        f"Hidden dropout mismatch: {tf_config.hidden_dropout} != {getattr(hf_config, 'hidden_dropout', 0.0)}"
-    )
+    assert (
+        tf_config.num_layers == hf_config.num_hidden_layers
+    ), f"Number of layers mismatch: {tf_config.num_layers} != {hf_config.num_hidden_layers}"
+    assert (
+        tf_config.hidden_size == hf_config.hidden_size
+    ), f"Hidden size mismatch: {tf_config.hidden_size} != {hf_config.hidden_size}"
+    assert (
+        tf_config.num_attention_heads == hf_config.num_attention_heads
+    ), f"Number of attention heads mismatch: {tf_config.num_attention_heads} != {hf_config.num_attention_heads}"
+    assert (
+        tf_config.num_query_groups == hf_config.num_key_value_heads
+    ), f"Number of query groups mismatch: {tf_config.num_query_groups} != {hf_config.num_key_value_heads}"
+    assert (
+        tf_config.ffn_hidden_size == hf_config.intermediate_size
+    ), f"FFN hidden size mismatch: {tf_config.ffn_hidden_size} != {hf_config.intermediate_size}"
+    assert (
+        tf_config.attention_dropout == hf_config.attention_dropout
+    ), f"Attention dropout mismatch: {tf_config.attention_dropout} != {hf_config.attention_dropout}"
+    assert tf_config.hidden_dropout == getattr(
+        hf_config, "hidden_dropout", 0.0
+    ), f"Hidden dropout mismatch: {tf_config.hidden_dropout} != {getattr(hf_config, 'hidden_dropout', 0.0)}"
     if getattr(hf_config, "head_dim", None) is not None:
-        assert tf_config.kv_channels == getattr(hf_config, "head_dim", None), (
-            f"Head dim mismatch: {tf_config.kv_channels} != {getattr(hf_config, 'head_dim', None)}"
-        )
-    assert tf_config.layernorm_epsilon == hf_config.rms_norm_eps, (
-        f"Layernorm epsilon mismatch: {tf_config.layernorm_epsilon} != {hf_config.rms_norm_eps}"
-    )
+        assert tf_config.kv_channels == getattr(
+            hf_config, "head_dim", None
+        ), f"Head dim mismatch: {tf_config.kv_channels} != {getattr(hf_config, 'head_dim', None)}"
+    assert (
+        tf_config.layernorm_epsilon == hf_config.rms_norm_eps
+    ), f"Layernorm epsilon mismatch: {tf_config.layernorm_epsilon} != {hf_config.rms_norm_eps}"
 
 
 def modify_hf_config(name: str, hf_config: PretrainedConfig):

@@ -135,9 +135,9 @@ class MegatronEngine(BaseEngine):
                 "dynamic_context_parallel is not supported in your megatron version, "
                 + "please update your megatron version to the latest version"
             )
-            assert self.engine_config.max_seqlen_per_dp_cp_rank is not None, (
-                "max_seqlen_per_dp_cp_rank is required when dynamic_context_parallel is enabled"
-            )
+            assert (
+                self.engine_config.max_seqlen_per_dp_cp_rank is not None
+            ), "max_seqlen_per_dp_cp_rank is required when dynamic_context_parallel is enabled"
             extra_args["dynamic_context_parallel"] = self.engine_config.dynamic_context_parallel
 
         mpu.initialize_model_parallel(

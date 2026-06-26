@@ -85,15 +85,24 @@ _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s
 logger.addHandler(_file_handler)
 
 # Add restoration_tools/agent_tools to sys.path for importing RestorationToolkit
-AGENT_TOOLS_PATH = Path(__file__).resolve().parent.parent.parent / 'restoration_tools' / 'agent_tools'
+AGENT_TOOLS_PATH = Path(__file__).resolve().parent.parent.parent / "restoration_tools" / "agent_tools"
 if AGENT_TOOLS_PATH.exists() and str(AGENT_TOOLS_PATH) not in sys.path:
     sys.path.insert(0, str(AGENT_TOOLS_PATH))
 
 # Add submodule paths (Retinexformer, SCUNet, etc.)
 _RESTORATION_TOOLS_PATH = AGENT_TOOLS_PATH.parent
 _submodules = [
-    'Retinexformer', 'HVICIDNet', 'LightenDiffusion', 'SCUNet',
-    'ESRGAN', 'IDT', 'RIDCP', 'KANet', 'S2Former', 'SnowMaster', 'img2img_turbo',
+    "Retinexformer",
+    "HVICIDNet",
+    "LightenDiffusion",
+    "SCUNet",
+    "ESRGAN",
+    "IDT",
+    "RIDCP",
+    "KANet",
+    "S2Former",
+    "SnowMaster",
+    "img2img_turbo",
 ]
 for _submod in _submodules:
     _submod_path = _RESTORATION_TOOLS_PATH / _submod
@@ -102,10 +111,23 @@ for _submod in _submodules:
 
 # Allowed restoration actions (including stop)
 ALLOWED_ACTIONS = {
-    'real_esrgan', 'scunet', 'retinexformer_fivek', 'hvicidnet', 'lightdiff',
-    'turbo_rain', 's2former', 'idt', 'ridcp', 'kanet', 'turbo_snow', 'snowmaster',
-    'nafnet_denoise', 'focalnet_dehaze', 'focalnet_desnow', 'mb_taylorformer_dehaze',
-    'stop',
+    "real_esrgan",
+    "scunet",
+    "retinexformer_fivek",
+    "hvicidnet",
+    "lightdiff",
+    "turbo_rain",
+    "s2former",
+    "idt",
+    "ridcp",
+    "kanet",
+    "turbo_snow",
+    "snowmaster",
+    "nafnet_denoise",
+    "focalnet_dehaze",
+    "focalnet_desnow",
+    "mb_taylorformer_dehaze",
+    "stop",
 }
 
 # Degradation type → recommended action affinity map.
@@ -114,27 +136,27 @@ ALLOWED_ACTIONS = {
 # on top of the IQA-based step reward, guiding the model to learn the mapping
 # between degradation types and their specialized restoration tools.
 DEGRADATION_ACTION_AFFINITY: dict[str, dict[str, float]] = {
-    'night':       {'retinexformer_fivek': 1.0, 'hvicidnet': 1.0, 'lightdiff': 0.8},
-    'low_light':   {'retinexformer_fivek': 1.0, 'hvicidnet': 1.0, 'lightdiff': 0.8},
-    'rain':        {'s2former': 1.0, 'turbo_rain': 1.0, 'idt': 0.8},
-    'rain_streak': {'s2former': 1.0, 'turbo_rain': 1.0, 'idt': 0.8},
-    'rain_drop':   {'idt': 1.0, 'turbo_rain': 0.8, 's2former': 0.6},
-    'rain_drive':  {'turbo_rain': 1.0, 'idt': 0.8, 's2former': 0.6},
-    'fog':         {'ridcp': 1.0, 'kanet': 1.0},
-    'snow':        {'turbo_snow': 1.0, 'snowmaster': 1.0},
+    "night": {"retinexformer_fivek": 1.0, "hvicidnet": 1.0, "lightdiff": 0.8},
+    "low_light": {"retinexformer_fivek": 1.0, "hvicidnet": 1.0, "lightdiff": 0.8},
+    "rain": {"s2former": 1.0, "turbo_rain": 1.0, "idt": 0.8},
+    "rain_streak": {"s2former": 1.0, "turbo_rain": 1.0, "idt": 0.8},
+    "rain_drop": {"idt": 1.0, "turbo_rain": 0.8, "s2former": 0.6},
+    "rain_drive": {"turbo_rain": 1.0, "idt": 0.8, "s2former": 0.6},
+    "fog": {"ridcp": 1.0, "kanet": 1.0},
+    "snow": {"turbo_snow": 1.0, "snowmaster": 1.0},
 }
 
 # Legacy IQA metric weights per degradation type (QAlign, MANIQA, MUSIQ, CLIPIQA, NIQE).
 # Prefer loading a data-driven map from local training data via ``iqa_weight_map_path``.
 SCORE_WEIGHT_MAP: dict[str, list[float]] = {
-    'night':       [2./9,    2./9,    0.,      2./9,    3./9   ],
-    'low_light':   [2./9,    2./9,    0.,      2./9,    3./9   ],
-    'rain':        [1./5,    1.25/5,  1./5,    0.75/5,  1./5   ],
-    'rain_streak': [1./5,    1.25/5,  1./5,    0.75/5,  1./5   ],
-    'rain_drop':   [0.,      0.5/3,   0.,      1.25/3,  1.25/3 ],
-    'rain_drive':  [0.5/4,   1.5/4,  1./4,    1./4,    0.      ],
-    'snow':        [1.5/5,   0.75/5,  1./5,    0.75/5,  1./5   ],
-    'fog':         [1.5/5,   0.5/5,   1.5/5,   0.5/5,   1./5   ],
+    "night": [2.0 / 9, 2.0 / 9, 0.0, 2.0 / 9, 3.0 / 9],
+    "low_light": [2.0 / 9, 2.0 / 9, 0.0, 2.0 / 9, 3.0 / 9],
+    "rain": [1.0 / 5, 1.25 / 5, 1.0 / 5, 0.75 / 5, 1.0 / 5],
+    "rain_streak": [1.0 / 5, 1.25 / 5, 1.0 / 5, 0.75 / 5, 1.0 / 5],
+    "rain_drop": [0.0, 0.5 / 3, 0.0, 1.25 / 3, 1.25 / 3],
+    "rain_drive": [0.5 / 4, 1.5 / 4, 1.0 / 4, 1.0 / 4, 0.0],
+    "snow": [1.5 / 5, 0.75 / 5, 1.0 / 5, 0.75 / 5, 1.0 / 5],
+    "fog": [1.5 / 5, 0.5 / 5, 1.5 / 5, 0.5 / 5, 1.0 / 5],
 }
 DEFAULT_WEIGHT: list[float] = [0.2, 0.2, 0.2, 0.2, 0.2]
 FAILURE_REWARD = -5.0
@@ -180,16 +202,16 @@ def _normalize_score_weight_vector(weights: list[float], fallback: list[float] |
 
 
 def _load_score_weight_map(weight_map_path: str) -> dict[str, list[float]]:
-    with open(weight_map_path, 'r', encoding='utf-8') as f:
+    with open(weight_map_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
-    metrics_payload = payload.get('metrics')
+    metrics_payload = payload.get("metrics")
     if isinstance(metrics_payload, dict) and metrics_payload:
         weights = []
         for metric_name, metric_config in metrics_payload.items():
-            if not isinstance(metric_config, dict) or 'weight' not in metric_config:
+            if not isinstance(metric_config, dict) or "weight" not in metric_config:
                 raise ValueError(f"Metric '{metric_name}' in {weight_map_path} is missing a weight")
-            weights.append(float(metric_config['weight']))
+            weights.append(float(metric_config["weight"]))
         default_weight = _normalize_score_weight_vector(weights)
         aliases = [
             "__default__",
@@ -205,16 +227,14 @@ def _load_score_weight_map(weight_map_path: str) -> dict[str, list[float]]:
         ]
         return {alias: list(default_weight) for alias in aliases}
 
-    weights_payload = payload.get('weights', payload)
+    weights_payload = payload.get("weights", payload)
     if not isinstance(weights_payload, dict):
         raise ValueError(f"Invalid weight map payload in {weight_map_path}")
 
     normalized_map = {}
     for degradation_type, weights in weights_payload.items():
         if not isinstance(weights, list):
-            raise ValueError(
-                f"Weight entry for degradation '{degradation_type}' must be a list, got {type(weights)}"
-            )
+            raise ValueError(f"Weight entry for degradation '{degradation_type}' must be a list, got {type(weights)}")
         normalized_map[degradation_type] = _normalize_score_weight_vector(weights)
     return normalized_map
 
@@ -259,7 +279,7 @@ def _load_tool_runtime_config(tool_registry_path: str | None) -> tuple[set[str],
 
 
 def get_toolkit(
-    device: str = 'cuda',
+    device: str = "cuda",
     models: list = None,
     preload: bool = True,
     auto_unload: bool = False,
@@ -271,6 +291,7 @@ def get_toolkit(
     if _toolkit_instance is None:
         try:
             from restoration_tools.agent_tools import RestorationToolkit
+
             _toolkit_instance = RestorationToolkit(
                 models=models,
                 device=device,
@@ -281,8 +302,7 @@ def get_toolkit(
                 model_device_map=model_device_map,
             )
             logger.info(
-                f"RestorationToolkit initialized on {device} "
-                f"(preload={preload}, auto_unload={auto_unload})"
+                f"RestorationToolkit initialized on {device} " f"(preload={preload}, auto_unload={auto_unload})"
             )
         except Exception as e:
             logger.error(f"Failed to initialize RestorationToolkit: {e}")
@@ -291,7 +311,7 @@ def get_toolkit(
 
 
 def get_iqa_scorer(
-    device: str = 'cuda',
+    device: str = "cuda",
     normalize_scores: bool = False,
     normalization_stats_path: str | None = None,
     qalign_path: str | None = None,
@@ -442,10 +462,7 @@ class _RestorationRuntimePool:
         logger.info("Preloaded restoration models on %d runtime workers", len(self.workers))
 
     def unload_all_models(self) -> None:
-        futures = [
-            self._executor.submit(worker.toolkit.unload_all_models)
-            for worker in self.workers
-        ]
+        futures = [self._executor.submit(worker.toolkit.unload_all_models) for worker in self.workers]
         for future in futures:
             future.result()
         logger.info("Unloaded restoration models on %d runtime workers", len(self.workers))
@@ -613,9 +630,7 @@ class RestorationTool(BaseTool):
         # preload once at sampling start, unload once after sampling.
         configured_auto_unload = bool(config.get("auto_unload", False))
         if configured_auto_unload:
-            logger.warning(
-                "auto_unload=true is ignored in phase-managed mode; forcing auto_unload=false"
-            )
+            logger.warning("auto_unload=true is ignored in phase-managed mode; forcing auto_unload=false")
         self.auto_unload = False
         self.use_iqa = config.get("use_iqa", True)
         self.normalize_iqa_scores = bool(config.get("normalize_iqa_scores", False))
@@ -626,19 +641,16 @@ class RestorationTool(BaseTool):
         self.reward_mode = str(config.get("reward_mode", REWARD_MODE_STEP_MIXED_V1))
         if self.reward_mode not in SUPPORTED_REWARD_MODES:
             raise ValueError(
-                f"Unsupported reward_mode={self.reward_mode!r}; "
-                f"expected one of {sorted(SUPPORTED_REWARD_MODES)}"
+                f"Unsupported reward_mode={self.reward_mode!r}; " f"expected one of {sorted(SUPPORTED_REWARD_MODES)}"
             )
         self.suppress_tool_call_reward = bool(
             config.get("suppress_tool_call_reward", self.reward_mode == REWARD_MODE_FINAL_IQA_V2)
         )
-        self.alpha = float(config.get("alpha", 0.9))       # marginal-improvement weight
-        self.beta = 1.0 - self.alpha                       # identity-improvement weight
+        self.alpha = float(config.get("alpha", 0.9))  # marginal-improvement weight
+        self.beta = 1.0 - self.alpha  # identity-improvement weight
         self.reward_scale = float(config.get("reward_scale", 1.0))
         self.final_iqa_reward_scale = float(config.get("final_iqa_reward_scale", self.reward_scale))
-        self.final_iqa_regression_penalty_scale = float(
-            config.get("final_iqa_regression_penalty_scale", 1.0)
-        )
+        self.final_iqa_regression_penalty_scale = float(config.get("final_iqa_regression_penalty_scale", 1.0))
         self.final_iqa_step_penalty = float(config.get("final_iqa_step_penalty", 0.0))
         self.affinity_bonus_scale = float(config.get("affinity_bonus_scale", 0.0))
         self.repeat_action_penalty = float(config.get("repeat_action_penalty", REPEAT_ACTION_PENALTY))
@@ -685,9 +697,7 @@ class RestorationTool(BaseTool):
         if self.iqa_weight_map_path and not os.path.isabs(self.iqa_weight_map_path):
             self.iqa_weight_map_path = str((project_root / self.iqa_weight_map_path).resolve())
         if self.normalize_iqa_scores and not (self.iqa_stats_path or self.iqa_metric_config_path):
-            raise ValueError(
-                "normalize_iqa_scores=true requires iqa_stats_path or iqa_metric_config_path"
-            )
+            raise ValueError("normalize_iqa_scores=true requires iqa_stats_path or iqa_metric_config_path")
 
         self.score_weight_map = {
             degradation_type: _normalize_score_weight_vector(weights)
@@ -867,9 +877,7 @@ class RestorationTool(BaseTool):
     async def _aget_iqa_scores(self, image_path: str) -> list[float]:
         """Async IQA scoring that uses the replicated runtime pool when enabled."""
         if self.use_parallel_workers:
-            return await self.runtime_pool.run(
-                lambda worker: self._get_iqa_scores_on_worker(worker, image_path)
-            )
+            return await self.runtime_pool.run(lambda worker: self._get_iqa_scores_on_worker(worker, image_path))
         return self._get_iqa_scores(image_path)
 
     def _count_consecutive_repeats(self, actions_history: list[str], action: str) -> int:
@@ -929,9 +937,7 @@ class RestorationTool(BaseTool):
             affinity_score = affinity_map.get(action, 0.0)
             if affinity_score > 0:
                 # Check whether an affinity bonus was already given in this trajectory
-                already_given = any(
-                    affinity_map.get(prev, 0.0) > 0 for prev in actions_history
-                )
+                already_given = any(affinity_map.get(prev, 0.0) > 0 for prev in actions_history)
                 if not already_given:
                     affinity_bonus = self.affinity_bonus_scale * affinity_score
 
@@ -942,9 +948,7 @@ class RestorationTool(BaseTool):
             if marginal <= self.repeat_low_gain_threshold:
                 repeat_penalty += self.repeat_low_gain_penalty * repeat_count
 
-        reward = float(torch.clamp(
-            torch.tensor(base_reward - repeat_penalty + affinity_bonus), -10.0, 10.0
-        ).item())
+        reward = float(torch.clamp(torch.tensor(base_reward - repeat_penalty + affinity_bonus), -10.0, 10.0).item())
         return {
             "reward": reward,
             "base_reward": float(base_reward),
@@ -995,16 +999,13 @@ class RestorationTool(BaseTool):
             if marginal <= self.repeat_low_gain_threshold:
                 repeat_penalty += self.repeat_low_gain_penalty * repeat_count
 
-        reward = float(torch.clamp(
-            torch.tensor(
-                base_reward
-                - regression_penalty
-                - self.final_iqa_step_penalty
-                - repeat_penalty
-            ),
-            -10.0,
-            10.0,
-        ).item())
+        reward = float(
+            torch.clamp(
+                torch.tensor(base_reward - regression_penalty - self.final_iqa_step_penalty - repeat_penalty),
+                -10.0,
+                10.0,
+            ).item()
+        )
         return {
             "reward": reward,
             "base_reward": float(base_reward),
@@ -1116,8 +1117,7 @@ class RestorationTool(BaseTool):
                 )
             else:
                 lines.append(
-                    "Continue exploring only if the next action is likely to improve the "
-                    "trajectory-best IQA."
+                    "Continue exploring only if the next action is likely to improve the " "trajectory-best IQA."
                 )
             return "\n".join(lines)
 
@@ -1138,18 +1138,14 @@ class RestorationTool(BaseTool):
         # choose appropriate tools on its own — revealing the degradation type or
         # recommending specific actions would shortcut that learning process.
         if step >= self.stop_min_step and marginal <= self.repeat_low_gain_threshold:
-            lines.append(
-                "Recent gains are small. Consider stopping now or switch to a different targeted operation."
-            )
+            lines.append("Recent gains are small. Consider stopping now or switch to a different targeted operation.")
         elif step >= self.stop_min_step:
             lines.append(
                 "You have completed several restoration steps. "
                 "If gains keep shrinking, prefer stopping over repeating the same action."
             )
         else:
-            lines.append(
-                "Continue with the next restoration action or stop if the image looks good."
-            )
+            lines.append("Continue with the next restoration action or stop if the image looks good.")
         return "\n".join(lines)
 
     async def create(
@@ -1233,10 +1229,7 @@ class RestorationTool(BaseTool):
 
         allowed_actions = getattr(self, "allowed_actions", ALLOWED_ACTIONS)
         if action not in allowed_actions:
-            error_msg = (
-                f"Invalid action '{action}'. "
-                f"Allowed: {', '.join(sorted(allowed_actions))}"
-            )
+            error_msg = f"Invalid action '{action}'. " f"Allowed: {', '.join(sorted(allowed_actions))}"
             logger.warning(error_msg)
             return (
                 ToolResponse(text=error_msg),
@@ -1298,6 +1291,7 @@ class RestorationTool(BaseTool):
             logger.info(f"Instance {instance_id}: applying '{action}' to {current_image}")
             if action in self.candidate_tool_runtimes:
                 if self.use_parallel_workers:
+
                     def _restore_and_score(worker: _RestorationRuntimeWorker):
                         result = self._run_candidate_action(action, current_image, output_dir, worker.device)
                         output_path = result.get("output_path")
@@ -1322,6 +1316,7 @@ class RestorationTool(BaseTool):
                     result = self._run_candidate_action(action, current_image, output_dir, self.device)
                     curr_scores = None
             elif self.use_parallel_workers:
+
                 def _restore_and_score(worker: _RestorationRuntimeWorker):
                     result = worker.toolkit.process_image(
                         tools=[action],
@@ -1397,7 +1392,9 @@ class RestorationTool(BaseTool):
 
             identity_delta = self._calculate_identity_delta(curr_scores, identity_scores, weights)
             aggregate_score = float(
-                (torch.tensor(curr_scores, dtype=torch.float32) * torch.tensor(weights, dtype=torch.float32)).sum().item()
+                (torch.tensor(curr_scores, dtype=torch.float32) * torch.tensor(weights, dtype=torch.float32))
+                .sum()
+                .item()
             )
 
             # Generate feedback text
@@ -1420,6 +1417,7 @@ class RestorationTool(BaseTool):
             pil_img = None
             try:
                 from PIL import Image as PILImage
+
                 pil_img = PILImage.open(output_path).convert("RGB")
             except Exception as e:
                 logger.warning(f"Could not load result image with PIL: {e}")

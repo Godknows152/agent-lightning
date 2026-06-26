@@ -122,9 +122,9 @@ def test_multiturn_sft_dataset(model_path: str, ignore_input_ids_mismatch: bool)
 
     # Test 3: Shape Consistency
     assert item0["loss_mask"].shape == item0["input_ids"].shape, "Loss mask shape doesn't match input_ids shape"
-    assert item0["attention_mask"].shape == item0["input_ids"].shape, (
-        "Attention mask shape doesn't match input_ids shape"
-    )
+    assert (
+        item0["attention_mask"].shape == item0["input_ids"].shape
+    ), "Attention mask shape doesn't match input_ids shape"
     assert item0["position_ids"].shape == item0["input_ids"].shape, "Position IDs shape doesn't match input_ids shape"
 
     # Test 4: Loss Mask Pattern - Math Conversation
@@ -165,9 +165,9 @@ def test_multiturn_sft_dataset(model_path: str, ignore_input_ids_mismatch: bool)
 
     # Test 7: Position IDs Pattern
     position_ids0 = item0["position_ids"]
-    assert torch.equal(position_ids0[:sequence_length], torch.arange(sequence_length)), (
-        "Position IDs not sequential for non-padded tokens"
-    )
+    assert torch.equal(
+        position_ids0[:sequence_length], torch.arange(sequence_length)
+    ), "Position IDs not sequential for non-padded tokens"
     if sequence_length < len(position_ids0):
         assert torch.all(position_ids0[sequence_length:] == 0), "Padding position IDs not zero"
 
@@ -188,9 +188,9 @@ def test_multiturn_sft_dataset(model_path: str, ignore_input_ids_mismatch: bool)
 
             # The content should NOT appear in the non-masked text
             non_assistant_text = tokenizer.decode(input_ids0[loss_mask0 == 0])
-            assert msg["content"] not in non_assistant_text, (
-                f"Assistant message '{msg['content']}' found in non-assistant text"
-            )
+            assert (
+                msg["content"] not in non_assistant_text
+            ), f"Assistant message '{msg['content']}' found in non-assistant text"
 
     # Test 9: Verify non-assistant parts have loss_mask=0
     # Get non-assistant text
@@ -200,14 +200,14 @@ def test_multiturn_sft_dataset(model_path: str, ignore_input_ids_mismatch: bool)
     # Verify that system and user messages are in the non-assistant text
     for msg in test_data["messages"][0]:  # First conversation
         if msg["role"] in ["system", "user"]:
-            assert msg["content"] in non_assistant_text, (
-                f"{msg['role'].title()} message '{msg['content']}' not found in non-assistant text"
-            )
+            assert (
+                msg["content"] in non_assistant_text
+            ), f"{msg['role'].title()} message '{msg['content']}' not found in non-assistant text"
 
             # And verify they're NOT in the assistant text
-            assert msg["content"] not in assistant_text, (
-                f"{msg['role'].title()} message '{msg['content']}' found in assistant text"
-            )
+            assert (
+                msg["content"] not in assistant_text
+            ), f"{msg['role'].title()} message '{msg['content']}' found in assistant text"
 
     # Test 10: Verify padding behavior
     padding_config = {
@@ -225,9 +225,9 @@ def test_multiturn_sft_dataset(model_path: str, ignore_input_ids_mismatch: bool)
     actual_length = torch.sum(padded_item["attention_mask"])
 
     # Verify padding tokens
-    assert torch.all(padded_item["input_ids"][actual_length:] == tokenizer.pad_token_id), (
-        "Padding tokens not set correctly"
-    )
+    assert torch.all(
+        padded_item["input_ids"][actual_length:] == tokenizer.pad_token_id
+    ), "Padding tokens not set correctly"
     assert torch.all(padded_item["attention_mask"][actual_length:] == 0), "Attention mask not set correctly for padding"
     assert torch.all(padded_item["loss_mask"][actual_length:] == 0), "Loss mask not set correctly for padding"
 
@@ -410,12 +410,14 @@ def test_multiturn_sft_vlm_dataset_on_cpu(model_path, vlm_data_file):
             temporal_patch_size = processor.image_processor.temporal_patch_size
             merge_size = processor.image_processor.merge_size
             num_patches = image_grid_thw.prod(dim=1).sum()
-            assert image_grid_thw.shape == (len(df["images"][i]), 3), (
-                f"image_grid_thw: {image_grid_thw.shape} should have shape ({len(df['images'][i])}, 3)"
-            )
-            assert pixel_values.shape == (num_patches, 3 * temporal_patch_size * patch_size * patch_size), (
-                f"pixel_values: {pixel_values.shape} should have shape ({num_patches}, {3 * patch_size * patch_size})"
-            )
+            assert image_grid_thw.shape == (
+                len(df["images"][i]),
+                3,
+            ), f"image_grid_thw: {image_grid_thw.shape} should have shape ({len(df['images'][i])}, 3)"
+            assert pixel_values.shape == (
+                num_patches,
+                3 * temporal_patch_size * patch_size * patch_size,
+            ), f"pixel_values: {pixel_values.shape} should have shape ({num_patches}, {3 * patch_size * patch_size})"
             assert (input_ids == processor.image_token_id).sum() == num_patches // (merge_size**2)
         else:
             assert pixel_values is None, "pixel_values should be None when no image is provided"
@@ -472,9 +474,10 @@ def test_multiturn_sft_vlm_dataloader_on_cpu(model_path, vlm_data_file):
         image_grid_thw = multi_modal_inputs["image_grid_thw"]
 
         num_images = sum([len(images) for images in df["images"][i * batch_size : (i + 1) * batch_size]])
-        assert image_grid_thw.shape == (num_images, 3), (
-            f"image_grid_thw: {image_grid_thw.shape} should have shape ({num_images}, 3)"
-        )
+        assert image_grid_thw.shape == (
+            num_images,
+            3,
+        ), f"image_grid_thw: {image_grid_thw.shape} should have shape ({num_images}, 3)"
         patch_size = processor.image_processor.patch_size
         temporal_patch_size = processor.image_processor.temporal_patch_size
         num_patches = image_grid_thw.prod(dim=1).sum()

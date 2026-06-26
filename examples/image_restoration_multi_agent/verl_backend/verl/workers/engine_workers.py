@@ -256,9 +256,9 @@ class TrainingWorker(Worker, DistProfilerExtension):
             assert batch_size_per_dp % num_mini_batch == 0, f"Got {batch_size_per_dp=} and {num_mini_batch=}"
             mini_batch_size_per_gpu = batch_size_per_dp // num_mini_batch
         else:
-            assert mini_batch_size % self.engine.get_data_parallel_size() == 0, (
-                f"Got {mini_batch_size=} and {self.engine.get_data_parallel_size()=}"
-            )
+            assert (
+                mini_batch_size % self.engine.get_data_parallel_size() == 0
+            ), f"Got {mini_batch_size=} and {self.engine.get_data_parallel_size()=}"
             mini_batch_size_per_gpu = mini_batch_size // self.engine.get_data_parallel_size()
 
         # make iterator
@@ -592,9 +592,9 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
             infer_pp = rollout_config.pipeline_model_parallel_size
             infer_world_size = infer_tp * infer_pp
             dp = self.world_size // infer_world_size
-            assert self.world_size % infer_world_size == 0, (
-                f"rollout world_size: {self.world_size} is not divisible by infer_world_size: {infer_world_size}"
-            )
+            assert (
+                self.world_size % infer_world_size == 0
+            ), f"rollout world_size: {self.world_size} is not divisible by infer_world_size: {infer_world_size}"
             rollout_device_mesh = init_device_mesh(
                 get_device_name(), mesh_shape=(dp, infer_tp, infer_pp), mesh_dim_names=["dp", "infer_tp", "infer_pp"]
             )

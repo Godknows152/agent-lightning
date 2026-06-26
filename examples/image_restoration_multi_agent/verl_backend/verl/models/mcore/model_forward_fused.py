@@ -49,9 +49,9 @@ def _get_patching_model(model: torch.nn.Module):
 
 
 def patch_fused_forward(model: torch.nn.Module):
-    assert version.parse(mcore.__version__) >= version.parse("0.13.0"), (
-        "Fused forward patching requires mecore >= 0.13.0"
-    )
+    assert version.parse(mcore.__version__) >= version.parse(
+        "0.13.0"
+    ), "Fused forward patching requires mecore >= 0.13.0"
     model = _get_patching_model(model)
     if model is not None:
         model.forward_backup = model.forward

@@ -53,34 +53,44 @@ import torch
 from tqdm import tqdm
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_AGENT_TOOLS = _PROJECT_ROOT / 'restoration_tools' / 'agent_tools'
+_AGENT_TOOLS = _PROJECT_ROOT / "restoration_tools" / "agent_tools"
 sys.path.insert(0, str(_AGENT_TOOLS))
 sys.path.insert(0, str(_PROJECT_ROOT))
 
-os.environ['TRANSFORMERS_TORCH_LOAD_IS_SAFE'] = '1'
-warnings.filterwarnings('ignore')
+os.environ["TRANSFORMERS_TORCH_LOAD_IS_SAFE"] = "1"
+warnings.filterwarnings("ignore")
 
-_METRIC_NAMES = ('qalign', 'maniqa', 'musiq', 'clipiqa', 'niqe')
+_METRIC_NAMES = ("qalign", "maniqa", "musiq", "clipiqa", "niqe")
 _UNIFORM_WEIGHT = np.array([0.2] * 5, dtype=np.float64)
 
 # All restoration tools (excluding stop)
 ALL_RESTORATION_ACTIONS = [
-    'real_esrgan', 'scunet', 'retinexformer_fivek', 'hvicidnet', 'lightdiff',
-    'turbo_rain', 's2former', 'idt', 'ridcp', 'kanet', 'turbo_snow', 'snowmaster',
+    "real_esrgan",
+    "scunet",
+    "retinexformer_fivek",
+    "hvicidnet",
+    "lightdiff",
+    "turbo_rain",
+    "s2former",
+    "idt",
+    "ridcp",
+    "kanet",
+    "turbo_snow",
+    "snowmaster",
 ]
 
 # Degradation type → targeted (specialized) tools
 DEGRADATION_TARGETED_ACTIONS = {
-    'night':       ['retinexformer_fivek', 'hvicidnet', 'lightdiff'],
-    'rain_streak': ['s2former', 'turbo_rain', 'idt'],
-    'rain_drop':   ['idt', 'turbo_rain', 's2former'],
-    'rain_drive':  ['turbo_rain', 'idt', 's2former'],
-    'fog':         ['ridcp', 'kanet'],
-    'snow':        ['turbo_snow', 'snowmaster'],
+    "night": ["retinexformer_fivek", "hvicidnet", "lightdiff"],
+    "rain_streak": ["s2former", "turbo_rain", "idt"],
+    "rain_drop": ["idt", "turbo_rain", "s2former"],
+    "rain_drive": ["turbo_rain", "idt", "s2former"],
+    "fog": ["ridcp", "kanet"],
+    "snow": ["turbo_snow", "snowmaster"],
 }
 
 # Generic tools that work across all degradation types
-GENERIC_ACTIONS = ['real_esrgan', 'scunet']
+GENERIC_ACTIONS = ["real_esrgan", "scunet"]
 
 
 def _parse_extra_info(extra_info):
@@ -106,14 +116,14 @@ def collect_image_paths_by_type(parquet_paths, samples_per_type, rng):
     for parquet_path in parquet_paths:
         df = pd.read_parquet(parquet_path)
         for _, row in df.iterrows():
-            extra_info = _parse_extra_info(row.get('extra_info', {}))
-            degradation_type = extra_info.get('degradation_type', 'unknown')
+            extra_info = _parse_extra_info(row.get("extra_info", {}))
+            degradation_type = extra_info.get("degradation_type", "unknown")
             # Try multiple image path fields for compatibility
             image_path = (
-                extra_info.get('image_path')
-                or extra_info.get('original_image')
-                or (extra_info.get('create_kwargs', {}) or {}).get('image_path')
-                or (extra_info.get('create_kwargs', {}) or {}).get('original_image')
+                extra_info.get("image_path")
+                or extra_info.get("original_image")
+                or (extra_info.get("create_kwargs", {}) or {}).get("image_path")
+                or (extra_info.get("create_kwargs", {}) or {}).get("original_image")
             )
             if image_path and os.path.exists(image_path):
                 paths_by_type[degradation_type].append(image_path)
@@ -195,97 +205,77 @@ def compute_discriminability_weights(
         final_weight = final_weight / final_weight.sum()
 
     return {
-        'targeted_mean_delta': targeted_mean.tolist(),
-        'generic_mean_delta': generic_mean.tolist(),
-        'discriminability': discriminability.tolist(),
-        'positive_signal': positive_signal.tolist(),
-        'importance': importance.tolist(),
-        'importance_coeff': float(importance_coeff),
-        'combined_signal': combined_signal.tolist(),
-        'data_weight': data_weight.tolist(),
-        'pre_cap_weight': ((1.0 - uniform_mix) * data_weight + uniform_mix * _UNIFORM_WEIGHT).tolist(),
-        'max_weight_cap': max_weight_cap,
-        'final_weight': final_weight.tolist(),
+        "targeted_mean_delta": targeted_mean.tolist(),
+        "generic_mean_delta": generic_mean.tolist(),
+        "discriminability": discriminability.tolist(),
+        "positive_signal": positive_signal.tolist(),
+        "importance": importance.tolist(),
+        "importance_coeff": float(importance_coeff),
+        "combined_signal": combined_signal.tolist(),
+        "data_weight": data_weight.tolist(),
+        "pre_cap_weight": ((1.0 - uniform_mix) * data_weight + uniform_mix * _UNIFORM_WEIGHT).tolist(),
+        "max_weight_cap": max_weight_cap,
+        "final_weight": final_weight.tolist(),
     }
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description='Compute degradation-action-aware IQA weight map (v2)'
+    parser = argparse.ArgumentParser(description="Compute degradation-action-aware IQA weight map (v2)")
+    parser.add_argument("--parquet", nargs="+", required=True, help="One or more training parquet files")
+    parser.add_argument("--stats_json", required=True, help="Path to frozen IQA normalization stats JSON")
+    parser.add_argument(
+        "--output_json", default="data/restoration/iqa_weight_map_v2.json", help="Output weight map JSON"
+    )
+    parser.add_argument("--device", default="cuda:0", help="Device for restoration models")
+    parser.add_argument("--iqa_device", default="cuda:3", help="Device for IQA models")
+    parser.add_argument(
+        "--samples_per_type", type=int, default=32, help="Number of images to sample per degradation type"
     )
     parser.add_argument(
-        '--parquet', nargs='+', required=True,
-        help='One or more training parquet files'
+        "--uniform_mix", type=float, default=0.5, help="Shrinkage toward uniform weights in [0,1]. Default 0.5 (v3)."
     )
     parser.add_argument(
-        '--stats_json', required=True,
-        help='Path to frozen IQA normalization stats JSON'
+        "--max_weight_cap",
+        type=float,
+        default=0.4,
+        help="Cap on any single metric weight. None/0 to disable. Default 0.4 (v3).",
     )
     parser.add_argument(
-        '--output_json', default='data/restoration/iqa_weight_map_v2.json',
-        help='Output weight map JSON'
+        "--importance_coeff",
+        type=float,
+        default=0.1,
+        help="Coefficient for importance term. Default 0.1 (v3, was 0.3 in v2).",
     )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for stratified sampling")
+    parser.add_argument("--qalign_path", default=None, help="Optional QAlign checkpoint path")
     parser.add_argument(
-        '--device', default='cuda:0',
-        help='Device for restoration models'
-    )
-    parser.add_argument(
-        '--iqa_device', default='cuda:3',
-        help='Device for IQA models'
-    )
-    parser.add_argument(
-        '--samples_per_type', type=int, default=32,
-        help='Number of images to sample per degradation type'
-    )
-    parser.add_argument(
-        '--uniform_mix', type=float, default=0.5,
-        help='Shrinkage toward uniform weights in [0,1]. Default 0.5 (v3).'
-    )
-    parser.add_argument(
-        '--max_weight_cap', type=float, default=0.4,
-        help='Cap on any single metric weight. None/0 to disable. Default 0.4 (v3).'
-    )
-    parser.add_argument(
-        '--importance_coeff', type=float, default=0.1,
-        help='Coefficient for importance term. Default 0.1 (v3, was 0.3 in v2).'
-    )
-    parser.add_argument(
-        '--seed', type=int, default=42,
-        help='Random seed for stratified sampling'
-    )
-    parser.add_argument(
-        '--qalign_path', default=None,
-        help='Optional QAlign checkpoint path'
-    )
-    parser.add_argument(
-        '--actions', nargs='*', default=None,
-        help='Subset of restoration actions to run (default: all 12)'
+        "--actions", nargs="*", default=None, help="Subset of restoration actions to run (default: all 12)"
     )
     args = parser.parse_args()
 
     if not (0.0 <= args.uniform_mix <= 1.0):
-        raise ValueError('--uniform_mix must be in [0, 1]')
+        raise ValueError("--uniform_mix must be in [0, 1]")
     if args.max_weight_cap is not None and args.max_weight_cap < 0:
-        raise ValueError('--max_weight_cap must be >= 0 or None')
+        raise ValueError("--max_weight_cap must be >= 0 or None")
     if args.importance_coeff < 0:
-        raise ValueError('--importance_coeff must be >= 0')
+        raise ValueError("--importance_coeff must be >= 0")
 
     rng = np.random.default_rng(args.seed)
     actions_to_run = args.actions or ALL_RESTORATION_ACTIONS
 
     # Step 1: Collect and sample image paths
-    print('Collecting image paths by degradation type...')
+    print("Collecting image paths by degradation type...")
     paths_by_type = collect_image_paths_by_type(args.parquet, args.samples_per_type, rng)
     total_images = 0
     for degradation_type, paths in sorted(paths_by_type.items()):
-        print(f'  {degradation_type}: {len(paths)} images')
+        print(f"  {degradation_type}: {len(paths)} images")
         total_images += len(paths)
     if total_images == 0:
-        raise ValueError('No valid image paths found in the provided training parquet files')
-    print(f'Total images to process: {total_images}')
+        raise ValueError("No valid image paths found in the provided training parquet files")
+    print(f"Total images to process: {total_images}")
 
     # Step 2: Load IQA scorer (normalized)
-    print('\nLoading normalized IQA scorer on {}...'.format(args.iqa_device))
+    print("\nLoading normalized IQA scorer on {}...".format(args.iqa_device))
     from iqa_reward import IQAScore
 
     scorer = IQAScore(
@@ -296,7 +286,7 @@ def main():
     )
 
     # Step 3: Load RestorationToolkit
-    print('\nLoading RestorationToolkit on {}...'.format(args.device))
+    print("\nLoading RestorationToolkit on {}...".format(args.device))
     from restoration_tools.agent_tools import RestorationToolkit
 
     toolkit = RestorationToolkit(
@@ -312,8 +302,8 @@ def main():
     #   degraded_scores = scorer.get_iqa_score(original_image)
     #   restored_scores = scorer.get_iqa_score(restored_image)
     #   delta = restored_scores - degraded_scores  (per-metric, normalized z-score space)
-    print('\nRunning restoration tools and computing IQA deltas...')
-    temp_dir = tempfile.mkdtemp(prefix='iqa_weight_v2_')
+    print("\nRunning restoration tools and computing IQA deltas...")
+    temp_dir = tempfile.mkdtemp(prefix="iqa_weight_v2_")
 
     # Structure: deltas[degradation_type][action] = list of delta vectors
     deltas: dict[str, dict[str, list[list[float]]]] = defaultdict(lambda: defaultdict(list))
@@ -321,7 +311,7 @@ def main():
     degraded_scores_by_type: dict[str, list[list[float]]] = defaultdict(list)
 
     total_runs = total_images * len(actions_to_run)
-    pbar = tqdm(total=total_runs, desc='Processing')
+    pbar = tqdm(total=total_runs, desc="Processing")
 
     for degradation_type, image_paths in sorted(paths_by_type.items()):
         for image_path in image_paths:
@@ -330,14 +320,14 @@ def main():
                 degraded_scores = scorer.get_iqa_score(image_path)
                 degraded_scores_by_type[degradation_type].append(degraded_scores)
             except Exception as e:
-                print(f'  WARNING: IQA scoring failed for {image_path}: {e}')
+                print(f"  WARNING: IQA scoring failed for {image_path}: {e}")
                 pbar.update(len(actions_to_run))
                 continue
 
             # Run each restoration action
             for action in actions_to_run:
                 try:
-                    output_subdir = os.path.join(temp_dir, f'{degradation_type}_{action}')
+                    output_subdir = os.path.join(temp_dir, f"{degradation_type}_{action}")
                     os.makedirs(output_subdir, exist_ok=True)
 
                     result = toolkit.process_image(
@@ -346,7 +336,7 @@ def main():
                         output_dir=output_subdir,
                         is_identify=True,
                     )
-                    output_path = result.get('output_path')
+                    output_path = result.get("output_path")
                     if not output_path or not os.path.exists(output_path):
                         pbar.update(1)
                         continue
@@ -356,14 +346,14 @@ def main():
                     deltas[degradation_type][action].append(delta)
 
                 except Exception as e:
-                    print(f'  WARNING: {action} failed on {image_path}: {e}')
+                    print(f"  WARNING: {action} failed on {image_path}: {e}")
 
                 pbar.update(1)
 
     pbar.close()
 
     # Step 5: Compute weight vectors using discriminability
-    print('\nComputing discriminability-based weight vectors...')
+    print("\nComputing discriminability-based weight vectors...")
     weight_map = {}
     details = {}
 
@@ -386,11 +376,13 @@ def main():
         generic_deltas = np.array(generic_delta_rows, dtype=np.float64) if generic_delta_rows else np.zeros((0, 5))
 
         result = compute_discriminability_weights(
-            targeted_deltas, generic_deltas, args.uniform_mix,
+            targeted_deltas,
+            generic_deltas,
+            args.uniform_mix,
             max_weight_cap=args.max_weight_cap if args.max_weight_cap > 0 else None,
             importance_coeff=args.importance_coeff,
         )
-        weight_map[degradation_type] = result['final_weight']
+        weight_map[degradation_type] = result["final_weight"]
 
         # Compute per-action summary
         action_summary = {}
@@ -399,79 +391,79 @@ def main():
             if action_deltas:
                 action_matrix = np.array(action_deltas, dtype=np.float64)
                 action_summary[action] = {
-                    'count': len(action_deltas),
-                    'mean_delta': action_matrix.mean(axis=0).tolist(),
-                    'std_delta': action_matrix.std(axis=0).tolist(),
-                    'is_targeted': action in targeted_actions,
-                    'is_generic': action in GENERIC_ACTIONS,
+                    "count": len(action_deltas),
+                    "mean_delta": action_matrix.mean(axis=0).tolist(),
+                    "std_delta": action_matrix.std(axis=0).tolist(),
+                    "is_targeted": action in targeted_actions,
+                    "is_generic": action in GENERIC_ACTIONS,
                 }
             else:
                 action_summary[action] = {
-                    'count': 0,
-                    'mean_delta': [0.0] * 5,
-                    'std_delta': [0.0] * 5,
-                    'is_targeted': action in targeted_actions,
-                    'is_generic': action in GENERIC_ACTIONS,
+                    "count": 0,
+                    "mean_delta": [0.0] * 5,
+                    "std_delta": [0.0] * 5,
+                    "is_targeted": action in targeted_actions,
+                    "is_generic": action in GENERIC_ACTIONS,
                 }
 
         details[degradation_type] = {
-            'sample_count': len(paths_by_type[degradation_type]),
-            'targeted_actions': targeted_actions,
-            'generic_actions': GENERIC_ACTIONS,
-            'n_targeted_deltas': int(targeted_deltas.shape[0]),
-            'n_generic_deltas': int(generic_deltas.shape[0]),
-            'metrics': {
+            "sample_count": len(paths_by_type[degradation_type]),
+            "targeted_actions": targeted_actions,
+            "generic_actions": GENERIC_ACTIONS,
+            "n_targeted_deltas": int(targeted_deltas.shape[0]),
+            "n_generic_deltas": int(generic_deltas.shape[0]),
+            "metrics": {
                 metric_name: {
-                    'targeted_mean_delta': float(result['targeted_mean_delta'][idx]),
-                    'generic_mean_delta': float(result['generic_mean_delta'][idx]),
-                    'discriminability': float(result['discriminability'][idx]),
-                    'positive_signal': float(result['positive_signal'][idx]),
-                    'importance': float(result['importance'][idx]),
-                    'importance_coeff': float(result['importance_coeff']),
-                    'combined_signal': float(result['combined_signal'][idx]),
-                    'data_weight': float(result['data_weight'][idx]),
-                    'pre_cap_weight': float(result['pre_cap_weight'][idx]),
-                    'max_weight_cap': float(result['max_weight_cap']),
-                    'final_weight': float(result['final_weight'][idx]),
+                    "targeted_mean_delta": float(result["targeted_mean_delta"][idx]),
+                    "generic_mean_delta": float(result["generic_mean_delta"][idx]),
+                    "discriminability": float(result["discriminability"][idx]),
+                    "positive_signal": float(result["positive_signal"][idx]),
+                    "importance": float(result["importance"][idx]),
+                    "importance_coeff": float(result["importance_coeff"]),
+                    "combined_signal": float(result["combined_signal"][idx]),
+                    "data_weight": float(result["data_weight"][idx]),
+                    "pre_cap_weight": float(result["pre_cap_weight"][idx]),
+                    "max_weight_cap": float(result["max_weight_cap"]),
+                    "final_weight": float(result["final_weight"][idx]),
                 }
                 for idx, metric_name in enumerate(_METRIC_NAMES)
             },
-            'action_summary': action_summary,
+            "action_summary": action_summary,
         }
 
     # Step 6: Save output
     payload = {
-        'version': 3,
-        'method': 'discriminability_targeted_vs_generic_with_capped_shrinkage',
-        'normalization_stats_path': str(Path(args.stats_json).expanduser().resolve()),
-        'metric_order': list(_METRIC_NAMES),
-        'uniform_mix': float(args.uniform_mix),
-        'max_weight_cap': float(args.max_weight_cap),
-        'importance_coeff': float(args.importance_coeff),
-        'default_weight': _UNIFORM_WEIGHT.tolist(),
-        'weights': weight_map,
-        'details': details,
-        'source': {
-            'parquet': args.parquet,
-            'samples_per_type': args.samples_per_type,
-            'device': args.device,
-            'iqa_device': args.iqa_device,
-            'actions': actions_to_run,
-            'total_images': total_images,
-            'seed': args.seed,
+        "version": 3,
+        "method": "discriminability_targeted_vs_generic_with_capped_shrinkage",
+        "normalization_stats_path": str(Path(args.stats_json).expanduser().resolve()),
+        "metric_order": list(_METRIC_NAMES),
+        "uniform_mix": float(args.uniform_mix),
+        "max_weight_cap": float(args.max_weight_cap),
+        "importance_coeff": float(args.importance_coeff),
+        "default_weight": _UNIFORM_WEIGHT.tolist(),
+        "weights": weight_map,
+        "details": details,
+        "source": {
+            "parquet": args.parquet,
+            "samples_per_type": args.samples_per_type,
+            "device": args.device,
+            "iqa_device": args.iqa_device,
+            "actions": actions_to_run,
+            "total_images": total_images,
+            "seed": args.seed,
         },
     }
 
     output_path = Path(args.output_json).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open('w', encoding='utf-8') as f:
+    with output_path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
-    print('\n=== v2 IQA weight map (discriminability-based) ===')
+    print("\n=== v2 IQA weight map (discriminability-based) ===")
     for degradation_type, weights in sorted(weight_map.items()):
         names = list(_METRIC_NAMES)
-        print(f'  {degradation_type}: {dict(zip(names, [round(w, 4) for w in weights]))}')
-    print(f'\nSaved weight map to {output_path}')
+        print(f"  {degradation_type}: {dict(zip(names, [round(w, 4) for w in weights]))}")
+    print(f"\nSaved weight map to {output_path}")
 
     # Cleanup temp directory
     try:
@@ -479,9 +471,9 @@ def main():
     except Exception:
         pass
 
-    print('\nDone! To use this weight map, update your tool config:')
-    print(f'  iqa_weight_map_path: {output_path}')
+    print("\nDone! To use this weight map, update your tool config:")
+    print(f"  iqa_weight_map_path: {output_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

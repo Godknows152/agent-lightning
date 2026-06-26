@@ -85,9 +85,9 @@ def update_model_config(module_config, override_config_kwargs):
 def get_huggingface_actor_config(model_name: str, override_config_kwargs=None, trust_remote_code=False) -> dict:
     if override_config_kwargs is None:
         override_config_kwargs = {}
-    assert isinstance(override_config_kwargs, dict), (
-        f"override_config_kwargs must be a dict, got {type(override_config_kwargs)}"
-    )
+    assert isinstance(
+        override_config_kwargs, dict
+    ), f"override_config_kwargs must be a dict, got {type(override_config_kwargs)}"
     module_config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
     update_model_config(module_config, override_config_kwargs)
 
@@ -125,9 +125,9 @@ def create_huggingface_actor(model_name: str, override_config_kwargs=None, autom
         override_config_kwargs = {}
     if automodel_kwargs is None:
         automodel_kwargs = {}
-    assert isinstance(override_config_kwargs, dict), (
-        f"override_config_kwargs must be a dict, got {type(override_config_kwargs)}"
-    )
+    assert isinstance(
+        override_config_kwargs, dict
+    ), f"override_config_kwargs must be a dict, got {type(override_config_kwargs)}"
     module_config = get_huggingface_actor_config(
         model_name, override_config_kwargs, trust_remote_code=automodel_kwargs.get("trust_remote_code", False)
     )

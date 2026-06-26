@@ -103,9 +103,9 @@ def _split_args_kwargs_data_proto_with_auto_padding(chunks, *args, **kwargs):
                 data_proto_len = len(obj)
                 padding_size = (chunks - (data_proto_len % chunks)) if (data_proto_len % chunks > 0) else 0
             else:
-                assert data_proto_len == len(obj), (
-                    f"expecting all arg share same length of {data_proto_len}, but got {len(obj)}"
-                )
+                assert data_proto_len == len(
+                    obj
+                ), f"expecting all arg share same length of {data_proto_len}, but got {len(obj)}"
             obj.padding(padding_size=padding_size)
         return obj.chunk(chunks=chunks)
 
@@ -191,9 +191,9 @@ def dispatch_dp_compute_data_proto_with_func(worker_group, *args, **kwargs):
 def collect_dp_compute_data_proto(worker_group, output):
     from verl.protocol import BatchData
 
-    assert BatchData(output).is_concatable(), (
-        f"expecting concatable output, but got element type {type(output[0]) if output else 'empty'}"
-    )
+    assert BatchData(
+        output
+    ).is_concatable(), f"expecting concatable output, but got element type {type(output[0]) if output else 'empty'}"
 
     output = collect_dp_compute(worker_group, output)
     return _concat_data_proto_or_future(output)
@@ -257,9 +257,9 @@ def collect_nd_compute_dataproto(collect_mask: list[bool], worker_group, output)
 
     from verl.protocol import BatchData
 
-    assert BatchData(output).is_concatable(), (
-        f"expecting concatable output, but got element type {type(output[0]) if output else 'empty'}"
-    )
+    assert BatchData(
+        output
+    ).is_concatable(), f"expecting concatable output, but got element type {type(output[0]) if output else 'empty'}"
     return _concat_data_proto_or_future(output)
 
 
@@ -367,9 +367,9 @@ def get_predefined_execute_fn(execute_mode):
 
 
 def _check_dispatch_mode(dispatch_mode):
-    assert isinstance(dispatch_mode, Dispatch | dict), (
-        f"dispatch_mode must be a Dispatch or a Dict. Got {dispatch_mode}"
-    )
+    assert isinstance(
+        dispatch_mode, Dispatch | dict
+    ), f"dispatch_mode must be a Dispatch or a Dict. Got {dispatch_mode}"
     if isinstance(dispatch_mode, dict):
         necessary_keys = ["dispatch_fn", "collect_fn"]
         for key in necessary_keys:

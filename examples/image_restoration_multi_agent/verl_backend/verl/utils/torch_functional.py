@@ -119,9 +119,9 @@ def logprobs_from_logits_flash_attn(
         AssertionError: If flash-attn version < 2.4.3 (different return format).
     """
     output = cross_entropy_loss(logits, labels, inplace_backward=inplace_backward)
-    assert isinstance(output, tuple), (
-        "please make sure flash-attn>=2.4.3 where cross_entropy_loss returns Tuple[losses, z_losses]."
-    )
+    assert isinstance(
+        output, tuple
+    ), "please make sure flash-attn>=2.4.3 where cross_entropy_loss returns Tuple[losses, z_losses]."
     return -output[0]
 
 
@@ -473,9 +473,9 @@ def allgather_dict_into_dict(data: dict, group=None) -> dict:
 
 
 def split_dict_tensor_into_batches(tensors: TensorDict, batch_size) -> list[TensorDict]:
-    assert tensors.batch_size[0] % batch_size == 0, (
-        f"input data batch size: {tensors.batch_size[0]}, split batch size: {batch_size}"
-    )
+    assert (
+        tensors.batch_size[0] % batch_size == 0
+    ), f"input data batch size: {tensors.batch_size[0]}, split batch size: {batch_size}"
     return tensors.split(batch_size)
 
 
@@ -990,9 +990,9 @@ def expand_as_nested(tensor: torch.Tensor, nested_tensor: torch.Tensor) -> torch
 
     """
     assert nested_tensor.is_nested, "nested_tensor must be nested"
-    assert tensor.shape[0] == nested_tensor.shape[0], (
-        f"The batch shape must be the same. Got {tensor.shape[0]} vs {nested_tensor.shape[0]}"
-    )
+    assert (
+        tensor.shape[0] == nested_tensor.shape[0]
+    ), f"The batch shape must be the same. Got {tensor.shape[0]} vs {nested_tensor.shape[0]}"
     assert len(tensor.shape) == 1, "The ndim of tensor must be 1"
     assert len(nested_tensor.shape) == 2, "The ndim of nested_tensor must be 2"
 

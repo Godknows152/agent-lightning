@@ -69,9 +69,9 @@ def get_model(
         mpu.get_pipeline_model_parallel_world_size() > 1
         and mpu.get_virtual_pipeline_model_parallel_world_size() is not None
     ):
-        assert model_type != ModelType.encoder_and_decoder, (
-            "Interleaved schedule not supported for model with both encoder and decoder"
-        )
+        assert (
+            model_type != ModelType.encoder_and_decoder
+        ), "Interleaved schedule not supported for model with both encoder and decoder"
         model = []
         has_vp_stage = inspect.signature(mpu.is_pipeline_first_stage).parameters.get("vp_stage", None) is not None
         for i in range(mpu.get_virtual_pipeline_model_parallel_world_size()):
@@ -92,9 +92,9 @@ def get_model(
         assert model_type != ModelType.encoder_and_decoder, "Model type encoder_and_decoder is not supported"
         if model_type == ModelType.encoder_and_decoder:
             if mpu.get_pipeline_model_parallel_world_size() > 1:
-                assert mpu.get_pipeline_model_parallel_split_rank() is not None, (
-                    "Split rank needs to be specified for model with both encoder and decoder"
-                )
+                assert (
+                    mpu.get_pipeline_model_parallel_split_rank() is not None
+                ), "Split rank needs to be specified for model with both encoder and decoder"
                 rank = mpu.get_pipeline_model_parallel_rank()
                 split_rank = mpu.get_pipeline_model_parallel_split_rank()
                 world_size = mpu.get_pipeline_model_parallel_world_size()
@@ -969,9 +969,9 @@ def default_tp_concat_fn(
             num_key_value_heads = hf_config.vision_config.num_heads
         assert num_attention_heads % num_key_value_heads == 0
         num_q_per_kv = num_attention_heads // num_key_value_heads
-        assert infer_params[0].shape[0] % (num_q_per_kv + 2) == 0, (
-            f"param '{name}' shape '{infer_params[0].shape}' dim0 is not divisible by {num_q_per_kv + 2}"
-        )
+        assert (
+            infer_params[0].shape[0] % (num_q_per_kv + 2) == 0
+        ), f"param '{name}' shape '{infer_params[0].shape}' dim0 is not divisible by {num_q_per_kv + 2}"
         kv_size_per_tp = infer_params[0].shape[0] // (num_q_per_kv + 2)
         split_size = [kv_size_per_tp * num_q_per_kv, kv_size_per_tp, kv_size_per_tp]
         for infer_param in infer_params:
@@ -1422,9 +1422,9 @@ def dynamic_cp_split_batch(
         # round up to the nearest power of 2, for [1,2,3,4,5,6,7,8] -> [1,2,4,4,8,8,8,8]
         local_cp_size = 1 << (local_cp_size - 1).bit_length()
 
-        assert local_cp_size <= dp_size, (
-            "local_cp_size must be less than or equal to dp_size, try to increase max_seqlen_per_dp_cp_rank"
-        )
+        assert (
+            local_cp_size <= dp_size
+        ), "local_cp_size must be less than or equal to dp_size, try to increase max_seqlen_per_dp_cp_rank"
         if local_cp_size < dp_size:
             # split the batch into local_cp_size sub-batches
             local_dp_rank = dp_rank // local_cp_size

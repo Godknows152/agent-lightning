@@ -201,17 +201,17 @@ class CheckpointHandler:
             return None
         elif resume_mode == "auto":
             if resume_from_path is not None:
-                assert os.path.exists(resume_from_path), (
-                    "resume_from_path must be null or an existing path when resume_mode is 'auto'"
-                )
+                assert os.path.exists(
+                    resume_from_path
+                ), "resume_from_path must be null or an existing path when resume_mode is 'auto'"
                 assert "global_step_" in resume_from_path, "resume_from_path must specify the global_steps"
                 return resume_from_path
             # Try to find the latest checkpoint in the default directory
             return self._find_latest_checkpoint()
         elif resume_mode == "resume_path":
-            assert os.path.exists(resume_from_path), (
-                "resume_from_path must be an existing path when resume_mode is 'resume_path'"
-            )
+            assert os.path.exists(
+                resume_from_path
+            ), "resume_from_path must be an existing path when resume_mode is 'resume_path'"
             assert "global_step_" in resume_from_path, "resume_from_path must specify the global_steps"
             return resume_from_path
         else:

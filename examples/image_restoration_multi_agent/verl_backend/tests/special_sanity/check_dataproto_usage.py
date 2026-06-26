@@ -64,6 +64,6 @@ if __name__ == "__main__":
                 f"{'success' if not find_invalid_device_management else f'failed, because detect {sk}'}."
             )
 
-            assert not find_invalid_device_management, (
-                f"file {path_in_str} contains DataProto usage, please use TensorDict directly!"
-            )
+            assert (
+                not find_invalid_device_management
+            ), f"file {path_in_str} contains DataProto usage, please use TensorDict directly!"

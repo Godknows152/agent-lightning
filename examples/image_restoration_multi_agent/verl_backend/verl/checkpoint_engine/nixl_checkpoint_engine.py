@@ -309,19 +309,19 @@ class NIXLCheckpointEngine(CheckpointEngine):
             next_agent_metadata (NixlAgentMetadata): The metadata of the next nixl agent.
         """
         if rank < 0:
-            assert not prev_agent_metadata and not next_agent_metadata, (
-                f"rank {rank} should not have prev_agent_metadata or next_agent_metadata"
-            )
+            assert (
+                not prev_agent_metadata and not next_agent_metadata
+            ), f"rank {rank} should not have prev_agent_metadata or next_agent_metadata"
         elif rank == 0:
             assert not prev_agent_metadata and next_agent_metadata, f"rank {rank} should have next_agent_metadata"
         elif 0 < rank < world_size - 1:
-            assert prev_agent_metadata and next_agent_metadata, (
-                f"rank {rank} should have prev_agent_metadata and next_agent_metadata"
-            )
+            assert (
+                prev_agent_metadata and next_agent_metadata
+            ), f"rank {rank} should have prev_agent_metadata and next_agent_metadata"
         elif rank == world_size - 1:
-            assert prev_agent_metadata and not next_agent_metadata, (
-                f"rank {rank} should have prev_agent_metadata and not next_agent_metadata"
-            )
+            assert (
+                prev_agent_metadata and not next_agent_metadata
+            ), f"rank {rank} should have prev_agent_metadata and not next_agent_metadata"
 
         self.rank = rank
         self.world_size = world_size
@@ -406,9 +406,9 @@ class NIXLCheckpointEngine(CheckpointEngine):
                 bucket_meta = {}
                 offset = 0
 
-            assert offset + weight.nbytes <= self.bucket_size, (
-                f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
-            )
+            assert (
+                offset + weight.nbytes <= self.bucket_size
+            ), f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
 
             bucket_meta[name] = {
                 "name": name,

@@ -185,9 +185,9 @@ class DiffusionAgentLoopWorker:
         agent_name: str,
         **kwargs,
     ) -> _InternalDiffusionAgentLoopOutput:
-        assert agent_name in _agent_loop_registry, (
-            f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
-        )
+        assert (
+            agent_name in _agent_loop_registry
+        ), f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
 
         agent_loop_config = _agent_loop_registry[agent_name]
         agent_loop = hydra.utils.instantiate(

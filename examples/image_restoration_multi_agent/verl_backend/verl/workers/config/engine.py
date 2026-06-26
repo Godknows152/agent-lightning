@@ -536,9 +536,11 @@ class AutomodelEngineConfig(EngineConfig):
     def __post_init__(self):
         super().__post_init__()
         assert self.strategy == "automodel", f"strategy must be 'automodel', got {self.strategy}"
-        assert self.distributed_strategy in ["fsdp2", "megatron_fsdp", "ddp"], (
-            f"distributed_strategy {self.distributed_strategy} not supported"
-        )
+        assert self.distributed_strategy in [
+            "fsdp2",
+            "megatron_fsdp",
+            "ddp",
+        ], f"distributed_strategy {self.distributed_strategy} not supported"
         assert self.pp_size == 1, "Pipeline parallelism (pp_size > 1) is not yet supported for automodel backend"
 
 

@@ -84,9 +84,9 @@ def update_prometheus_config(config: PrometheusConfig, server_addresses: list[st
         write_tasks = []
         for node in alive_nodes:
             node_ip = node["NodeManagerAddress"]
-            task = write_config_file.options(
-                resources={"node:" + node_ip: 0.001}  # Schedule to specific node
-            ).remote(prometheus_config_json, config.file)
+            task = write_config_file.options(resources={"node:" + node_ip: 0.001}).remote(  # Schedule to specific node
+                prometheus_config_json, config.file
+            )
             write_tasks.append(task)
 
         ray.get(write_tasks)
@@ -98,9 +98,9 @@ def update_prometheus_config(config: PrometheusConfig, server_addresses: list[st
         reload_tasks = []
         for node in alive_nodes:
             node_ip = node["NodeManagerAddress"]
-            task = reload_prometheus.options(
-                resources={"node:" + node_ip: 0.001}  # Schedule to specific node
-            ).remote(config.port)
+            task = reload_prometheus.options(resources={"node:" + node_ip: 0.001}).remote(  # Schedule to specific node
+                config.port
+            )
             reload_tasks.append(task)
 
         ray.get(reload_tasks)

@@ -171,7 +171,9 @@ def _history_feedback_text(state: RestorationTrajectoryState) -> str:
     for step in state.steps:
         evaluation = step.evaluation
         score_text = (
-            f"IQA aggregate_score={evaluation.aggregate_score:.4f}" if evaluation is not None else "IQA score unavailable"
+            f"IQA aggregate_score={evaluation.aggregate_score:.4f}"
+            if evaluation is not None
+            else "IQA score unavailable"
         )
         lines.append(f"Step {step.step_index}: selected action {step.expert_decision.action}; {score_text}.")
     if not lines:

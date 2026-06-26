@@ -107,16 +107,16 @@ def unpad_dataproto(data: "DataProto", pad_size):
 
 def union_tensor_dict(tensor_dict1: TensorDict, tensor_dict2: TensorDict) -> TensorDict:
     """Union two tensordicts."""
-    assert tensor_dict1.batch_size == tensor_dict2.batch_size, (
-        f"Two tensor dict must have identical batch size. Got {tensor_dict1.batch_size} and {tensor_dict2.batch_size}"
-    )
+    assert (
+        tensor_dict1.batch_size == tensor_dict2.batch_size
+    ), f"Two tensor dict must have identical batch size. Got {tensor_dict1.batch_size} and {tensor_dict2.batch_size}"
     for key in tensor_dict2.keys():
         if key not in tensor_dict1.keys():
             tensor_dict1[key] = tensor_dict2[key]
         else:
-            assert tensor_dict1[key].equal(tensor_dict2[key]), (
-                f"{key} in tensor_dict1 and tensor_dict2 are not the same object"
-            )
+            assert tensor_dict1[key].equal(
+                tensor_dict2[key]
+            ), f"{key} in tensor_dict1 and tensor_dict2 are not the same object"
 
     return tensor_dict1
 
@@ -190,9 +190,9 @@ def union_numpy_dict(tensor_dict1: dict[str, np.ndarray], tensor_dict2: dict[str
             assert isinstance(tensor_dict2[key], np.ndarray)
             assert isinstance(tensor_dict1[key], np.ndarray)
             # to properly deal with nan and object type
-            assert _deep_equal(tensor_dict1[key], tensor_dict2[key], visited=set()), (
-                f"`{key}` in tensor_dict1 and tensor_dict2 are not the same object."
-            )
+            assert _deep_equal(
+                tensor_dict1[key], tensor_dict2[key], visited=set()
+            ), f"`{key}` in tensor_dict1 and tensor_dict2 are not the same object."
         tensor_dict1[key] = val
 
     return tensor_dict1
@@ -473,9 +473,9 @@ class DataProto:
                     f"data in the non_tensor_batch must be a numpy.array with dtype=object, but for "
                     f"{key=}, got {type(val)=}"
                 )
-                assert val.shape[0] == batch_size, (
-                    f"key {key} length {len(val)} is not equal to batch size {batch_size}"
-                )
+                assert (
+                    val.shape[0] == batch_size
+                ), f"key {key} length {len(val)} is not equal to batch size {batch_size}"
 
     @classmethod
     def from_single_dict(cls, data: dict[str, torch.Tensor | np.ndarray], meta_info=None, auto_padding=False):
@@ -554,9 +554,9 @@ class DataProto:
         1. All the tensor in tensor_dict have the same dim0
         2. Only dim0 is the batch dim
         """
-        assert version.parse(tensordict.__version__) >= version.parse("0.10.0"), (
-            "Build DataProto from TensorDict at least requires tensordict version 0.10.0"
-        )
+        assert version.parse(tensordict.__version__) >= version.parse(
+            "0.10.0"
+        ), "Build DataProto from TensorDict at least requires tensordict version 0.10.0"
         from tensordict import NonTensorData, NonTensorStack
 
         assert num_batch_dims > 0, "num_batch_dims must be greater than zero"
@@ -872,9 +872,9 @@ class DataProto:
             List[DataProto]: a list of DataProto after splitting
         """
         if not self.is_padding_enabled():
-            assert len(self) % chunks == 0, (
-                f"only support equal chunk. Got size of DataProto {len(self)} and chunk {chunks}."
-            )
+            assert (
+                len(self) % chunks == 0
+            ), f"only support equal chunk. Got size of DataProto {len(self)} and chunk {chunks}."
 
         bsz_in_batch = None
         if self.batch is not None:
@@ -1071,9 +1071,9 @@ class DataProto:
             assert len(repeat_times.shape) == 1
             repeat_times = repeat_times.tolist()
         else:
-            assert isinstance(repeat_times, list), (
-                f"repeat_times type must be in [list, torch.Tensor, np.ndarray, tuple], got {type(repeat_times)}"
-            )
+            assert isinstance(
+                repeat_times, list
+            ), f"repeat_times type must be in [list, torch.Tensor, np.ndarray, tuple], got {type(repeat_times)}"
         repeat_times = torch.tensor(repeat_times)
 
         if self.batch is not None:
@@ -1106,9 +1106,9 @@ class DataProto:
         Returns:
 
         """
-        assert parse_version(tensordict.__version__) >= parse_version("0.10"), (
-            "Convert DataProto to TensorDict at least requires tensordict version 0.10"
-        )
+        assert parse_version(tensordict.__version__) >= parse_version(
+            "0.10"
+        ), "Convert DataProto to TensorDict at least requires tensordict version 0.10"
         tensor_batch = self.batch.to_dict()
         non_tensor_batch = self.non_tensor_batch
 

@@ -152,9 +152,9 @@ def test_hf_rollout(n: int = 1, do_sample: bool = True, validate: bool = False):
             first_eos_pos = eos_positions[0].item()
             assert response_attention[: first_eos_pos + 1].all(), "Response attention mask should be 1 until EOS"
             if first_eos_pos + 1 < response_length:
-                assert not response_attention[first_eos_pos + 1 :].any(), (
-                    "Response attention mask should be 0 after EOS"
-                )
+                assert not response_attention[
+                    first_eos_pos + 1 :
+                ].any(), "Response attention mask should be 0 after EOS"
         else:
             assert response_attention.all(), "Response attention mask should be all 1 if no EOS token"
 

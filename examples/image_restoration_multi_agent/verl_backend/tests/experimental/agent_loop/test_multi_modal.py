@@ -235,9 +235,9 @@ def test_multimodal_tool_agent(init_config):
             assert num_turns[i] == 2, f"Expected 2 turns but got {num_turns[i]} for sample {i}"
         elif i // n == 1:
             # TODO: prompt with video not generate tool call as expected
-            assert num_turns[i] == 2 or num_turns[i] == 4, (
-                f"Expected 2 or 4 turns but got {num_turns[i]} for sample {i}"
-            )
+            assert (
+                num_turns[i] == 2 or num_turns[i] == 4
+            ), f"Expected 2 or 4 turns but got {num_turns[i]} for sample {i}"
         else:
             # Tool-calling prompts should have 4 turns [user, assistant, tool, assistant]
             assert num_turns[i] == 4, f"Expected 4 turns but got {num_turns[i]} for sample {i}"
@@ -263,12 +263,12 @@ def test_multimodal_tool_agent(init_config):
         response_without_obs = tokenizer.decode(valid_tokens)
 
         # Check that tool responses were properly masked out from training
-        assert "<tool_response>" not in response_without_obs, (
-            f"found <tool_response> in response: {response_without_obs}"
-        )
-        assert "</tool_response>" not in response_without_obs, (
-            f"found </tool_response> in response: {response_without_obs}"
-        )
+        assert (
+            "<tool_response>" not in response_without_obs
+        ), f"found <tool_response> in response: {response_without_obs}"
+        assert (
+            "</tool_response>" not in response_without_obs
+        ), f"found </tool_response> in response: {response_without_obs}"
 
         # Check that images were included in the full response
         if "<image>" in response_with_obs or "image" in response_with_obs.lower():
@@ -286,9 +286,9 @@ def test_multimodal_tool_agent(init_config):
     # We should have at least some image content from the tool-calling prompts
     # Note: First prompt might not use tools, so we don't expect 100% image content
     expected_tool_calls = sum(1 for i in range(len(num_turns)) if num_turns[i] == 4)
-    assert image_found_count >= 0, (
-        f"No image-related content found, but expected at least some from {expected_tool_calls} tool calls"
-    )
+    assert (
+        image_found_count >= 0
+    ), f"No image-related content found, but expected at least some from {expected_tool_calls} tool calls"
 
     print("Multimodal tool test passed!")
     ray.shutdown()

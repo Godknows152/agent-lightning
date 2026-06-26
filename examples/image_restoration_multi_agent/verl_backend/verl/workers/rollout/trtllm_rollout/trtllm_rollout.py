@@ -490,9 +490,9 @@ class ServerAdapter(BaseRollout):
                 if size_in_bytes > cur_available_bytes:
                     await flush()
 
-                assert cur_available_bytes >= size_in_bytes, (
-                    f"cur_available_bytes: {cur_available_bytes:,} size_in_bytes: {size_in_bytes:,} name: {name}"
-                )
+                assert (
+                    cur_available_bytes >= size_in_bytes
+                ), f"cur_available_bytes: {cur_available_bytes:,} size_in_bytes: {size_in_bytes:,} name: {name}"
                 cur_available_bytes -= size_in_bytes
 
             handle = reduce_tensor(param.detach())

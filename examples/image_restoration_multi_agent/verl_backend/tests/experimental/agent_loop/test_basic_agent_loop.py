@@ -285,12 +285,12 @@ def test_tool_agent(init_config):
         valid_tokens = responses[i][response_mask[i].bool()]
         response_without_obs = tokenizer.decode(valid_tokens)
 
-        assert "<tool_response>" not in response_without_obs, (
-            f"found <tool_response> in response: {response_without_obs}"
-        )
-        assert "</tool_response>" not in response_without_obs, (
-            f"found </tool_response> in response: {response_without_obs}"
-        )
+        assert (
+            "<tool_response>" not in response_without_obs
+        ), f"found <tool_response> in response: {response_without_obs}"
+        assert (
+            "</tool_response>" not in response_without_obs
+        ), f"found </tool_response> in response: {response_without_obs}"
         print("=========================")
         print(response_with_obs)
         print("---")

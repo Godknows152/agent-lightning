@@ -13,6 +13,7 @@
 3. 保存前先备份原文件 (.bak)
 4. 打印修正前后的标签分布
 """
+
 import os
 import shutil
 from collections import Counter
@@ -21,29 +22,29 @@ import pandas as pd
 
 # 修正后的关键词映射（fog/snow 在 rain 兜底之前）
 _DEGRADATION_KEYWORDS = {
-    'night':       ['night', 'dark', 'low_light', 'lowlight', 'lol'],
-    'rain_drop':   ['rain_drop', 'raindrop'],
-    'rain_streak': ['rain_streak', 'rainstreak', 'streak'],
-    'rain_drive':  ['rain_drive', 'driving', 'drive'],
-    'snow':        ['snow'],
-    'fog':         ['fog', 'haze', 'hazy'],
-    'rain':        ['rain_series', '/rain/'],   # 避免误匹配 /train/
+    "night": ["night", "dark", "low_light", "lowlight", "lol"],
+    "rain_drop": ["rain_drop", "raindrop"],
+    "rain_streak": ["rain_streak", "rainstreak", "streak"],
+    "rain_drive": ["rain_drive", "driving", "drive"],
+    "snow": ["snow"],
+    "fog": ["fog", "haze", "hazy"],
+    "rain": ["rain_series", "/rain/"],  # 避免误匹配 /train/
 }
 
 
 def detect_degradation_type(image_path: str) -> str:
     if not image_path:
-        return 'unknown'
+        return "unknown"
     p = image_path.lower()
     for deg_type, keywords in _DEGRADATION_KEYWORDS.items():
         if any(kw in p for kw in keywords):
-            return 'rain_streak' if deg_type == 'rain' else deg_type
-    return 'unknown'
+            return "rain_streak" if deg_type == "rain" else deg_type
+    return "unknown"
 
 
 def fix_parquet(path: str) -> None:
     # 备份
-    bak = path + '.bak'
+    bak = path + ".bak"
     if not os.path.exists(bak):
         shutil.copy2(path, bak)
         print(f"  Backed up -> {bak}")
@@ -51,46 +52,46 @@ def fix_parquet(path: str) -> None:
         print(f"  Backup already exists: {bak}")
 
     df = pd.read_parquet(path)
-    before = Counter(row.get('degradation_type', 'MISSING') for row in df['extra_info'])
+    before = Counter(row.get("degradation_type", "MISSING") for row in df["extra_info"])
 
     fixed_extra_info = []
     fixed_reward_model = []
     fix_count = 0
 
     for _, row in df.iterrows():
-        ei = dict(row['extra_info'])
-        rm = dict(row['reward_model'])
+        ei = dict(row["extra_info"])
+        rm = dict(row["reward_model"])
 
-        image_path = ei.get('image_path', '')
+        image_path = ei.get("image_path", "")
         new_type = detect_degradation_type(image_path)
-        old_type = ei.get('degradation_type', '')
+        old_type = ei.get("degradation_type", "")
 
         if old_type != new_type:
             fix_count += 1
 
         # 更新 extra_info
-        ei['degradation_type'] = new_type
-        tools_kwargs = ei.get('tools_kwargs', {})
-        restore = tools_kwargs.get('restore_image', {})
-        create_kwargs = restore.get('create_kwargs', {})
-        create_kwargs['degradation_type'] = new_type
-        restore['create_kwargs'] = create_kwargs
-        tools_kwargs['restore_image'] = restore
-        ei['tools_kwargs'] = tools_kwargs
+        ei["degradation_type"] = new_type
+        tools_kwargs = ei.get("tools_kwargs", {})
+        restore = tools_kwargs.get("restore_image", {})
+        create_kwargs = restore.get("create_kwargs", {})
+        create_kwargs["degradation_type"] = new_type
+        restore["create_kwargs"] = create_kwargs
+        tools_kwargs["restore_image"] = restore
+        ei["tools_kwargs"] = tools_kwargs
 
         # 更新 reward_model.ground_truth
-        gt = rm.get('ground_truth', {})
+        gt = rm.get("ground_truth", {})
         if isinstance(gt, dict):
-            gt['degradation_type'] = new_type
-            rm['ground_truth'] = gt
+            gt["degradation_type"] = new_type
+            rm["ground_truth"] = gt
 
         fixed_extra_info.append(ei)
         fixed_reward_model.append(rm)
 
-    df['extra_info'] = fixed_extra_info
-    df['reward_model'] = fixed_reward_model
+    df["extra_info"] = fixed_extra_info
+    df["reward_model"] = fixed_reward_model
 
-    after = Counter(row.get('degradation_type', 'MISSING') for row in df['extra_info'])
+    after = Counter(row.get("degradation_type", "MISSING") for row in df["extra_info"])
 
     df.to_parquet(path, index=False)
 
@@ -99,9 +100,9 @@ def fix_parquet(path: str) -> None:
     print(f"  After : {dict(after)}")
 
 
-if __name__ == '__main__':
-    base = '/home/LXJ/Python_Projects/verl/data/restoration'
-    for name in ('train.parquet', 'test.parquet'):
+if __name__ == "__main__":
+    base = "/home/LXJ/Python_Projects/verl/data/restoration"
+    for name in ("train.parquet", "test.parquet"):
         print(f"\n{'='*60}")
         fix_parquet(os.path.join(base, name))
-    print('\nDone.')
+    print("\nDone.")

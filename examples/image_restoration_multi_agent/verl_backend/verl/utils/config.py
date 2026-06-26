@@ -183,9 +183,9 @@ def validate_config(
 
     # check eval config
     if config.actor_rollout_ref.rollout.val_kwargs.do_sample:
-        assert config.actor_rollout_ref.rollout.temperature > 0, (
-            "validation gen temperature should be greater than 0 when enabling do_sample"
-        )
+        assert (
+            config.actor_rollout_ref.rollout.temperature > 0
+        ), "validation gen temperature should be greater than 0 when enabling do_sample"
 
     # check LoRA rank in vLLM
     lora_config = config.actor_rollout_ref.model.get("lora", {})

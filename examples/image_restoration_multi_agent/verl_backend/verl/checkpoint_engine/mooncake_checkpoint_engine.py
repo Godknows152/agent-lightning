@@ -187,9 +187,9 @@ class MooncakeCheckpointEngine(CheckpointEngine):
                     await self.wait_for_complete(current)
                 should_wait = True
 
-            assert offset + weight.nbytes <= self.bucket_size, (
-                f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
-            )
+            assert (
+                offset + weight.nbytes <= self.bucket_size
+            ), f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
 
             bucket_meta[name] = {
                 "name": name,

@@ -47,9 +47,9 @@ class TorchProfilerToolConfig(BaseConfig):
         """config validation logics go here"""
         __support_contents = ["cuda", "cpu", "memory", "shapes", "stack"]
         for content in self.contents:
-            assert content in __support_contents, (
-                f"Profiler contents only supports {__support_contents}, but gets {content}"
-            )
+            assert (
+                content in __support_contents
+            ), f"Profiler contents only supports {__support_contents}, but gets {content}"
         assert isinstance(self.contents, list), f"Profiler contents must be of type list, got {type(self.contents)}"
 
 
@@ -68,13 +68,13 @@ class TorchMemoryToolConfig(BaseConfig):
 
     def __post_init__(self) -> None:
         """config validation logics go here"""
-        assert isinstance(self.trace_alloc_max_entries, int), (
-            f"trace_alloc_max_entries must be int, got {type(self.trace_alloc_max_entries)}"
-        )
+        assert isinstance(
+            self.trace_alloc_max_entries, int
+        ), f"trace_alloc_max_entries must be int, got {type(self.trace_alloc_max_entries)}"
         assert isinstance(self.stack_depth, int), f"stack_depth must be int, got {type(self.stack_depth)}"
-        assert self.trace_alloc_max_entries > 0, (
-            f"trace_alloc_max_entries must be positive, got {self.trace_alloc_max_entries}"
-        )
+        assert (
+            self.trace_alloc_max_entries > 0
+        ), f"trace_alloc_max_entries must be positive, got {self.trace_alloc_max_entries}"
         assert self.stack_depth > 0, f"stack_depth must be positive, got {self.stack_depth}"
 
 
@@ -124,12 +124,20 @@ class NPUToolConfig(NsightToolConfig):
         assert isinstance(self.level, str), f"Profiler level must be of type str, got {type(self.level)}"
         assert isinstance(self.analysis, bool), f"Profiler analysis must be of type bool, got {type(self.analysis)}"
         for content in self.contents:
-            assert content in ["npu", "cpu", "memory", "shapes", "module", "stack"], (
-                f"Profiler contents only supports npu, cpu, memory, shapes, module, stack, but gets {content}"
-            )
-        assert self.level in ["level_none", "level0", "level1", "level2"], (
-            f"Profiler level only supports level0, 1, 2, and level_none, but gets {self.level}"
-        )
+            assert content in [
+                "npu",
+                "cpu",
+                "memory",
+                "shapes",
+                "module",
+                "stack",
+            ], f"Profiler contents only supports npu, cpu, memory, shapes, module, stack, but gets {content}"
+        assert self.level in [
+            "level_none",
+            "level0",
+            "level1",
+            "level2",
+        ], f"Profiler level only supports level0, 1, 2, and level_none, but gets {self.level}"
 
 
 @dataclass
@@ -167,9 +175,9 @@ class ProfilerConfig(BaseConfig):
         )
 
     def intersect(self, other: "ProfilerConfig") -> "ProfilerConfig":
-        assert self.tool == other.tool, (
-            f"Cannot intersect ProfilerConfig with different tools: {self.tool} vs {other.tool}"
-        )
+        assert (
+            self.tool == other.tool
+        ), f"Cannot intersect ProfilerConfig with different tools: {self.tool} vs {other.tool}"
         return ProfilerConfig(
             tool=self.tool,
             enable=self.enable and other.enable,
@@ -182,9 +190,9 @@ class ProfilerConfig(BaseConfig):
 
     def __post_init__(self) -> None:
         """config validation logics go here"""
-        assert isinstance(self.ranks, set | list | tuple), (
-            f"Profiler ranks must be of type list, got {type(self.ranks)}"
-        )
+        assert isinstance(
+            self.ranks, set | list | tuple
+        ), f"Profiler ranks must be of type list, got {type(self.ranks)}"
 
 
 def build_vllm_profiler_args(profiler_config: ProfilerConfig, tool_config: BaseConfig, rank: int) -> dict:

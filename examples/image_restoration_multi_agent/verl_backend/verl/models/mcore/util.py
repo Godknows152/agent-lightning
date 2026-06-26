@@ -668,9 +668,9 @@ def postprocess_bshd_engine(
         attention_mask = attention_mask.diagonal(dim1=-2, dim2=-1).squeeze(1)
         attention_mask = ~attention_mask.bool()
 
-    assert output.shape[:2] == attention_mask.shape, (
-        f"output.shape: {output.shape}, attention_mask.shape: {attention_mask.shape}"
-    )
+    assert (
+        output.shape[:2] == attention_mask.shape
+    ), f"output.shape: {output.shape}, attention_mask.shape: {attention_mask.shape}"
 
     cp_size = mpu.get_context_parallel_world_size()
     cp_rank = mpu.get_context_parallel_rank()

@@ -631,9 +631,11 @@ def layered_summon_lora_params(fsdp_module, is_diffusers=False) -> OrderedDict:
                 with FSDP.summon_full_params(submodule, writeback=False):
                     sub_lora_params = get_peft_model_state_dict(peft_model, state_dict=submodule.state_dict())
                     sub_lora_params = {
-                        f"{prefix}.{name}": param.full_tensor().detach().cpu()
-                        if hasattr(param, "full_tensor")
-                        else param.detach().cpu()
+                        f"{prefix}.{name}": (
+                            param.full_tensor().detach().cpu()
+                            if hasattr(param, "full_tensor")
+                            else param.detach().cpu()
+                        )
                         for name, param in sub_lora_params.items()
                     }
                     lora_params.update(sub_lora_params)
@@ -666,9 +668,11 @@ def collect_lora_params(
                 if base_sync_done:
                     lora_params = get_peft_model_state_dict(peft_model)
                     lora_params = {
-                        name: param.full_tensor().detach().cpu()
-                        if hasattr(param, "full_tensor")
-                        else param.detach().cpu()
+                        name: (
+                            param.full_tensor().detach().cpu()
+                            if hasattr(param, "full_tensor")
+                            else param.detach().cpu()
+                        )
                         for name, param in lora_params.items()
                     }
                 else:
@@ -1079,9 +1083,9 @@ def fsdp2_sharded_load_from_cpu(
             current_device_mesh = param._spec.device_mesh
             break
     assert current_device_mesh is not None, "DTensor parameters not initialized in the model to be loaded"
-    assert current_device_mesh == target_spec.device_mesh, (
-        f"device_mesh mismatch during loading! Original: {target_spec.device_mesh}, Current: {current_device_mesh}"
-    )
+    assert (
+        current_device_mesh == target_spec.device_mesh
+    ), f"device_mesh mismatch during loading! Original: {target_spec.device_mesh}, Current: {current_device_mesh}"
 
     for param_name, param in model.named_parameters():
         # Skip parameters not in the saved state (e.g., newly added parameters)
@@ -1095,9 +1099,9 @@ def fsdp2_sharded_load_from_cpu(
         if isinstance(param, DTensor):
             # 1. Verify sharding rule consistency (placements must match original Spec)
             assert saved_spec is not None, f"DTensorSpec missing in saved state for parameter {param_name}"
-            assert saved_spec.placements == target_spec.placements, (
-                f"Sharding strategy mismatch for parameter {param_name} (conflicts with global rules)!"
-            )
+            assert (
+                saved_spec.placements == target_spec.placements
+            ), f"Sharding strategy mismatch for parameter {param_name} (conflicts with global rules)!"
 
             # 2. Move CPU shard data to the current GPU (device of param._local_tensor)
             target_device = param._local_tensor.device

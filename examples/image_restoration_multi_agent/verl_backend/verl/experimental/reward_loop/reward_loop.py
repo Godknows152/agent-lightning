@@ -278,9 +278,9 @@ class RewardLoopWorker:
             }
             output = await self._post_request(payloads, "v1/completions")
             rm_score = output["choices"][0]["context_logits"]
-            assert isinstance(rm_score, list) and len(rm_score) > 0, (
-                "TensorRT-LLM OpenAI server response for reward score is not in the expected format."
-            )
+            assert (
+                isinstance(rm_score, list) and len(rm_score) > 0
+            ), "TensorRT-LLM OpenAI server response for reward score is not in the expected format."
 
             rm_score = float(rm_score[0][0])
             logger.debug(f"rm score: {rm_score}")

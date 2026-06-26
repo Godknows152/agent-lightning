@@ -178,9 +178,9 @@ def apply_ep_gather_patch():
             )
             for i in range(self.ep_size)
         ]
-        assert str(hf_param_name) in gathered_expert_param_names, (
-            f"hf_param_name {hf_param_name} not in {gathered_expert_param_names}"
-        )
+        assert (
+            str(hf_param_name) in gathered_expert_param_names
+        ), f"hf_param_name {hf_param_name} not in {gathered_expert_param_names}"
 
         gathered_weights = [torch.empty_like(megatron_weights) for _ in range(self.ep_size)]
         torch.distributed.all_gather(gathered_weights, megatron_weights, group=self.ep_group)

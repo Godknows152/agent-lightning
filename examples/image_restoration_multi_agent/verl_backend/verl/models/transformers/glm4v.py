@@ -305,9 +305,9 @@ def glm4v_attn_forward(
         mrope_section = self.rope_scaling.get("mrope_section", None)
     else:
         # for transformers >= 5.0.0, only rope_parameters present in the config
-        assert getattr(self, "rope_parameter", None) is not None, (
-            "Either rope_scaling or rope_parameter should be defined in the config for GLM4V."
-        )
+        assert (
+            getattr(self, "rope_parameter", None) is not None
+        ), "Either rope_scaling or rope_parameter should be defined in the config for GLM4V."
         mrope_section = self.rope_parameter.get("mrope_section", None)
     query_states, key_states = apply_multimodal_rotary_pos_emb(query_states, key_states, cos, sin, mrope_section)
     key_states = repeat_kv(key_states, self.num_key_value_groups)

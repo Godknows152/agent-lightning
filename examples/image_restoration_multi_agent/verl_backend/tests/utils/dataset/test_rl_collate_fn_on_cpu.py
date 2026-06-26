@@ -64,9 +64,9 @@ def test_rl_collate_fn():
     }
 
     for key, dtype in expected_types.items():
-        assert batch[key].shape == (batch_size,), (
-            f"Expected shape {(batch_size,)} for '{key}', but got {batch[key].shape}"
-        )
-        assert isinstance(batch[key][0], dtype), (
-            f"'{key}' should contain elements of type {dtype}, but got {type(batch[key][0])}"
-        )
+        assert batch[key].shape == (
+            batch_size,
+        ), f"Expected shape {(batch_size,)} for '{key}', but got {batch[key].shape}"
+        assert isinstance(
+            batch[key][0], dtype
+        ), f"'{key}' should contain elements of type {dtype}, but got {type(batch[key][0])}"

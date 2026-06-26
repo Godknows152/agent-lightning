@@ -5,13 +5,13 @@ import time
 import torch
 
 # Add path to import RIDCP
-sys.path.append(os.path.join(os.getcwd(), 'restoration_tools'))
+sys.path.append(os.path.join(os.getcwd(), "restoration_tools"))
 
 try:
     from agent_tools.RIDCP.inference_ridcp import load_ridcp_model, ridcp_predict
 
-    img_path = '/home/LXJ/Python_Projects/AIA_Restore/原始数据/train/fog_series/fog/000013.png'
-    device = 'cuda:0'
+    img_path = "/home/LXJ/Python_Projects/AIA_Restore/原始数据/train/fog_series/fog/000013.png"
+    device = "cuda:0"
 
     print(f"Starting load_ridcp_model to {device}...")
     start_load = time.time()
@@ -30,4 +30,5 @@ try:
 except Exception as e:
     print(f"Error: {e}")
     import traceback
+
     traceback.print_exc()

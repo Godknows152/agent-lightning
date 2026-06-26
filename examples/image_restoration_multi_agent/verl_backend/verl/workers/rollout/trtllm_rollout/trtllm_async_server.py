@@ -173,14 +173,16 @@ class TRTLLMHttpServer:
             "placement_groups": self.pgs,
             "placement_bundle_indices": self.bundle_indices,
             "per_worker_gpu_share": per_worker_gpu_share,
-            "sleep_config": SleepConfig(
-                restore_modes={
-                    ExecutorMemoryType.MODEL_WEIGHTS_MAIN: "NONE",
-                    ExecutorMemoryType.KV_CACHE: "NONE",
-                }
-            )
-            if self.config.enable_sleep_mode and SleepConfig is not None
-            else None,
+            "sleep_config": (
+                SleepConfig(
+                    restore_modes={
+                        ExecutorMemoryType.MODEL_WEIGHTS_MAIN: "NONE",
+                        ExecutorMemoryType.KV_CACHE: "NONE",
+                    }
+                )
+                if self.config.enable_sleep_mode and SleepConfig is not None
+                else None
+            ),
             "allreduce_strategy": "NCCL",
             "sampler_type": "TRTLLMSampler",
             **engine_kwargs,
@@ -361,9 +363,9 @@ class TRTLLMReplica(RolloutReplica):
 
         # For SubRayResourcePool, the replica is assigned sub pool specific for this replica.
         if isinstance(self.resource_pool, SubRayResourcePool):
-            assert self.resource_pool.subgroup_world_size == self.world_size, (
-                "Subgroup world size must be equal to world size"
-            )
+            assert (
+                self.resource_pool.subgroup_world_size == self.world_size
+            ), "Subgroup world size must be equal to world size"
             local_bundle_index = self.resource_pool.start_bundle_index
         # For RayResourcePool, the replica is assigned to entire resource pool.
         # We need to find start pg index and local bundle index based on replica rank.

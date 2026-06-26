@@ -40,9 +40,9 @@ def _megatron_calc_global_rank(
 
     # Verify total GPU count matches (must be consistent with parallel_state.py)
     total_size = tp_size * dp_size * pp_size * cp_size
-    assert total_size == torch.distributed.get_world_size(), (
-        f"{tp_size}x{dp_size}x{pp_size}x{cp_size} != {torch.distributed.get_world_size()}"
-    )
+    assert (
+        total_size == torch.distributed.get_world_size()
+    ), f"{tp_size}x{dp_size}x{pp_size}x{cp_size} != {torch.distributed.get_world_size()}"
 
     # Core calculation logic (corresponds to RankGenerator order parameter)
     # Assumes default order is "tp-cp-ep-dp-pp"
@@ -122,10 +122,10 @@ def merge_megatron_ckpt_gptmodel(wrapped_models, config, dtype, is_value_model=F
 
     for i, wrapped_model in enumerate(wrapped_models):
         models[i] = unwrap_model(wrapped_model, (torchDDP, LocalDDP, Float16Module))
-        assert len(models[i].decoder.layers) == num_layers_per_model, (
-            "len model layers {} not equal to num_layers_per_model {}".format(
-                len(models[i].decoder.layers), num_layers_per_model
-            )
+        assert (
+            len(models[i].decoder.layers) == num_layers_per_model
+        ), "len model layers {} not equal to num_layers_per_model {}".format(
+            len(models[i].decoder.layers), num_layers_per_model
         )
 
     state_dict = dict()

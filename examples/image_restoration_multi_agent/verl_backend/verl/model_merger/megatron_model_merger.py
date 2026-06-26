@@ -332,9 +332,9 @@ class MegatronModelMerger(BaseModelMerger):
             q_lst, k_lst, v_lst = [], [], []
             assert config.num_attention_heads % config.num_key_value_heads == 0
             num_q_per_kv = config.num_attention_heads // config.num_key_value_heads
-            assert tensor.shape[0] % (num_q_per_kv + 2) == 0, (
-                f"Tensor shape {tensor.shape} is not divisible by {num_q_per_kv + 2}"
-            )
+            assert (
+                tensor.shape[0] % (num_q_per_kv + 2) == 0
+            ), f"Tensor shape {tensor.shape} is not divisible by {num_q_per_kv + 2}"
             kv_size = tensor.shape[0] // (num_q_per_kv + 2)
             split_size = [kv_size * num_q_per_kv, kv_size, kv_size]
 
@@ -439,9 +439,9 @@ class MegatronModelMerger(BaseModelMerger):
         keys_chunk = np.array_split(np.array(keys), layer_this_rank * saves_per_layer)
         numel = 0
 
-        assert len(keys_chunk) == layer_this_rank * saves_per_layer, (
-            f"Expected {len(keys_chunk)} chunks, but got {layer_this_rank * saves_per_layer} for rank {self.rank}."
-        )
+        assert (
+            len(keys_chunk) == layer_this_rank * saves_per_layer
+        ), f"Expected {len(keys_chunk)} chunks, but got {layer_this_rank * saves_per_layer} for rank {self.rank}."
 
         # save to model shards manually
         target_dir = Path(self.config.target_dir)

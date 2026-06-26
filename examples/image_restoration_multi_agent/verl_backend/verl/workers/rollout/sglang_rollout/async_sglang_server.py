@@ -160,9 +160,9 @@ class SGLangHttpServer:
         quantization = self.config.get("quantization", None)
         if quantization is not None:
             if quantization == "fp8":
-                assert version.parse(sglang.__version__) >= version.parse("0.5.5"), (
-                    "sglang>=0.5.5 is required for FP8 quantization"
-                )
+                assert version.parse(sglang.__version__) >= version.parse(
+                    "0.5.5"
+                ), "sglang>=0.5.5 is required for FP8 quantization"
                 FP8_BLOCK_QUANT_KWARGS = {
                     "activation_scheme": "dynamic",
                     "fmt": "e4m3",
@@ -195,9 +195,9 @@ class SGLangHttpServer:
             "skip_tokenizer_init": self.config.skip_tokenizer_init,
             "skip_server_warmup": True,
             "quantization": quantization,
-            "json_model_override_args": json.dumps({"quantization_config": fp8_block_quant_kwargs})
-            if quantization == "fp8"
-            else json.dumps({}),
+            "json_model_override_args": (
+                json.dumps({"quantization_config": fp8_block_quant_kwargs}) if quantization == "fp8" else json.dumps({})
+            ),
             **engine_kwargs,
         }
 
@@ -403,9 +403,9 @@ class SGLangHttpServer:
         # Clamp max_new_tokens to the valid range [0, max_possible_tokens]
         max_new_tokens = max(0, min(max_new_tokens, max_possible_tokens))
 
-        assert max_new_tokens <= max_possible_tokens, (
-            f"max_new_tokens {max_new_tokens} exceeds available context space {max_possible_tokens}"
-        )
+        assert (
+            max_new_tokens <= max_possible_tokens
+        ), f"max_new_tokens {max_new_tokens} exceeds available context space {max_possible_tokens}"
         sampling_params = apply_multimodal_generation_token_bias(
             sampling_params=sampling_params,
             processor=self.model_config.processor,
@@ -529,9 +529,9 @@ class SGLangReplica(RolloutReplica):
 
     async def launch_servers(self):
         """Launch http server in each node."""
-        assert len(self.workers) == self.world_size, (
-            f"worker number {len(self.workers)} not equal to world size {self.world_size}"
-        )
+        assert (
+            len(self.workers) == self.world_size
+        ), f"worker number {len(self.workers)} not equal to world size {self.world_size}"
 
         # get (node_id, CUDA_VISIBLE_DEVICES) of all workers
         worker_infos = await asyncio.gather(

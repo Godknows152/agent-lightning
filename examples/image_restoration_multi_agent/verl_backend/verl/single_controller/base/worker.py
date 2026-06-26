@@ -153,12 +153,12 @@ class Worker(WorkerHelper):
             collect_dp_rank (dict[str, bool]):
                 A dictionary mapping mesh names to whether they are used for collect.
         """
-        assert mesh_name not in self.__dispatch_dp_rank, (
-            f"{mesh_name} is already registered, {self.__dispatch_dp_rank.keys()}"
-        )
-        assert mesh_name not in self.__collect_dp_rank, (
-            f"{mesh_name} is already registered, {self.__collect_dp_rank.keys()}"
-        )
+        assert (
+            mesh_name not in self.__dispatch_dp_rank
+        ), f"{mesh_name} is already registered, {self.__dispatch_dp_rank.keys()}"
+        assert (
+            mesh_name not in self.__collect_dp_rank
+        ), f"{mesh_name} is already registered, {self.__collect_dp_rank.keys()}"
         for dp_rank in dispatch_dp_rank.values():
             self.__dispatch_dp_rank[mesh_name] = dp_rank
         for is_collect in collect_dp_rank.values():

@@ -534,11 +534,11 @@ def apply_patch_megatron_recomputation_backward():
         torch.autograd.backward(outputs, args)
         # Clone grads to return
         grads = tuple(
-            inp.grad.clone()
-            if isinstance(inp, torch.Tensor) and inp.grad is not None
-            else inp.grad
-            if isinstance(inp, torch.Tensor)
-            else inp
+            (
+                inp.grad.clone()
+                if isinstance(inp, torch.Tensor) and inp.grad is not None
+                else inp.grad if isinstance(inp, torch.Tensor) else inp
+            )
             for inp in detached_inputs
         )
         cur_stream = torch.cuda.current_stream()

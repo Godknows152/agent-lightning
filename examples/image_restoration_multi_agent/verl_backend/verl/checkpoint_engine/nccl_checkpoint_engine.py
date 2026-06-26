@@ -209,9 +209,9 @@ class NCCLCheckpointEngine(CheckpointEngine):
             self.world_size = world_size
         else:
             assert self.rank == rank, f"rank {rank} is not equal to self.rank {self.rank}"
-            assert self.world_size == world_size, (
-                f"world_size {world_size} is not equal to self.world_size {self.world_size}"
-            )
+            assert (
+                self.world_size == world_size
+            ), f"world_size {world_size} is not equal to self.world_size {self.world_size}"
 
         if self.rank > 0:
             self._connect_zmq_client(master_metadata)
@@ -263,9 +263,9 @@ class NCCLCheckpointEngine(CheckpointEngine):
                 bucket_meta = {}
                 offset = 0
 
-            assert offset + weight.nbytes <= self.bucket_size, (
-                f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
-            )
+            assert (
+                offset + weight.nbytes <= self.bucket_size
+            ), f"Weight {name}({weight.shape}, {weight.dtype}) is too large to fit in the bucket."
 
             bucket_meta[name] = {
                 "name": name,

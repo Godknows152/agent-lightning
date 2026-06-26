@@ -424,9 +424,9 @@ def _worker(rank: int, world_size: int, rendezvous_file: str, strategy: str, mod
     # load ground truth and compare
     for key, value in per_tensor_params:
         assert key in ref_state_dict, f"{key} not in ref_state_dict"
-        assert value.shape == ref_state_dict[key].shape, (
-            f"{key} shape not equal, {value.shape} != {ref_state_dict[key].shape}"
-        )
+        assert (
+            value.shape == ref_state_dict[key].shape
+        ), f"{key} shape not equal, {value.shape} != {ref_state_dict[key].shape}"
         if rank == 0:
             print(key, value.shape)
 

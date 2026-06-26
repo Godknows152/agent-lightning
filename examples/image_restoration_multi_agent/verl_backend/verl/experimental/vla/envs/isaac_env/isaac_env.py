@@ -105,9 +105,9 @@ class IsaacEnv(gym.Env):
         # TODO support other task suite
         if self.task_suite_name.startswith("libero"):
             self.task_descriptions = self.env.cfg.libero_config.task_info["language_instruction"]
-            assert self.env_cfg.osc_type == "pose_rel", (
-                f"Only pose_rel osc type is supported for libero. Received: {self.env_cfg.osc_type}"
-            )
+            assert (
+                self.env_cfg.osc_type == "pose_rel"
+            ), f"Only pose_rel osc type is supported for libero. Received: {self.env_cfg.osc_type}"
         else:
             raise ValueError(f"Task suite {self.task_suite_name} is not supported.")
         logger.info("Isaac Sim environment initialized")

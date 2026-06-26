@@ -118,9 +118,9 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         if self.should_load_model:
             assert self.model is not None, "model must be provided when checkpoint_contents.load includes ['model']"
         if self.should_load_optimizer:
-            assert self.optimizer is not None, (
-                "optimizer must be provided when checkpoint_contents.load includes ['optimizer']"
-            )
+            assert (
+                self.optimizer is not None
+            ), "optimizer must be provided when checkpoint_contents.load includes ['optimizer']"
 
         # every rank download its own checkpoint
         state_dict_cfg = (
@@ -214,9 +214,9 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         if self.should_save_model:
             assert self.model is not None, "model must be provided when checkpoint_contents.save includes ['model']"
         if self.should_save_optimizer:
-            assert self.optimizer is not None, (
-                "optimizer must be provided when checkpoint_contents.save includes ['optimizer']"
-            )
+            assert (
+                self.optimizer is not None
+            ), "optimizer must be provided when checkpoint_contents.save includes ['optimizer']"
 
         # every rank will save its own model and optim shard
         state_dict_cfg = ShardedStateDictConfig(offload_to_cpu=True if is_cuda_available else False)

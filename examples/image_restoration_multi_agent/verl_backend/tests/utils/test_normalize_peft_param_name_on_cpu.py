@@ -93,9 +93,9 @@ def test_normalize_peft_param_name_removes_lora_keys(peft_model):
     # After normalization, should not have any lora keys
     normalized_state_dict = normalize_peft_param_name(peft_state_dict)
     lora_keys_after = [k for k in normalized_state_dict.keys() if "lora_" in k]
-    assert len(lora_keys_after) == 0, (
-        f"Normalized state dict should not contain LoRA keys, but found: {lora_keys_after}"
-    )
+    assert (
+        len(lora_keys_after) == 0
+    ), f"Normalized state dict should not contain LoRA keys, but found: {lora_keys_after}"
 
 
 def test_normalize_peft_param_name_removes_base_model_prefix(peft_model):
@@ -109,9 +109,9 @@ def test_normalize_peft_param_name_removes_base_model_prefix(peft_model):
     # After normalization, should not have base_model prefix
     normalized_state_dict = normalize_peft_param_name(peft_state_dict)
     base_model_keys_after = [k for k in normalized_state_dict.keys() if "base_model" in k]
-    assert len(base_model_keys_after) == 0, (
-        f"Normalized keys should not contain base_model prefix, but found: {base_model_keys_after}"
-    )
+    assert (
+        len(base_model_keys_after) == 0
+    ), f"Normalized keys should not contain base_model prefix, but found: {base_model_keys_after}"
 
 
 def test_normalize_peft_param_name_removes_base_layer_suffix(peft_model):
@@ -125,9 +125,9 @@ def test_normalize_peft_param_name_removes_base_layer_suffix(peft_model):
     # After normalization, should not have .base_layer suffix
     normalized_state_dict = normalize_peft_param_name(peft_state_dict)
     base_layer_keys_after = [k for k in normalized_state_dict.keys() if ".base_layer" in k]
-    assert len(base_layer_keys_after) == 0, (
-        f"Normalized keys should not contain .base_layer suffix, but found: {base_layer_keys_after}"
-    )
+    assert (
+        len(base_layer_keys_after) == 0
+    ), f"Normalized keys should not contain .base_layer suffix, but found: {base_layer_keys_after}"
 
 
 def test_normalize_peft_param_name_tensor_shapes_match(base_model, peft_model):

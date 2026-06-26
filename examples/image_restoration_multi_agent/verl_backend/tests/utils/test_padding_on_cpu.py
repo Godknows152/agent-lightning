@@ -97,9 +97,9 @@ def test_padding_conversion_with_log_probs():
 
     # Verify that nested tensors (input_ids, position_ids) have correct number of elements per batch item
     for i, vlen in enumerate(valid_lens):
-        assert data_converted["input_ids"][i].numel() == vlen, (
-            f"Batch {i}: input_ids should have {vlen} elements, got {data_converted['input_ids'][i].numel()}"
-        )
+        assert (
+            data_converted["input_ids"][i].numel() == vlen
+        ), f"Batch {i}: input_ids should have {vlen} elements, got {data_converted['input_ids'][i].numel()}"
 
 
 def test_padding_conversion_without_log_probs():

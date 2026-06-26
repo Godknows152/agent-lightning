@@ -352,9 +352,9 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None):
                 put_data = False
                 if isinstance(output, TensorDict):
                     if output.batch_size:
-                        assert output.batch_size[0] == batch_meta.size, (
-                            f"output batch size {output.batch_size} != meta size {batch_meta.size}"
-                        )
+                        assert (
+                            output.batch_size[0] == batch_meta.size
+                        ), f"output batch size {output.batch_size} != meta size {batch_meta.size}"
                         put_data = True
 
                 if dispatch_mode is not None:
@@ -404,9 +404,9 @@ def tqbridge(dispatch_mode: "dict | Dispatch" = None):
                 put_data = False
                 if isinstance(output, TensorDict):
                     if output.batch_size:
-                        assert output.batch_size[0] == batch_meta.size, (
-                            f"output batch size {output.batch_size} != meta size {batch_meta.size}"
-                        )
+                        assert (
+                            output.batch_size[0] == batch_meta.size
+                        ), f"output batch size {output.batch_size} != meta size {batch_meta.size}"
                         put_data = True
 
                 if dispatch_mode is not None:

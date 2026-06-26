@@ -14,9 +14,7 @@ _tool_log_dir = os.getenv("VERL_LOG_DIR", "/tmp")
 _tool_log_file = os.path.join(_tool_log_dir, "restoration_tools.log")
 _file_handler = logging.FileHandler(_tool_log_file, mode="a")
 _file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(
-    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-)
+_file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 logger.addHandler(_file_handler)
 
 # Several restoration backends import and initialize torch/diffusers/BasicSR
@@ -26,16 +24,18 @@ logger.addHandler(_file_handler)
 # after each worker has its own loaded model instance.
 _MODEL_LOAD_LOCK = threading.RLock()
 
+
 @contextmanager
 def suppress_stdout():
     """Context manager to suppress stdout output (e.g., model initialization prints)."""
-    with open(os.devnull, 'w') as devnull:
+    with open(os.devnull, "w") as devnull:
         old_stdout = sys.stdout
         sys.stdout = devnull
         try:
             yield
         finally:
             sys.stdout = old_stdout
+
 
 # Note: CUDA_VISIBLE_DEVICES is managed by the AgentLoopManager via Ray runtime_env.
 # AgentLoopWorker is assigned a specific GPU (e.g., "0") so that restoration models
@@ -47,7 +47,7 @@ import torch
 from PIL import Image
 
 
-class RestorationToolkit():
+class RestorationToolkit:
     """
     A toolkit for image restoration, providing access to various models and evaluation capabilities.
 
@@ -55,10 +55,11 @@ class RestorationToolkit():
     - preload=True: Load all models at initialization (faster inference, more memory)
     - preload=False (lazy mode): Load models on-demand, unload after use (slower, less memory)
     """
+
     def __init__(
         self,
         models=None,
-        device='cuda',
+        device="cuda",
         score_weight=None,
         load_iqa=True,
         preload=True,
@@ -86,12 +87,18 @@ class RestorationToolkit():
         """
         logger.info(f"Initializing RestorationToolkit (preload={preload}, auto_unload={auto_unload})")
         self.all_model_paths = [
-            'scunet',
-            'retinexformer_fivek', 'hvicidnet', 'lightdiff',
-            'turbo_rain', 'idt', 's2former',
-            'ridcp', 'kanet',
-            'turbo_snow', 'snowmaster',
-            'real_esrgan',
+            "scunet",
+            "retinexformer_fivek",
+            "hvicidnet",
+            "lightdiff",
+            "turbo_rain",
+            "idt",
+            "s2former",
+            "ridcp",
+            "kanet",
+            "turbo_snow",
+            "snowmaster",
+            "real_esrgan",
         ]
 
         if models is not None:
@@ -99,18 +106,45 @@ class RestorationToolkit():
 
         # Model file paths configuration
         self.model_paths = {
-            'scunet': os.path.join(os.path.dirname(os.path.abspath(__file__)), '../checkpoints/agent_tools/checkpoints/SCUNet/scunet_color_real_gan.pth'),
-            'retinexformer': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/Retinexformer'),
-            'real_esrgan': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/ESRGAN/RealESRGAN_x4plus.pth'),
-            'ridcp': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/RIDCP'),
-            'idt': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/IDT'),
-            'img2img_turbo': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/img2img_turbo'),
-            'lightdiff': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/LightenDiffusion'),
-            'hvicidnet': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/HVICIDNet/generalization.pth'),
-            's2former': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/S2Former'),
-            'kanet': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/KANet'),
-            'snowmaster': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/SnowMaster'),
-            'turbo': os.path.join(os.path.dirname(os.path.abspath(__file__)),'../checkpoints/agent_tools/checkpoints/Img2img_turbo')
+            "scunet": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "../checkpoints/agent_tools/checkpoints/SCUNet/scunet_color_real_gan.pth",
+            ),
+            "retinexformer": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/Retinexformer"
+            ),
+            "real_esrgan": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "../checkpoints/agent_tools/checkpoints/ESRGAN/RealESRGAN_x4plus.pth",
+            ),
+            "ridcp": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/RIDCP"
+            ),
+            "idt": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/IDT"
+            ),
+            "img2img_turbo": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/img2img_turbo"
+            ),
+            "lightdiff": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/LightenDiffusion"
+            ),
+            "hvicidnet": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)),
+                "../checkpoints/agent_tools/checkpoints/HVICIDNet/generalization.pth",
+            ),
+            "s2former": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/S2Former"
+            ),
+            "kanet": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/KANet"
+            ),
+            "snowmaster": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/SnowMaster"
+            ),
+            "turbo": os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "../checkpoints/agent_tools/checkpoints/Img2img_turbo"
+            ),
         }
 
         self.device = device
@@ -138,6 +172,7 @@ class RestorationToolkit():
         self.iqa = None
         if load_iqa:
             from .iqa_reward import IQAScore
+
             self.iqa = IQAScore(self.device, score_weight)
 
         logger.info(f"RestorationToolkit initialized. Loaded models: {list(self.models.keys())}")
@@ -174,44 +209,56 @@ class RestorationToolkit():
                 # Suppress stdout to avoid model initialization prints (e.g., "Block Initial Type: W")
                 target_device = self._resolve_model_device(model_name)
                 with suppress_stdout():
-                    if model_name == 'scunet':
+                    if model_name == "scunet":
                         from .SCUNet.inference import load_scu_model
-                        self.models['scunet'] = load_scu_model(self.model_paths[model_name], target_device)
-                    elif model_name == 'retinexformer_fivek':
+
+                        self.models["scunet"] = load_scu_model(self.model_paths[model_name], target_device)
+                    elif model_name == "retinexformer_fivek":
                         from .Retinexformer.inference import load_retinexformer_model
-                        self.models['retinexformer_fivek'] = load_retinexformer_model(
-                            self.model_paths['retinexformer'], target_device
+
+                        self.models["retinexformer_fivek"] = load_retinexformer_model(
+                            self.model_paths["retinexformer"], target_device
                         )
-                    elif model_name == 'turbo_rain':
+                    elif model_name == "turbo_rain":
                         from .img2img_turbo.inference import load_turbo_model
-                        self.models['turbo_rain'] = load_turbo_model('rain', self.model_paths['turbo'], target_device)
-                    elif model_name == 'turbo_snow':
+
+                        self.models["turbo_rain"] = load_turbo_model("rain", self.model_paths["turbo"], target_device)
+                    elif model_name == "turbo_snow":
                         from .img2img_turbo.inference import load_turbo_model
-                        self.models['turbo_snow'] = load_turbo_model('snow', self.model_paths['turbo'], target_device)
-                    elif model_name == 'real_esrgan':
+
+                        self.models["turbo_snow"] = load_turbo_model("snow", self.model_paths["turbo"], target_device)
+                    elif model_name == "real_esrgan":
                         from .ESRGAN.inference import load_esrgan_model
-                        self.models['real_esrgan'] = load_esrgan_model(self.model_paths[model_name], target_device)
-                    elif model_name == 'ridcp':
+
+                        self.models["real_esrgan"] = load_esrgan_model(self.model_paths[model_name], target_device)
+                    elif model_name == "ridcp":
                         from .RIDCP.inference import load_ridcp_model
-                        self.models['ridcp'] = load_ridcp_model(self.model_paths[model_name], target_device)
-                    elif model_name == 'idt':
+
+                        self.models["ridcp"] = load_ridcp_model(self.model_paths[model_name], target_device)
+                    elif model_name == "idt":
                         from .IDT.inference import load_idt_model
-                        self.models['idt'] = load_idt_model('day', self.model_paths['idt'], target_device)
-                    elif model_name == 'lightdiff':
+
+                        self.models["idt"] = load_idt_model("day", self.model_paths["idt"], target_device)
+                    elif model_name == "lightdiff":
                         from .LightenDiffusion.inference import load_lightdiff_model
-                        self.models['lightdiff'] = load_lightdiff_model(self.model_paths[model_name], target_device)
-                    elif model_name == 'snowmaster':
+
+                        self.models["lightdiff"] = load_lightdiff_model(self.model_paths[model_name], target_device)
+                    elif model_name == "snowmaster":
                         from .SnowMaster.inference import load_snowmaster_model
-                        self.models['snowmaster'] = load_snowmaster_model(self.model_paths[model_name], target_device)
-                    elif model_name == 's2former':
+
+                        self.models["snowmaster"] = load_snowmaster_model(self.model_paths[model_name], target_device)
+                    elif model_name == "s2former":
                         from .S2Former.inference import load_s2former_model
-                        self.models['s2former'] = load_s2former_model(self.model_paths[model_name], target_device)
-                    elif model_name == 'kanet':
+
+                        self.models["s2former"] = load_s2former_model(self.model_paths[model_name], target_device)
+                    elif model_name == "kanet":
                         from .KANet.inference import load_kanet_model
-                        self.models['kanet'] = load_kanet_model(self.model_paths[model_name], target_device)
-                    elif model_name == 'hvicidnet':
+
+                        self.models["kanet"] = load_kanet_model(self.model_paths[model_name], target_device)
+                    elif model_name == "hvicidnet":
                         from .HVICIDNet.inference import load_hvicidnet_model
-                        self.models['hvicidnet'] = load_hvicidnet_model(self.model_paths[model_name], target_device)
+
+                        self.models["hvicidnet"] = load_hvicidnet_model(self.model_paths[model_name], target_device)
                     else:
                         logger.warning(f"Unknown model: {model_name}")
                         return None
@@ -239,7 +286,7 @@ class RestorationToolkit():
             model_device = self.model_loaded_devices.pop(model_name, self.device)
             del model
             # Clear CUDA cache
-            if 'cuda' in str(model_device):
+            if "cuda" in str(model_device):
                 with torch.cuda.device(model_device):
                     torch.cuda.empty_cache()
             logger.debug(f"Unloaded model: {model_name} from {model_device}")
@@ -256,9 +303,10 @@ class RestorationToolkit():
 
         # Force garbage collection
         import gc
+
         gc.collect()
         for dev in set(self.model_devices + [self.device]):
-            if 'cuda' in str(dev):
+            if "cuda" in str(dev):
                 with torch.cuda.device(dev):
                     torch.cuda.empty_cache()
         logger.debug("All models unloaded")
@@ -275,11 +323,11 @@ class RestorationToolkit():
             str: Path to the resized image.
         """
         with Image.open(img_path) as img:
-            img = img.convert('RGB')  # Ensure consistent color mode
+            img = img.convert("RGB")  # Ensure consistent color mode
             img = img.resize((512, 512), Image.LANCZOS)  # Use high-quality resampling
             img_name = os.path.splitext(os.path.basename(img_path))[0]
             save_path = os.path.join(output_dir, f"{img_name}.png")
-            img.save(save_path, format='PNG')
+            img.save(save_path, format="PNG")
         return save_path
 
     def process_image_with_models(self, model_list, img_path, output_dir):
@@ -322,44 +370,56 @@ class RestorationToolkit():
                 # Process image with the model
                 model_device = self.model_loaded_devices.get(model_name, self._resolve_model_device(model_name))
 
-                if model_name == 'scunet':
+                if model_name == "scunet":
                     from .SCUNet.inference import scu_predict
-                    img_path = scu_predict(self.models['scunet'], img_path, output_dir, device=model_device)
-                elif model_name == 'retinexformer_fivek':
+
+                    img_path = scu_predict(self.models["scunet"], img_path, output_dir, device=model_device)
+                elif model_name == "retinexformer_fivek":
                     from .Retinexformer.inference import retinexformer_predict
+
                     img_path = retinexformer_predict(
-                        self.models['retinexformer_fivek'], img_path, output_dir, device=model_device
+                        self.models["retinexformer_fivek"], img_path, output_dir, device=model_device
                     )
-                elif model_name == 'turbo_rain':
+                elif model_name == "turbo_rain":
                     from .img2img_turbo.inference import turbo_predict
-                    img_path = turbo_predict(self.models['turbo_rain'], img_path, output_dir, device=model_device)
-                elif model_name == 'turbo_snow':
+
+                    img_path = turbo_predict(self.models["turbo_rain"], img_path, output_dir, device=model_device)
+                elif model_name == "turbo_snow":
                     from .img2img_turbo.inference import turbo_predict
-                    img_path = turbo_predict(self.models['turbo_snow'], img_path, output_dir, device=model_device)
-                elif model_name == 'real_esrgan':
+
+                    img_path = turbo_predict(self.models["turbo_snow"], img_path, output_dir, device=model_device)
+                elif model_name == "real_esrgan":
                     from .ESRGAN.inference import esrgan_predict
-                    img_path = esrgan_predict(self.models['real_esrgan'], img_path, output_dir, device=model_device)
-                elif model_name == 'ridcp':
+
+                    img_path = esrgan_predict(self.models["real_esrgan"], img_path, output_dir, device=model_device)
+                elif model_name == "ridcp":
                     from .RIDCP.inference import ridcp_predict
-                    img_path = ridcp_predict(self.models['ridcp'], img_path, output_dir, device=model_device)
-                elif model_name == 'idt':
+
+                    img_path = ridcp_predict(self.models["ridcp"], img_path, output_dir, device=model_device)
+                elif model_name == "idt":
                     from .IDT.inference import idt_predict
-                    img_path = idt_predict(self.models['idt'], img_path, output_dir, device=model_device)
-                elif model_name == 'lightdiff':
+
+                    img_path = idt_predict(self.models["idt"], img_path, output_dir, device=model_device)
+                elif model_name == "lightdiff":
                     from .LightenDiffusion.inference import lightdiff_predict
-                    img_path = lightdiff_predict(self.models['lightdiff'], img_path, output_dir, device=model_device)
-                elif model_name == 'snowmaster':
+
+                    img_path = lightdiff_predict(self.models["lightdiff"], img_path, output_dir, device=model_device)
+                elif model_name == "snowmaster":
                     from .SnowMaster.inference import snowmaster_predict
-                    img_path = snowmaster_predict(self.models['snowmaster'], img_path, output_dir, device=model_device)
-                elif model_name == 's2former':
+
+                    img_path = snowmaster_predict(self.models["snowmaster"], img_path, output_dir, device=model_device)
+                elif model_name == "s2former":
                     from .S2Former.inference import s2former_predict
-                    img_path = s2former_predict(self.models['s2former'], img_path, output_dir, device=model_device)
-                elif model_name == 'kanet':
+
+                    img_path = s2former_predict(self.models["s2former"], img_path, output_dir, device=model_device)
+                elif model_name == "kanet":
                     from .KANet.inference import kanet_predict
-                    img_path = kanet_predict(self.models['kanet'], img_path, output_dir, device=model_device)
-                elif model_name == 'hvicidnet':
+
+                    img_path = kanet_predict(self.models["kanet"], img_path, output_dir, device=model_device)
+                elif model_name == "hvicidnet":
                     from .HVICIDNet.inference import hvicidnet_predict
-                    img_path = hvicidnet_predict(self.models['hvicidnet'], img_path, output_dir, device=model_device)
+
+                    img_path = hvicidnet_predict(self.models["hvicidnet"], img_path, output_dir, device=model_device)
                 # Dynamic unloading: unload model after use if auto_unload=True
                 if should_unload:
                     self.unload_single_model(model_name)
@@ -373,8 +433,8 @@ class RestorationToolkit():
             "rain_drop": ["idt", "turbo_rain", "s2former"],
             "rain_drive": ["idt", "turbo_rain", "s2former"],
             "rain_streak": ["idt", "turbo_rain", "s2former"],
-            "fog":["ridcp", "kanet"],
-            "snow":["turbo_snow", "snowmaster"],
+            "fog": ["ridcp", "kanet"],
+            "snow": ["turbo_snow", "snowmaster"],
         }
         if not is_identify:
             for tool_name, tool_list in tool_dict.items():

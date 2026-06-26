@@ -141,9 +141,9 @@ def convert_checkpoint_from_transformers_to_megatron(
     if pp_rank == 0:
         numel += safe_copy(hf_model.model.embed_tokens.weight, model.embedding.word_embeddings.weight)
 
-    assert len(model.decoder.layers) == (layer_end - layer_start), (
-        f"Expected {len(model.decoder.layers)} layers, but got {layer_end - layer_start}"
-    )
+    assert len(model.decoder.layers) == (
+        layer_end - layer_start
+    ), f"Expected {len(model.decoder.layers)} layers, but got {layer_end - layer_start}"
     for layer_idx, (layer, hf_layer) in enumerate(
         zip(model.decoder.layers, hf_model.model.layers[layer_start:layer_end], strict=True)
     ):
@@ -346,9 +346,9 @@ def convert_checkpoint_from_transformers_to_megatron_dpskv3(
     if pp_rank == 0:
         numel += safe_copy(hf_model.model.embed_tokens.weight, model.embedding.word_embeddings.weight)
 
-    assert len(model.decoder.layers) == (layer_end - layer_start), (
-        f"Expected {len(model.decoder.layers)} layers, but got {layer_end - layer_start}"
-    )
+    assert len(model.decoder.layers) == (
+        layer_end - layer_start
+    ), f"Expected {len(model.decoder.layers)} layers, but got {layer_end - layer_start}"
     for layer_idx, (layer, hf_layer) in enumerate(
         zip(model.decoder.layers, hf_model.model.layers[layer_start:layer_end], strict=True)
     ):

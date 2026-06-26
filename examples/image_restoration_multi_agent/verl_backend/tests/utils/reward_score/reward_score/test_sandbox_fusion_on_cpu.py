@@ -219,9 +219,9 @@ else:
             print(f"  Index {idx}: Got {res}, {expected_str}. Metadata: {metadata_list[idx]}")
         raise AssertionError(f"Found {len(unexpected_results)} unexpected results.")
 
-    assert correct_count == concurrency_level - len(wrong_answer_indices) - len(timeout_indices), (
-        "Incorrect number of successful results"
-    )
+    assert correct_count == concurrency_level - len(wrong_answer_indices) - len(
+        timeout_indices
+    ), "Incorrect number of successful results"
     assert wrong_count == len(wrong_answer_indices), "Incorrect number of identified wrong answers"
     assert timeout_count == len(timeout_indices), "Incorrect number of identified timeouts"
 
@@ -523,9 +523,9 @@ def test_multiprocess_global_concurrency_limit_with_semaphore():
     # print(f"Tasks processed per worker: {num_tasks_processed_per_worker}")
 
     # Verify that all submitted tasks have been processed
-    assert sum(num_tasks_processed_per_worker) == total_tasks_expected_to_run, (
-        "Mismatch in the number of tasks processed."
-    )
+    assert (
+        sum(num_tasks_processed_per_worker) == total_tasks_expected_to_run
+    ), "Mismatch in the number of tasks processed."
 
     # Verify that the mock API was called at least once
     assert max_calls_tracker.value > 0, "The mocked API call_sandbox_api was not called."

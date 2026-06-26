@@ -242,9 +242,9 @@ class FSDPEngine(BaseEngine):
             else:
                 from verl.utils.model import load_valuehead_model
 
-                assert self.model_config.model_type == "value_model", (
-                    f"Unsupported model type: {self.model_config.model_type}"
-                )
+                assert (
+                    self.model_config.model_type == "value_model"
+                ), f"Unsupported model type: {self.model_config.model_type}"
                 self.model_config.hf_config.num_labels = 1
                 self.model_config.hf_config.classifier_dropout = 0.0
                 self.model_config.hf_config.hidden_dropout = "0"
@@ -785,9 +785,11 @@ class FSDPEngine(BaseEngine):
             per_tensor_param = (
                 (
                     name,
-                    param.to(device, non_blocking=True).full_tensor().to(torch.bfloat16, non_blocking=True)
-                    if isinstance(param, DTensor)
-                    else param,
+                    (
+                        param.to(device, non_blocking=True).full_tensor().to(torch.bfloat16, non_blocking=True)
+                        if isinstance(param, DTensor)
+                        else param
+                    ),
                 )
                 for name, param in params.items()
             )
@@ -874,9 +876,9 @@ class FSDPEngineWithLMHead(FSDPEngine):
         temperature = micro_batch["temperature"]
         temperature_item = temperature
         if use_fused_kernels:
-            assert not isinstance(temperature, torch.Tensor), (
-                "use_fused_kernels does not support per sample temperature yet"
-            )
+            assert not isinstance(
+                temperature, torch.Tensor
+            ), "use_fused_kernels does not support per sample temperature yet"
         assert pad_mode == DatasetPadMode.NO_PADDING, f"pad_mode {pad_mode} not supported"
 
         multi_modal_inputs = extract_multi_modal_inputs(micro_batch.get("multi_modal_inputs", []))
@@ -976,7 +978,9 @@ class FSDPEngineWithLMHead(FSDPEngine):
                 if position_ids.dim() == 3:
                     position_ids = torch.nested.to_padded_tensor(
                         position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
-                    ).transpose(0, 1)  # (4, batch_size, max_seq_len)
+                    ).transpose(
+                        0, 1
+                    )  # (4, batch_size, max_seq_len)
                 else:
                     position_ids = torch.nested.to_padded_tensor(
                         position_ids, padding=0, output_size=(batch_size, max_seq_len)

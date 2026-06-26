@@ -408,9 +408,9 @@ def chunk_tensordict(td: TensorDict, chunks: int) -> list[TensorDict]:
 
         See https://github.com/pytorch/pytorch/issues/153238
     """
-    assert isinstance(td, TensorDict) and len(td) % chunks == 0, (
-        f"expecting td with length divisible by chunks, but got {len(td)} and {chunks}"
-    )
+    assert (
+        isinstance(td, TensorDict) and len(td) % chunks == 0
+    ), f"expecting td with length divisible by chunks, but got {len(td)} and {chunks}"
     chunk_size = len(td) // chunks
     nested_keys = {key for key, val in td.items() if isinstance(val, torch.Tensor) and val.is_nested}
     new_td = TensorDict(
@@ -495,9 +495,9 @@ def get_tensordict(tensor_dict: dict[str, torch.Tensor | list], non_tensor_dict:
             # Convert to NonTensorStack to handle nested structures
             tensor_dict[key] = NonTensorStack.from_list([NonTensorData(item) for item in val])
 
-        assert isinstance(val, torch.Tensor | list | np.ndarray), (
-            f"{key} -> {type(val)} isn't of 'torch.Tensor | list | np.ndarray' type"
-        )
+        assert isinstance(
+            val, torch.Tensor | list | np.ndarray
+        ), f"{key} -> {type(val)} isn't of 'torch.Tensor | list | np.ndarray' type"
 
         if batch_size is None:
             batch_size = val.size(0) if isinstance(val, torch.Tensor) else len(val)
@@ -597,23 +597,23 @@ def union_tensor_dict(tensor_dict1: TensorDict, tensor_dict2: TensorDict) -> Ten
         >>> list(result.keys())
         ['a', 'b']
     """
-    assert tensor_dict1.batch_size == tensor_dict2.batch_size, (
-        f"Two tensor dict must have identical batch size. Got {tensor_dict1.batch_size} and {tensor_dict2.batch_size}"
-    )
+    assert (
+        tensor_dict1.batch_size == tensor_dict2.batch_size
+    ), f"Two tensor dict must have identical batch size. Got {tensor_dict1.batch_size} and {tensor_dict2.batch_size}"
     for key in tensor_dict2.keys():
         if key not in tensor_dict1.keys():
             # Note that there is a difference between tensor_dict2[key] and tensor_dict2.get(key)
             tensor_dict1[key] = tensor_dict2.get(key)
         else:
             if isinstance(tensor_dict2[key], torch.Tensor):
-                assert tensor_dict1[key].equal(tensor_dict2[key]), (
-                    f"{key} in tensor_dict1 and tensor_dict2 are not the same object"
-                )
+                assert tensor_dict1[key].equal(
+                    tensor_dict2[key]
+                ), f"{key} in tensor_dict1 and tensor_dict2 are not the same object"
             else:
                 # non-tensor
-                assert tensor_dict1[key] == tensor_dict2[key], (
-                    f"{key} in tensor_dict1 and tensor_dict2 are not the same object"
-                )
+                assert (
+                    tensor_dict1[key] == tensor_dict2[key]
+                ), f"{key} in tensor_dict1 and tensor_dict2 are not the same object"
 
     return tensor_dict1
 
@@ -696,9 +696,9 @@ def assert_tensordict_eq(tensordict1: TensorDict, tensordict2: TensorDict):
     """
     tensordict1_key_set = set(tensordict1.keys())
     tensordict2_key_set = set(tensordict2.keys())
-    assert tensordict1_key_set == tensordict2_key_set, (
-        f"key set diffs. Got {tensordict2_key_set=} vs {tensordict1_key_set=}"
-    )
+    assert (
+        tensordict1_key_set == tensordict2_key_set
+    ), f"key set diffs. Got {tensordict2_key_set=} vs {tensordict1_key_set=}"
 
     for key in tensordict1.keys():
         val = tensordict1[key]
@@ -708,9 +708,9 @@ def assert_tensordict_eq(tensordict1: TensorDict, tensordict2: TensorDict):
 
         if isinstance(val, torch.Tensor):
             if val.is_nested:
-                assert val.is_nested and val2.is_nested, (
-                    f"Both tensors must be nested tensors. {val.is_nested=}, {val2.is_nested=}"
-                )
+                assert (
+                    val.is_nested and val2.is_nested
+                ), f"Both tensors must be nested tensors. {val.is_nested=}, {val2.is_nested=}"
                 t1, t2 = val.unbind(), val2.unbind()
                 assert len(t1) == len(t2), f"Nested tensor should have the same lengths. {len(t1)=} vs {len(t2)=}"
                 for c1, c2 in zip(t1, t2, strict=True):
@@ -982,9 +982,9 @@ def list_of_dict_to_tensordict(list_of_dicts: list[dict[str, Any]]) -> TensorDic
     Create a TensorDict from a list of dict of tensors and non_tensors.
     Note that this requires tensordict version at least 0.10
     """
-    assert parse_version(tensordict.__version__) >= parse_version("0.10"), (
-        "Storing non-tensor data in TensorDict at least requires tensordict version 0.10"
-    )
+    assert parse_version(tensordict.__version__) >= parse_version(
+        "0.10"
+    ), "Storing non-tensor data in TensorDict at least requires tensordict version 0.10"
 
     assert len(list_of_dicts) > 0
 
