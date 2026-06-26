@@ -114,6 +114,6 @@ training:
   total_epochs: 3
   save_freq: 10
   test_freq: 10
-  resume_mode: disable
+  resume_mode: auto
   max_actor_ckpt_to_keep: 2
   val_before_train: false

@@ -18,6 +18,7 @@ class WorkflowSettings(StrictModel):
     no_improvement_limit: int | None = Field(default=3, ge=1)
     improvement_epsilon: float = Field(default=1e-6, ge=0.0)
     tool_call_cost: float = Field(default=0.01, ge=0.0)
+    tool_call_reward: float = Field(default=0.0, ge=0.0)
     invalid_action_penalty: float = Field(default=1.0, ge=0.0)
     failure_penalty: float = Field(default=0.25, ge=0.0)
     reward_mode: Literal["best_gain_v1", "step_iqa_sum_v1"] = "best_gain_v1"

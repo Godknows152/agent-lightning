@@ -261,11 +261,12 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
     image_url = image_parts[0]["image_url"]["url"]
     assert image_url.startswith("data:image/png;base64,")
     assert base64.b64decode(image_url.split(",", 1)[1]) == b"latest-image"
-    assert "current_aggregate_score: 0.500000" in str(messages[-1])
-    assert '"action":"scunet"' in str(messages[-1])
-    assert '"raw_scores":{"mock":0.5}' in str(messages[-1])
-    assert '"step_reward":0.1' in str(messages[-1])
-    assert '"feedback":"quality improved"' in str(messages[-1])
+    prompt_text = str(messages[-1])
+    assert "Historical tool feedback: Step 0: selected action scunet; IQA aggregate_score=0.5000." in prompt_text
+    assert "current_aggregate_score" not in prompt_text
+    assert "raw_scores" not in prompt_text
+    assert "step_reward" not in prompt_text
+    assert "quality improved" not in prompt_text
     assert messages[0]["content"] == build_expert_system_prompt(ExpertName.FOG, _registry())
 
 

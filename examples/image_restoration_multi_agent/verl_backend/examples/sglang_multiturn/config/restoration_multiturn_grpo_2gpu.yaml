@@ -1,0 +1,144 @@
+# Image Restoration Multi-turn GRPO Training Configuration — 2-GPU variant
+#
+# 基于 restoration_multiturn_grpo.yaml，改动点：
+#   - trainer.n_gpus_per_node: 4 → 2
+#   - trainer.default_local_dir: 独立 checkpoint 目录，避免与其他 ckpt 混用
+#   - data.train_batch_size: 16 → 8（随 GPU 数量等比缩减）
+#   - actor.ppo_mini_batch_size: 8 → 4
+#   - rollout.multi_turn.tool_config_path: 指向 2-GPU 专用 tool config
+#     （对称池模式：每卡完整复制修复模型+IQA，与 4 卡相同）
+#
+# GPU 分配说明（2 卡版本 — 对称池模式）：
+#   GPU 0: SGLang rollout (TP=1) + 全部图像修复模型 (replica 0) + IQA (replica 0)
+#   GPU 1: SGLang rollout (TP=1) + 全部图像修复模型 (replica 1) + IQA (replica 1)
+#   => 每张卡都有完整的修复模型和 IQA，与 4 卡相同的对称复制模式
+#
+# Usage:
+#   cd /home/LXJ/Python_Projects/verl
+#   bash examples/sglang_multiturn/run_qwen3_vl_restoration_2gpu.sh
+
+hydra:
+  searchpath:
+    - file://verl/trainer/config
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+data:
+  train_files:
+    - data/restoration/train.parquet
+  val_files:
+    - data/restoration/test.parquet
+  val_max_samples: 256
+  train_batch_size: 8
+  max_prompt_length: 2048
+  max_response_length: 3072
+  return_raw_chat: true
+  return_multi_modal_inputs: false
+
+# ---------------------------------------------------------------------------
+# Algorithm
+# ---------------------------------------------------------------------------
+algorithm:
+  adv_estimator: grpo
+  kl_ctrl:
+    kl_coef: 0.12
+
+# ---------------------------------------------------------------------------
+# Actor / Rollout / Ref
+# ---------------------------------------------------------------------------
+actor_rollout_ref:
+  model:
+    path: /home/LXJ/Python_Projects/LLaMA_Factory/LlamaFactory/saves/sft_0430merge
+
+  actor:
+    optim:
+      lr: 3.0e-5
+    entropy_coeff: 0.01
+    ppo_epochs: 1
+    use_kl_loss: true
+    kl_loss_coef: 0.12
+    fsdp_config:
+      model_dtype: bfloat16
+      param_offload: true
+      optimizer_offload: true
+    ppo_mini_batch_size: 4
+    ppo_micro_batch_size_per_gpu: 2
+
+  rollout:
+    name: sglang
+    dtype: bfloat16
+    temperature: 1.0
+    disable_multimodal_special_token_generation: true
+    # GRPO requires n > 1 to compute group-relative advantages
+    n: 3
+    tensor_model_parallel_size: 1
+    # SGLang uses 2 GPUs (0-1); both GPUs additionally host full restoration
+    # model replicas + IQA in symmetric pool mode.
+    # (AgentLoopWorker does not request a dedicated GPU from Ray)
+    gpu_memory_utilization: 0.4
+    log_prob_micro_batch_size_per_gpu: 2
+
+    agent:
+      # Keep at 1 to avoid OOM — each worker loads multiple restoration models (~13 GB)
+      num_workers: 1
+      # No dedicated GPU requested from Ray; restoration/IQA models share residual VRAM
+      num_gpus_per_worker: 0.0
+      default_agent_loop: tool_agent
+
+    multi_turn:
+      enable: true
+      max_user_turns: 7
+      max_assistant_turns: 6
+      # Round-barrier synchronization: all trajectories wait at each generation
+      # round boundary until every trajectory has finished its tool call, then
+      # submit their next generation request simultaneously.  This lets SGLang
+      # batch requests efficiently and eliminates the cascading stagger effect
+      # that causes poor GPU utilization in later rounds.
+      # Set to 0 to disable, or a positive integer to enable (auto = batch size).
+      # 2-GPU: train_batch_size=8 × n=3 = 24 trajectories per batch
+      round_barrier_size: 0
+      format: hermes
+      # 使用 2-GPU 专用 tool config（对称池模式：每卡完整复制修复模型+IQA）
+      tool_config_path: examples/sglang_multiturn/config/tool_config/restoration_tool_config_2gpu.yaml
+
+  ref:
+    log_prob_micro_batch_size_per_gpu: 2
+
+# ---------------------------------------------------------------------------
+# Trainer
+# ---------------------------------------------------------------------------
+trainer:
+  logger:
+    - console
+    - swanlab
+  project_name: verl
+  experiment_name: qwen3vl_restoration_grpo_2gpu
+  resume_mode: resume_path
+  resume_from_path: checkpoints/verl/multiturn_grpo_2gpu/05211931/global_step_111
+  # resume_mode: disable
+  default_local_dir: checkpoints/verl/multiturn_grpo_2gpu
+  log_val_generations: 5
+  # 使用 2 张 GPU (0-1)；对称池模式，每卡承载 SGLang + 完整修复模型 + IQA
+  n_gpus_per_node: 2
+  nnodes: 1
+  save_freq: 20
+  test_freq: 20
+  total_epochs: 3
+  max_actor_ckpt_to_keep: 10
+  val_before_train: false
+  ray_kwargs:
+    ray_init:
+      runtime_env:
+        env_vars:
+          LD_LIBRARY_PATH: "/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/torch/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cudnn/lib"
+          LD_PRELOAD: "/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12"
+          PYTHONUNBUFFERED: "1"
+          XFORMERS_IGNORE_FLASH_VERSION_CHECK: "1"
+          SGLANG_DISABLE_CUDNN_CHECK: "1"
+          VERL_LOGGING_LEVEL: "WARN"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/verl/log"

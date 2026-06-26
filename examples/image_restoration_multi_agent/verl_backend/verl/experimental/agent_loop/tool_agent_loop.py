@@ -1,0 +1,816 @@
+# Copyright 2025 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+import asyncio
+import json
+import logging
+import os
+import sys
+from enum import Enum
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import torch
+import yaml
+from PIL import Image
+from verl.experimental.agent_loop.agent_loop import (
+    AgentLoopBase,
+    AgentLoopOutput,
+    register,
+)
+from verl.experimental.agent_loop.tool_parser import FunctionCall, ToolParser
+from verl.experimental.agent_loop.utils import build_gpt_oss_tool_response_text
+from verl.tools.schemas import ToolResponse
+from verl.tools.utils.tool_registry import initialize_tools_from_config
+from verl.utils.profiler import simple_timer
+from verl.utils.rollout_trace import rollout_trace_op
+from verl.workers.rollout.replica import TokenOutput
+
+logger = logging.getLogger(__file__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+
+class AgentState(Enum):
+    PENDING = "pending"
+    GENERATING = "generating"
+    PROCESSING_TOOLS = "processing_tools"
+    TERMINATED = "terminated"
+
+
+class AgentData:
+    """Encapsulates all state variables for the agent loop. AgentData is passed to tool calling in case that
+    tool may need to access full history state. User can store any tool session data in `extra_fields`."""
+
+    def __init__(
+        self,
+        messages: list[dict[str, Any]],
+        image_data: list[Image.Image],
+        video_data: list[tuple[torch.Tensor, dict[str, Any]]],
+        metrics: dict[str, Any],
+        request_id: str,
+        tools_kwargs: dict[str, Any],
+    ):
+        self.messages = messages
+        self.image_data = image_data
+        self.video_data = video_data
+        self.metrics = metrics
+        self.request_id = request_id
+        self.tools_kwargs = tools_kwargs
+
+        # State variables
+        self.prompt_ids: list[int] = []
+        self.response_ids: list[int] = []
+        self.response_mask: list[int] = []
+        self.response_logprobs: list[float] = []
+        self.turn_scores: list[float] = []
+        self.tool_rewards: list[float] = []
+        self.user_turns = 0
+        self.assistant_turns = 0
+        self.total_tool_calls = 0
+        # Track action names across the trajectory for trajectory-level penalties
+        self.action_history: list[str] = []
+
+        # Temporary state for tool calls
+        self.tool_calls: list[FunctionCall] = []
+        self.tool_instances: dict[str, str] = {}
+        self.tool_instance_lock = asyncio.Lock()
+
+        self.routed_experts = None
+
+        # Extra fields for dynamic addition, e.g., tool session data
+        self.extra_fields: dict[str, Any] = {}
+
+
+@register("tool_agent")
+class ToolAgentLoop(AgentLoopBase):
+    EARLY_STOP_PENALTY = -10.0
+    TOOL_CALL_REWARD = 2.0
+    NO_TOOL_LENGTH_THRESHOLD = 256
+    NO_TOOL_LENGTH_PENALTY_ALPHA = 3.0
+    # Per-occurrence penalty for choosing the same tool more than once in a trajectory.
+    # E.g. scale=0.5 → using scunet 3 times costs -0.5*(3-1) = -1.0 total.
+    TRAJECTORY_REPEAT_PENALTY_SCALE = 0.5
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Initialize tools from config file
+        self.max_user_turns = self.rollout_config.multi_turn.max_user_turns
+        self.max_assistant_turns = self.rollout_config.multi_turn.max_assistant_turns
+        self.max_parallel_calls = self.rollout_config.multi_turn.max_parallel_calls
+        self.max_tool_response_length = self.rollout_config.multi_turn.max_tool_response_length
+        self.tool_response_truncate_side = self.rollout_config.multi_turn.tool_response_truncate_side
+        tool_config_path = self.rollout_config.multi_turn.tool_config_path
+        tool_list = initialize_tools_from_config(tool_config_path) if tool_config_path else []
+        self.tools = {tool.name: tool for tool in tool_list}
+        self.tool_schemas = [tool.tool_schema.model_dump(exclude_unset=True, exclude_none=True) for tool in tool_list]
+        self.tool_parser = ToolParser.get_tool_parser(self.rollout_config.multi_turn.format, self.tokenizer)
+        self.tool_parser_name = self.rollout_config.multi_turn.format
+
+        self.prompt_length = self.rollout_config.prompt_length
+        self.response_length = self.rollout_config.response_length
+        self.current_restoration_prompt = self._init_current_restoration_prompt(tool_config_path)
+
+    @staticmethod
+    def _count_image_markers_in_messages(messages: list[dict[str, Any]]) -> int:
+        """Count image markers from message content for alignment diagnostics."""
+        count = 0
+        for message in messages or []:
+            content = message.get("content")
+            if isinstance(content, str):
+                count += content.count("<image>")
+            elif isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") == "image":
+                        count += 1
+                    elif item.get("type") == "text" and isinstance(item.get("text"), str):
+                        count += item["text"].count("<image>")
+        return count
+
+    @staticmethod
+    def _safe_len(multimodal_data: Any) -> int:
+        if multimodal_data is None:
+            return 0
+        if isinstance(multimodal_data, list):
+            return len(multimodal_data)
+        return 1
+
+    def _log_image_alignment(self, stage: str, messages: list[dict[str, Any]], images: Any, request_id: str) -> None:
+        marker_count = self._count_image_markers_in_messages(messages)
+        image_count = self._safe_len(images)
+        if marker_count != image_count:
+            logger.warning(
+                "Image marker/image count mismatch at %s: markers=%d images=%d request_id=%s",
+                stage,
+                marker_count,
+                image_count,
+                request_id,
+            )
+        else:
+            logger.info(
+                "Image marker/image alignment at %s: markers=%d images=%d request_id=%s",
+                stage,
+                marker_count,
+                image_count,
+                request_id,
+            )
+
+    def _init_current_restoration_prompt(self, tool_config_path: str | None) -> dict[str, Any] | None:
+        """Load the current image-restoration prompt builders for restoration rollouts."""
+
+        try:
+            example_root = Path(__file__).resolve().parents[4]
+            if str(example_root) not in sys.path:
+                sys.path.insert(0, str(example_root))
+
+            from agents.prompts import (  # type: ignore[import]
+                build_expert_single_step_sft_system_prompt,
+                build_expert_single_step_sft_user_prompt,
+                build_expert_state_prompt,
+                build_expert_system_prompt,
+            )
+            from schemas import ExpertName  # type: ignore[import]
+            from tool_registry import ToolRegistry  # type: ignore[import]
+
+            tool_config: dict[str, Any] = {}
+            if tool_config_path:
+                config_path = Path(tool_config_path).expanduser()
+                if not config_path.is_absolute():
+                    config_path = Path.cwd() / config_path
+                if config_path.is_file():
+                    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+                    if isinstance(payload, dict):
+                        tools = payload.get("tools")
+                        if isinstance(tools, list) and tools and isinstance(tools[0], dict):
+                            maybe_config = tools[0].get("config")
+                            if isinstance(maybe_config, dict):
+                                tool_config = maybe_config
+
+            registry_path = Path(tool_config.get("tool_registry_path", example_root / "config" / "tools.yaml"))
+            if not registry_path.is_absolute():
+                registry_path = (example_root / registry_path).resolve()
+            registry = ToolRegistry.from_yaml(registry_path)
+
+            return {
+                "ExpertName": ExpertName,
+                "registry": registry,
+                "registry_path": str(registry_path),
+                "min_stop_tool_calls": int(tool_config.get("prompt_min_stop_tool_calls", 3)),
+                "build_initial_system": build_expert_single_step_sft_system_prompt,
+                "build_initial_user": build_expert_single_step_sft_user_prompt,
+                "build_state": build_expert_state_prompt,
+                "build_system": build_expert_system_prompt,
+            }
+        except Exception as exc:
+            logger.warning("Current restoration prompt compatibility disabled: %s", exc)
+            return None
+
+    def _uses_current_restoration_prompt(self, agent_data: AgentData) -> bool:
+        return bool(self.current_restoration_prompt) and getattr(agent_data, "data_source", "") == "restoration"
+
+    def _restoration_expert_name(self, agent_data: AgentData) -> Any:
+        prompt_config = self.current_restoration_prompt
+        if prompt_config is None:
+            return None
+
+        ExpertName = prompt_config["ExpertName"]
+        extra_info = getattr(agent_data, "sample_extra_info", {}) or {}
+        raw_expert = extra_info.get("expert_name") or extra_info.get("expert") or "fog"
+        aliases = {
+            "fog": ExpertName.FOG,
+            "fog_expert": ExpertName.FOG,
+            "low_light": ExpertName.LOW_LIGHT,
+            "low-light": ExpertName.LOW_LIGHT,
+            "low_light_expert": ExpertName.LOW_LIGHT,
+            "rain": ExpertName.RAIN,
+            "rain_expert": ExpertName.RAIN,
+            "snow": ExpertName.SNOW,
+            "snow_expert": ExpertName.SNOW,
+        }
+        raw_expert = str(raw_expert)
+        if raw_expert in aliases:
+            return aliases[raw_expert]
+        return ExpertName(raw_expert)
+
+    def _current_image_user_content(self, text: str) -> str | list[dict[str, Any]]:
+        if self.processor is None:
+            return text
+        image_text = text.removeprefix("<image>\n")
+        return [{"type": "image"}, {"type": "text", "text": image_text}]
+
+    def _current_history_feedback_text(self, agent_data: AgentData) -> str:
+        entries = getattr(agent_data, "current_prompt_history", [])
+        if not entries:
+            return "No historical restoration actions have been executed yet."
+        return "Historical tool feedback: " + " ".join(entries)
+
+    def _build_current_restoration_decision_prompt(
+        self, agent_data: AgentData
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        prompt_config = self.current_restoration_prompt
+        if prompt_config is None:
+            return agent_data.messages, getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+
+        registry = prompt_config["registry"]
+        expert_name = self._restoration_expert_name(agent_data)
+        step_index = len(getattr(agent_data, "current_prompt_history", []))
+        min_stop_tool_calls = int(prompt_config["min_stop_tool_calls"])
+
+        if step_index == 0:
+            include_stop = False
+            system_prompt = prompt_config["build_initial_system"](expert_name, registry)
+            user_prompt = prompt_config["build_initial_user"]()
+        else:
+            include_stop = agent_data.total_tool_calls >= min_stop_tool_calls
+            system_prompt = prompt_config["build_system"](
+                expert_name,
+                registry,
+                allow_stop=include_stop,
+                min_stop_tool_calls=min_stop_tool_calls,
+            )
+            user_prompt = "<image>\n" + prompt_config["build_state"](
+                history_feedback=self._current_history_feedback_text(agent_data)
+            )
+
+        tool_schemas = [registry.build_tool_schema(include_stop=include_stop)]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": self._current_image_user_content(user_prompt)},
+        ]
+        return messages, tool_schemas
+
+    @staticmethod
+    def _append_current_history_feedback(agent_data: AgentData, tool_name: str, tool_metrics: dict[str, Any]) -> None:
+        action = str(tool_metrics.get("action") or tool_name)
+        if action == "stop":
+            return
+        step_value = tool_metrics.get("step")
+        try:
+            step_index = max(0, int(step_value) - 1)
+        except Exception:
+            step_index = len(getattr(agent_data, "current_prompt_history", []))
+
+        aggregate_score = tool_metrics.get("aggregate_score")
+        if isinstance(aggregate_score, (int, float)):
+            score_text = f"IQA aggregate_score={float(aggregate_score):.4f}"
+        else:
+            score_text = "IQA score unavailable"
+        entry = f"Step {step_index}: selected action {action}; {score_text}."
+        history = getattr(agent_data, "current_prompt_history", None)
+        if history is None:
+            history = []
+            agent_data.current_prompt_history = history
+        history.append(entry)
+
+    async def _get_or_create_tool_instance(
+        self,
+        tool_name: str,
+        tool: Any,
+        tools_kwargs: dict[str, Any],
+        agent_data: AgentData,
+    ) -> str:
+        async with agent_data.tool_instance_lock:
+            instance_id = agent_data.tool_instances.get(tool_name)
+            if instance_id is not None:
+                return instance_id
+
+            kwargs = tools_kwargs.get(tool_name, {})
+            instance_id, _ = await tool.create(create_kwargs=kwargs.get("create_kwargs", {}))
+            agent_data.tool_instances[tool_name] = instance_id
+            return instance_id
+
+    async def _release_tool_instances(self, agent_data: AgentData) -> None:
+        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        for tool_name, instance_id in list(agent_data.tool_instances.items()):
+            tool = active_tools.get(tool_name)
+            if tool is None:
+                continue
+            try:
+                await tool.release(instance_id)
+            except Exception as e:
+                logger.warning("Error when releasing tool '%s' instance '%s': %s", tool_name, instance_id, e)
+        agent_data.tool_instances.clear()
+
+    @rollout_trace_op
+    async def run(self, sampling_params: dict[str, Any], round_barrier=None, **kwargs) -> AgentLoopOutput:
+        messages = list(kwargs["raw_prompt"])
+
+        # extract images and videos from messages
+        multi_modal_data = await self.process_vision_info(messages)
+        images = multi_modal_data.get("images")
+        videos = multi_modal_data.get("videos")
+
+        metrics = {}
+        request_id = uuid4().hex
+        tools_kwargs = kwargs.get("tools_kwargs", {})
+
+        agent_data = AgentData(
+            messages=messages,
+            image_data=images,
+            video_data=videos,
+            metrics=metrics,
+            request_id=request_id,
+            tools_kwargs=tools_kwargs,
+        )
+
+        # Per-sample tool selection: filter global tools by extra_info.tool_selection
+        extra_info = kwargs.get("extra_info", {}) or {}
+        tool_selection = extra_info.get("tool_selection")
+        agent_data.data_source = kwargs.get("data_source", "")
+        agent_data.sample_extra_info = extra_info
+        agent_data.current_prompt_history = []
+        if tool_selection and self.tools:
+            selected = {name: self.tools[name] for name in tool_selection if name in self.tools}
+            agent_data._active_tools = selected
+            agent_data._active_tool_schemas = [
+                t.tool_schema.model_dump(exclude_unset=True, exclude_none=True) for t in selected.values()
+            ]
+        else:
+            agent_data._active_tools = self.tools
+            agent_data._active_tool_schemas = self.tool_schemas
+
+        try:
+            # State machine loop
+            state = AgentState.PENDING
+            generation_round = 0  # Track which generation round we're on
+            while state != AgentState.TERMINATED:
+                if state == AgentState.PENDING:
+                    state = await self._handle_pending_state(agent_data, sampling_params)
+                elif state == AgentState.GENERATING:
+                    # Before submitting the generation request, wait for the
+                    # round barrier if this is round 2+ (i.e., after at least
+                    # one tool call has been processed).  Round 1 starts
+                    # naturally for all trajectories at the same time, so no
+                    # barrier is needed there.
+                    if round_barrier is not None and generation_round > 0:
+                        await round_barrier.wait_for_next_round()
+                    generation_round += 1
+                    state = await self._handle_generating_state(agent_data, sampling_params)
+                elif state == AgentState.PROCESSING_TOOLS:
+                    state = await self._handle_processing_tools_state(agent_data)
+                else:
+                    logger.error(f"Invalid state: {state}")
+                    state = AgentState.TERMINATED
+
+            # Final reward shaping guardrail for restoration tasks.
+            # This ensures no-tool penalty is applied regardless of how the loop terminated
+            # (e.g., max response length, max turns, or regular stop).
+            if getattr(agent_data, "data_source", "") == "restoration":
+                response_len = len(agent_data.response_ids or [])
+                no_tool_call = agent_data.total_tool_calls == 0
+
+                if no_tool_call and not agent_data.extra_fields.get("no_tool_call_penalty_applied", False):
+                    agent_data.tool_rewards.append(self.EARLY_STOP_PENALTY)
+                    agent_data.extra_fields["no_tool_call_penalty"] = self.EARLY_STOP_PENALTY
+                    agent_data.extra_fields["no_tool_call_penalty_applied"] = True
+
+                # Penalize length-hacking when no tool was used in the whole trajectory.
+                # The penalty increases linearly after a safe threshold.
+                if len(agent_data.tool_rewards) > 0 and response_len > self.NO_TOOL_LENGTH_THRESHOLD and no_tool_call:
+                    denom = max(1, self.response_length - self.NO_TOOL_LENGTH_THRESHOLD)
+                    length_ratio = (response_len - self.NO_TOOL_LENGTH_THRESHOLD) / denom
+                    length_ratio = max(0.0, min(1.0, float(length_ratio)))
+                    no_tool_length_penalty = -self.NO_TOOL_LENGTH_PENALTY_ALPHA * length_ratio
+                    agent_data.tool_rewards.append(no_tool_length_penalty)
+                    agent_data.extra_fields["no_tool_length_penalty"] = no_tool_length_penalty
+
+                # Expose decomposed reward parts for easier diagnosis in logs.
+                # Trajectory-level duplicate penalty: penalize choosing the same
+                # tool multiple times across the whole trajectory (not just
+                # consecutively).  The penalty grows with the number of repeats:
+                #   penalty = -scale * sum(count - 1 for each tool with count > 1)
+                # i.e. each extra occurrence of a repeated tool costs `scale`.
+                # "stop" is excluded — calling stop multiple times is impossible
+                # because the loop terminates on the first stop.
+                action_counts: dict[str, int] = {}
+                for a in agent_data.action_history:
+                    if a != "stop":
+                        action_counts[a] = action_counts.get(a, 0) + 1
+                total_repeats = sum(c - 1 for c in action_counts.values() if c > 1)
+                trajectory_repeat_penalty = -self.TRAJECTORY_REPEAT_PENALTY_SCALE * total_repeats
+                if trajectory_repeat_penalty < 0:
+                    agent_data.tool_rewards.append(trajectory_repeat_penalty)
+                    agent_data.extra_fields["trajectory_repeat_penalty"] = trajectory_repeat_penalty
+                    agent_data.extra_fields["trajectory_repeat_counts"] = {
+                        a: c for a, c in action_counts.items() if c > 1
+                    }
+
+                agent_data.extra_fields["reward_components"] = {
+                    "tool_call_reward_per_step": self.TOOL_CALL_REWARD,
+                    "early_stop_penalty": self.EARLY_STOP_PENALTY if no_tool_call else 0.0,
+                    "no_tool_length_threshold": self.NO_TOOL_LENGTH_THRESHOLD,
+                    "no_tool_length_penalty_alpha": self.NO_TOOL_LENGTH_PENALTY_ALPHA,
+                    "response_length": response_len,
+                    "trajectory_repeat_penalty": trajectory_repeat_penalty,
+                    "tool_reward_sum": float(sum(agent_data.tool_rewards)) if agent_data.tool_rewards else 0.0,
+                }
+
+            # Finalize output
+            response_ids = agent_data.prompt_ids[-len(agent_data.response_mask) :]
+            prompt_ids = agent_data.prompt_ids[: len(agent_data.prompt_ids) - len(agent_data.response_mask)]
+            multi_modal_data = {}
+            if agent_data.image_data is not None:
+                multi_modal_data["images"] = agent_data.image_data
+            if agent_data.video_data is not None:
+                multi_modal_data["videos"] = agent_data.video_data
+
+            output: AgentLoopOutput = AgentLoopOutput(
+                prompt_ids=prompt_ids,
+                response_ids=response_ids[: self.response_length],
+                response_mask=agent_data.response_mask[: self.response_length],
+                multi_modal_data=multi_modal_data,
+                response_logprobs=agent_data.response_logprobs[: self.response_length]
+                if agent_data.response_logprobs
+                else None,
+                num_turns=agent_data.user_turns + agent_data.assistant_turns + 1,
+                metrics=agent_data.metrics,
+                routed_experts=agent_data.routed_experts,
+                extra_fields=agent_data.extra_fields,
+            )
+            output.extra_fields.update({"turn_scores": agent_data.turn_scores, "tool_rewards": agent_data.tool_rewards})
+            return output
+        finally:
+            # Always depart from the round barrier, even if an exception occurred.
+            # Without this, remaining trajectories would wait forever for a
+            # departed trajectory that never arrives at the barrier.
+            if round_barrier is not None:
+                round_barrier.depart()
+            await self._release_tool_instances(agent_data)
+
+    async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
+        """Handle the pending state: prepare the prompt and start generation."""
+        schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+        if self._uses_current_restoration_prompt(agent_data):
+            agent_data.messages, schemas = self._build_current_restoration_decision_prompt(agent_data)
+            agent_data._active_tool_schemas = schemas
+        self._log_image_alignment(
+            stage="pending_before_apply_chat_template",
+            messages=agent_data.messages,
+            images=agent_data.image_data,
+            request_id=agent_data.request_id,
+        )
+        prompt_ids = await self.apply_chat_template(
+            agent_data.messages,
+            tools=schemas,
+            images=agent_data.image_data,
+            videos=agent_data.video_data,
+        )
+        agent_data.prompt_ids = prompt_ids
+        return AgentState.GENERATING
+
+    async def _handle_generating_state(
+        self, agent_data: AgentData, sampling_params: dict[str, Any], ignore_termination: bool = False
+    ) -> AgentState:
+        """Handle the generating state: generate model response and check for tool calls."""
+        with simple_timer("generate_sequences", agent_data.metrics):
+            output: TokenOutput = await self.server_manager.generate(
+                request_id=agent_data.request_id,
+                prompt_ids=agent_data.prompt_ids,
+                sampling_params=sampling_params,
+                image_data=agent_data.image_data,
+                video_data=agent_data.video_data,
+            )
+        # first time to set num_preempted
+        if agent_data.metrics.get("num_preempted") is None:
+            agent_data.metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
+        # then add num_preempted to the metrics
+        else:
+            agent_data.metrics["num_preempted"] += output.num_preempted if output.num_preempted is not None else 0
+
+        if not agent_data.extra_fields:
+            agent_data.extra_fields.update(output.extra_fields)
+        else:
+            # Multi-round calls, only update the maximum max_global_steps.
+            max_global_steps = output.extra_fields.get("max_global_steps", None)
+            if max_global_steps:
+                agent_data.extra_fields["max_global_steps"] = max_global_steps
+
+        agent_data.assistant_turns += 1
+        agent_data.response_ids = output.token_ids
+        agent_data.prompt_ids += agent_data.response_ids
+        agent_data.response_mask += [1] * len(agent_data.response_ids)
+        if output.log_probs:
+            agent_data.response_logprobs += output.log_probs
+
+        if output.routed_experts is not None:
+            agent_data.routed_experts = output.routed_experts
+
+        # Check hard termination conditions (response length overflow)
+        if not ignore_termination and len(agent_data.response_mask) >= self.response_length:
+            return AgentState.TERMINATED
+
+        # Extract tool calls (use per-sample tools if routed)
+        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        tools = [tool.tool_schema for tool in active_tools.values()]
+        _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(agent_data.response_ids, tools)
+
+        # Check soft termination conditions (max turns) AFTER tool call extraction.
+        # This ensures the final assistant turn's tool call (e.g. "stop") is still
+        # processed and rewarded, rather than being silently discarded.
+        at_max_assistant_turns = self.max_assistant_turns and agent_data.assistant_turns >= self.max_assistant_turns
+        at_max_user_turns = self.max_user_turns and agent_data.user_turns >= self.max_user_turns
+
+        if agent_data.tool_calls:
+            # If we are at max turns, still execute the tool call (e.g. "stop")
+            # so its reward is computed, but mark that the loop should terminate
+            # after processing the tool response.
+            if at_max_assistant_turns or at_max_user_turns:
+                agent_data.extra_fields["_terminate_after_tool"] = True
+            return AgentState.PROCESSING_TOOLS
+        else:
+            # No tool call — terminate.
+            # Enforce tool usage per assistant turn for restoration.
+            # Any step that does not call a tool is treated as early stop and penalized.
+            if getattr(agent_data, "data_source", "") == "restoration":
+                agent_data.tool_rewards.append(self.EARLY_STOP_PENALTY)
+                agent_data.extra_fields["no_tool_call_penalty"] = self.EARLY_STOP_PENALTY
+                agent_data.extra_fields["no_tool_call_penalty_applied"] = True
+            return AgentState.TERMINATED
+
+    async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
+        """Handle the processing tools state: execute tool calls and prepare tool responses."""
+        add_messages: list[dict[str, Any]] = []
+        returned_images_this_turn: list[Any] = []
+        use_latest_image_context = getattr(agent_data, "data_source", "") == "restoration"
+
+        tasks = []
+        tool_call_names = []
+        for tool_call in agent_data.tool_calls[: self.max_parallel_calls]:
+            tasks.append(self._call_tool(tool_call, agent_data.tools_kwargs, agent_data))
+            tool_call_names.append(tool_call.name)
+        agent_data.total_tool_calls += len(tool_call_names)
+
+        with simple_timer("tool_calls", agent_data.metrics):
+            responses = await asyncio.gather(*tasks)
+
+        # Check if any tool response signals a stop action — this must terminate the loop.
+        # We detect it via the metrics dict returned by _call_tool (action == "stop").
+        stop_triggered = any(res.get("action") == "stop" for _, _, res in responses)
+
+        use_current_restoration_prompt = self._uses_current_restoration_prompt(agent_data)
+
+        # Process tool responses and update multi_modal_data.
+        for tool_call_name, (tool_response, tool_reward, tool_metrics) in zip(
+            tool_call_names, responses, strict=False
+        ):
+            if not use_current_restoration_prompt:
+                # Create message from tool response
+                if tool_response.image or tool_response.video:
+                    # Multi-modal content with structured format
+                    if not getattr(self.processor, "image_processor", None):
+                        raise ValueError(
+                            "Multimedia data can only be processed by `processor`, but the processor is None. "
+                            "This error is often caused if you are using a LLM model but your tool returns multimodal "
+                            "data. Plase use a vlm as the base model."
+                        )
+                    content = []
+                    if tool_response.image and not use_latest_image_context:
+                        content.append({"type": "image"})
+                    if tool_response.video:
+                        content.append({"type": "video"})
+                    if tool_response.text:
+                        content.append({"type": "text", "text": tool_response.text})
+                    if tool_response.image and use_latest_image_context and not content:
+                        content.append({"type": "text", "text": "Current image updated."})
+                    message = {"role": "tool", "content": content}
+                else:
+                    # Text-only content
+                    message = {"role": "tool", "content": tool_response.text or ""}
+
+                add_messages.append(message)
+
+            # Handle image data
+            if tool_response.image:
+                if isinstance(tool_response.image, list):
+                    # Ensure all elements in the list are valid image objects
+                    for img in tool_response.image:
+                        if img is not None:  # Add a check to ensure the image is not None
+                            returned_images_this_turn.append(img)
+                else:
+                    # Ensure the image is not None
+                    if tool_response.image is not None:
+                        returned_images_this_turn.append(tool_response.image)
+
+            # Handle video data
+            if tool_response.video:
+                # Currently not supported, raise informative error
+                logger.warning("Multimedia type 'video' is not currently supported. Only 'image' is supported.")
+                raise NotImplementedError(
+                    "Multimedia type 'video' is not currently supported. Only 'image' is supported."
+                )
+
+            if tool_reward is not None:
+                tool_metrics = tool_metrics or {}
+                tool_call_reward = 0.0 if tool_metrics.get("skip_tool_call_reward") else self.TOOL_CALL_REWARD
+                agent_data.tool_rewards.append(tool_reward + tool_call_reward)
+                # Record action name for trajectory-level duplicate penalty
+                action_name = tool_metrics.get("action")
+                if action_name:
+                    agent_data.action_history.append(action_name)
+                if use_current_restoration_prompt:
+                    self._append_current_history_feedback(agent_data, tool_call_name, tool_metrics)
+
+        if returned_images_this_turn:
+            if use_latest_image_context:
+                # Keep only the newest restoration image in context. This mirrors
+                # the current framework, which sends the current image at each
+                # expert decision instead of accumulating all intermediate images.
+                agent_data.image_data = [returned_images_this_turn[-1]]
+            else:
+                if agent_data.image_data is None:
+                    agent_data.image_data = []
+                elif not isinstance(agent_data.image_data, list):
+                    agent_data.image_data = [agent_data.image_data]
+                for img in returned_images_this_turn:
+                    agent_data.image_data.append(img)
+
+        # If the model called stop, terminate the loop now so the trajectory ends
+        # at the model's chosen stopping point rather than being forced by max_turns.
+        if stop_triggered:
+            return AgentState.TERMINATED
+
+        # If we reached max turns before this tool call, the tool was still executed
+        # (so its reward is counted), but we should not continue the loop.
+        if agent_data.extra_fields.get("_terminate_after_tool"):
+            return AgentState.TERMINATED
+
+        if use_current_restoration_prompt:
+            add_messages, schemas = self._build_current_restoration_decision_prompt(agent_data)
+            agent_data._active_tool_schemas = schemas
+            agent_data.messages.extend(add_messages)
+            images = agent_data.image_data if self.processor is not None else None
+            videos = None
+            self._log_image_alignment(
+                stage="processing_tools_current_prompt_before_apply_chat_template",
+                messages=add_messages,
+                images=images,
+                request_id=agent_data.request_id,
+            )
+            response_ids = await self.apply_chat_template(
+                add_messages,
+                tools=schemas,
+                images=images,
+                videos=videos,
+                remove_system_prompt=False,
+            )
+        else:
+            agent_data.messages.extend(add_messages)
+
+            if self.tool_parser_name == "gpt-oss":
+                logger.info("manually format tool responses for gpt-oss")
+                tool_response_text = build_gpt_oss_tool_response_text(add_messages, tool_call_names)
+                response_ids = await self.loop.run_in_executor(
+                    None, lambda: self.tokenizer.encode(tool_response_text, add_special_tokens=False)
+                )
+            else:
+                if use_latest_image_context:
+                    # Tool-returned restoration images replace the current visual
+                    # state instead of adding new image markers to the text history.
+                    # The prompt keeps the original image slot and binds it to the
+                    # latest image for the next generation round, while text
+                    # feedback preserves action history.
+                    images = None
+                else:
+                    # Pass None when there are no new images / videos to stay
+                    # compatible with downstream image processing logic.
+                    images = returned_images_this_turn if returned_images_this_turn else None
+                videos = None
+                self._log_image_alignment(
+                    stage="processing_tools_tool_response_before_apply_chat_template",
+                    messages=add_messages,
+                    images=images,
+                    request_id=agent_data.request_id,
+                )
+                response_ids = await self.apply_chat_template(
+                    add_messages,
+                    images=images,
+                    videos=videos,
+                    remove_system_prompt=True,
+                )
+
+        if len(agent_data.response_mask) + len(response_ids) >= self.response_length:
+            return AgentState.TERMINATED
+        # Update prompt_ids and response_mask
+
+        self._log_image_alignment(
+            stage="processing_tools_after_message_and_image_update",
+            messages=agent_data.messages,
+            images=agent_data.image_data,
+            request_id=agent_data.request_id,
+        )
+
+        agent_data.prompt_ids += response_ids
+        agent_data.response_mask += [0] * len(response_ids)
+        if agent_data.response_logprobs:
+            agent_data.response_logprobs += [0.0] * len(response_ids)
+        agent_data.user_turns += 1
+
+        return AgentState.GENERATING
+
+    async def _call_tool(
+        self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data: AgentData
+    ) -> tuple[ToolResponse, float, dict]:
+        """Call tool and return tool response."""
+        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        try:
+            # TODO: append malformed tool_call to the prompt: invalid function name or arguments
+            tool_name = tool_call.name
+            tool_args = json.loads(tool_call.arguments)
+            tool = active_tools[tool_name]
+            instance_id = await self._get_or_create_tool_instance(tool_name, tool, tools_kwargs, agent_data)
+            tool_execution_response, tool_reward, res = await tool.execute(
+                instance_id, tool_args, agent_data=agent_data
+            )
+        except KeyError:
+            logger.warning(f"Error when executing tool: unknown tool '{tool_call.name}'")
+            return (
+                ToolResponse(
+                    text=f"Error when executing tool: unknown tool '{tool_call.name}'",
+                ),
+                -1.0,
+                {"skip_tool_call_reward": True},
+            )
+        except Exception as e:
+            logger.warning(f"Error when executing tool: {e}")
+            return (
+                ToolResponse(
+                    text=f"Error when executing tool: {e}",
+                ),
+                0.0,
+                {"skip_tool_call_reward": True},
+            )
+
+        tool_response_text = tool_execution_response.text
+        if tool_response_text and len(tool_response_text) > self.max_tool_response_length:
+            if self.tool_response_truncate_side == "left":
+                tool_response_text = tool_response_text[: self.max_tool_response_length] + "...(truncated)"
+            elif self.tool_response_truncate_side == "right":
+                tool_response_text = "(truncated)..." + tool_response_text[-self.max_tool_response_length :]
+            else:
+                length = self.max_tool_response_length // 2
+                tool_response_text = tool_response_text[:length] + "...(truncated)..." + tool_response_text[-length:]
+
+        # Create ToolResponse from tool execution result
+        tool_response_kwargs = {"text": tool_response_text}
+
+        # Add multimedia data if present
+        for attr_name in ["image", "video"]:
+            if hasattr(tool_execution_response, attr_name):
+                attr_value = getattr(tool_execution_response, attr_name)
+                if attr_value is not None:
+                    tool_response_kwargs[attr_name] = attr_value
+
+        return ToolResponse(**tool_response_kwargs), tool_reward, res

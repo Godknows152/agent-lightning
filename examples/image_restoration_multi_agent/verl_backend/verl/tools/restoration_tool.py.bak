@@ -1,0 +1,436 @@
+# Copyright 2024 Bytedance Ltd. and/or its affiliates
+# Copyright 2023-2024 SGLang Team
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""
+Image Restoration Tool for verl multi-turn rollout.
+
+This tool wraps the RestorationToolkit located in restoration_tools/agent_tools/.
+It self-contains IQA-based reward computation (no separate interactions layer
+is required), and is designed for use with the standard verl ToolAgentLoop and
+the hermes tool-call format.
+
+Key design decisions:
+- IQA scoring (QAlign / MANIQA / MUSIQ / CLIPIQA / NIQE) is done inside execute()
+  and the reward is returned directly as tool_reward_score.
+- Termination is controlled by YAML config (max_user_turns / max_assistant_turns)
+  rather than a hard-stop mechanism inside the tool.
+- The tool returns a feedback text message after each step so the model can
+  reason about its next action.
+
+Supported restoration actions:
+- real_esrgan: Super-resolution / deblurring / denoising / compression artifact removal
+- scunet: High-quality denoising
+- retinexformer_fivek: Low-light enhancement
+- hvicidnet: Low-light / exposure correction
+- lightdiff: Low-light enhancement (diffusion model)
+- turbo_rain: Fast deraining
+- s2former: Rain streak removal
+- idt: Deraining / raindrop removal
+- ridcp: Dehazing
+- kanet: Dehazing
+- turbo_snow: Desnowing
+- snowmaster: Advanced desnowing
+"""
+
+import logging
+import os
+import sys
+import torch
+from pathlib import Path
+from typing import Any, Optional
+from uuid import uuid4
+
+from .base_tool import BaseTool
+from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from verl.utils.rollout_trace import rollout_trace_op
+
+logger = logging.getLogger(__name__)
+logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
+
+# Add restoration_tools/agent_tools to sys.path for importing RestorationToolkit
+AGENT_TOOLS_PATH = Path(__file__).resolve().parent.parent.parent / 'restoration_tools' / 'agent_tools'
+if AGENT_TOOLS_PATH.exists() and str(AGENT_TOOLS_PATH) not in sys.path:
+    sys.path.insert(0, str(AGENT_TOOLS_PATH))
+
+# Add submodule paths (Retinexformer, SCUNet, etc.)
+_RESTORATION_TOOLS_PATH = AGENT_TOOLS_PATH.parent
+_submodules = [
+    'Retinexformer', 'HVICIDNet', 'LightenDiffusion', 'SCUNet',
+    'ESRGAN', 'IDT', 'RIDCP', 'KANet', 'S2Former', 'SnowMaster', 'img2img_turbo',
+]
+for _submod in _submodules:
+    _submod_path = _RESTORATION_TOOLS_PATH / _submod
+    if _submod_path.exists() and str(_submod_path) not in sys.path:
+        sys.path.insert(0, str(_submod_path))
+
+# Allowed restoration actions (including stop)
+ALLOWED_ACTIONS = {
+    'real_esrgan', 'scunet', 'retinexformer_fivek', 'hvicidnet', 'lightdiff',
+    'turbo_rain', 's2former', 'idt', 'ridcp', 'kanet', 'turbo_snow', 'snowmaster', 'stop',
+}
+
+# IQA metric weights per degradation type (QAlign, MANIQA, MUSIQ, CLIPIQA, NIQE)
+SCORE_WEIGHT_MAP: dict[str, list[float]] = {
+    'night':       [2./9,    2./9,    0.,      2./9,    3./9   ],
+    'rain_streak': [1./5,    1.25/5,  1./5,    0.75/5,  1./5   ],
+    'rain_drop':   [0.,      0.5/3,   0.,      1.25/3,  1.25/3 ],
+    'rain_drive':  [0.5/4,   1.5/4,  1./4,    1./4,    0.      ],
+    'snow':        [1.5/5,   0.75/5,  1./5,    0.75/5,  1./5   ],
+    'fog':         [1.5/5,   0.5/5,   1.5/5,   0.5/5,   1./5   ],
+}
+DEFAULT_WEIGHT: list[float] = [0.2, 0.2, 0.2, 0.2, 0.2]
+
+# Module-level caches
+_toolkit_instance = None
+_iqa_instance = None
+
+
+def get_toolkit(
+    device: str = 'cuda',
+    models: list = None,
+    preload: bool = True,
+    auto_unload: bool = False,
+):
+    """Lazy load and cache the RestorationToolkit instance."""
+    global _toolkit_instance
+    if _toolkit_instance is None:
+        try:
+            from restoration_tools.agent_tools import RestorationToolkit
+            _toolkit_instance = RestorationToolkit(
+                models=models,
+                device=device,
+                load_iqa=False,
+                preload=preload,
+                auto_unload=auto_unload,
+            )
+            logger.info(
+                f"RestorationToolkit initialized on {device} "
+                f"(preload={preload}, auto_unload={auto_unload})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize RestorationToolkit: {e}")
+            raise
+    return _toolkit_instance
+
+
+def get_iqa_scorer(device: str = 'cuda'):
+    """Lazy load and cache the IQAScore instance."""
+    global _iqa_instance
+    if _iqa_instance is None:
+        try:
+            from iqa_reward import IQAScore
+            _iqa_instance = IQAScore(device=device)
+            logger.info(f"IQAScore initialized on {device}")
+        except Exception as e:
+            logger.error(f"Failed to initialize IQAScore: {e}")
+            raise
+    return _iqa_instance
+
+
+class RestorationTool(BaseTool):
+    """A tool for iterative image restoration / degradation removal.
+
+    Computes IQA-based step rewards inside ``execute()`` and returns them
+    directly to the verl ToolAgentLoop as ``tool_reward_score``.
+    No external interactions layer is required.
+    """
+
+    def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
+        super().__init__(config, tool_schema)
+        self._instance_dict: dict[str, dict] = {}
+
+        self.device = config.get("device", "cuda")
+        self.iqa_device = config.get("iqa_device", self.device)
+        self.preload_models = config.get("models", None)
+        self.output_dir = config.get("output_dir", "/tmp/verl_restoration")
+        self.preload = config.get("preload", True)
+        self.auto_unload = config.get("auto_unload", False)
+        self.use_iqa = config.get("use_iqa", True)
+        self.alpha = float(config.get("alpha", 0.9))       # marginal-improvement weight
+        self.beta = 1.0 - self.alpha                       # identity-improvement weight
+        self.reward_scale = float(config.get("reward_scale", 1.0))
+
+        os.makedirs(self.output_dir, exist_ok=True)
+        self._toolkit = None
+        self._iqa = None
+
+        logger.info(
+            f"RestorationTool initialized: device={self.device}, iqa_device={self.iqa_device}, "
+            f"use_iqa={self.use_iqa}, alpha={self.alpha}, reward_scale={self.reward_scale}"
+        )
+
+    @property
+    def toolkit(self):
+        if self._toolkit is None:
+            self._toolkit = get_toolkit(
+                device=self.device,
+                models=self.preload_models,
+                preload=self.preload,
+                auto_unload=self.auto_unload,
+            )
+        return self._toolkit
+
+    @property
+    def iqa(self):
+        if self._iqa is None and self.use_iqa:
+            self._iqa = get_iqa_scorer(device=self.iqa_device)
+        return self._iqa
+
+    def get_openai_tool_schema(self) -> OpenAIFunctionToolSchema:
+        return self.tool_schema
+
+    def _get_iqa_scores(self, image_path: str) -> list[float]:
+        """Compute [QAlign, MANIQA, MUSIQ, CLIPIQA, NIQE] for an image."""
+        if not self.use_iqa:
+            return [0.0, 0.0, 0.0, 0.0, 0.0]
+        try:
+            scores = self.iqa(image_path)  # returns list of 5 floats
+            return list(scores)
+        except Exception as e:
+            logger.warning(f"IQA scoring failed for {image_path}: {e}")
+            return [0.0, 0.0, 0.0, 0.0, 0.0]
+
+    def _calculate_reward(
+        self,
+        prev_scores: list[float],
+        curr_scores: list[float],
+        identity_scores: list[float],
+        weights: list[float],
+    ) -> float:
+        """Compute step reward as alpha*marginal + beta*identity improvement."""
+        prev_t = torch.tensor(prev_scores, dtype=torch.float32)
+        curr_t = torch.tensor(curr_scores, dtype=torch.float32)
+        iden_t = torch.tensor(identity_scores, dtype=torch.float32)
+        w_t = torch.tensor(weights, dtype=torch.float32)
+
+        marginal = ((curr_t - prev_t) * w_t).sum().item()
+        identity = ((curr_t - iden_t) * w_t).sum().item()
+        mixed = self.alpha * marginal + self.beta * identity
+        return float(torch.clamp(torch.tensor(mixed * self.reward_scale), -10.0, 10.0).item())
+
+    def _generate_feedback(
+        self,
+        action: str,
+        step: int,
+        curr_scores: list[float],
+        reward: float,
+        actions_history: list[str],
+    ) -> str:
+        """Generate human-readable feedback for the model's next turn."""
+        score_names = ["QAlign", "MANIQA", "MUSIQ", "CLIPIQA", "NIQE"]
+        score_strs = ", ".join(
+            f"{n}={v:.4f}" for n, v in zip(score_names, curr_scores)
+        )
+        history_str = " → ".join(actions_history) if actions_history else "none"
+
+        lines = [
+            f"Step {step}: Applied '{action}'.",
+            f"Current IQA scores: [{score_strs}]",
+            f"Step reward: {reward:.4f}",
+            f"Action history: {history_str}",
+        ]
+        if step >= 4:
+            lines.append(
+                "You have completed 4 or more restoration steps. "
+                "Consider stopping if the image quality is satisfactory, "
+                "or apply one more targeted operation."
+            )
+        else:
+            lines.append(
+                "Continue with the next restoration action or stop if the image looks good."
+            )
+        return "\n".join(lines)
+
+    async def create(
+        self,
+        instance_id: Optional[str] = None,
+        original_image: Optional[str] = None,
+        image_path: Optional[str] = None,
+        degradation_type: Optional[str] = None,
+        **kwargs,
+    ) -> tuple[str, ToolResponse]:
+        """Create a tool instance for a trajectory.
+
+        Args:
+            instance_id: Optional instance identifier (generated if None).
+            original_image: Path to the original degraded image.
+            image_path: Alias for original_image (for dataset compatibility).
+            degradation_type: Degradation category, e.g. 'fog', 'night', 'snow'.
+                              Used to select IQA metric weights.
+        """
+        if original_image is None and image_path is not None:
+            original_image = image_path
+
+        if instance_id is None:
+            instance_id = str(uuid4())
+
+        instance_output_dir = os.path.join(self.output_dir, instance_id)
+        os.makedirs(instance_output_dir, exist_ok=True)
+
+        weights = SCORE_WEIGHT_MAP.get(degradation_type, DEFAULT_WEIGHT)
+
+        # Compute identity (original) IQA scores
+        identity_scores = self._get_iqa_scores(original_image) if original_image else [0.0] * 5
+
+        self._instance_dict[instance_id] = {
+            "original_image": original_image,
+            "current_image": original_image,
+            "processed_images": [],
+            "actions_history": [],
+            "scores_history": [identity_scores],
+            "rewards_history": [],
+            "identity_scores": identity_scores,
+            "weights": weights,
+            "step": 0,
+            "output_dir": instance_output_dir,
+        }
+
+        logger.info(
+            f"Created restoration instance {instance_id} for: {original_image} "
+            f"(degradation={degradation_type}, identity_scores={identity_scores})"
+        )
+        return instance_id, ToolResponse()
+
+    @rollout_trace_op
+    async def execute(
+        self,
+        instance_id: str,
+        parameters: dict[str, Any],
+        **kwargs,
+    ) -> tuple[ToolResponse, float, dict]:
+        """Execute a restoration action and return an IQA-based step reward.
+
+        Args:
+            instance_id: The instance identifier returned by ``create``.
+            parameters: Dict with key ``action`` (e.g. ``'ridcp'``, ``'scunet'``).
+
+        Returns:
+            (ToolResponse, step_reward, metrics_dict)
+        """
+        action = parameters.get("action", "").lower().strip()
+
+        if action not in ALLOWED_ACTIONS:
+            error_msg = (
+                f"Invalid action '{action}'. "
+                f"Allowed: {', '.join(sorted(ALLOWED_ACTIONS))}"
+            )
+            logger.warning(error_msg)
+            return ToolResponse(text=error_msg), -0.1, {"error": "invalid_action"}
+
+        instance = self._instance_dict.get(instance_id)
+        if instance is None:
+            error_msg = f"Instance {instance_id} not found"
+            logger.error(error_msg)
+            return ToolResponse(text=error_msg), -0.1, {"error": "instance_not_found"}
+
+        if action == "stop":
+            step = instance["step"]
+            # Penalise premature stopping; allow free stop after step 4
+            reward = 0.0 if step >= 4 else -5.0
+            logger.info(f"Instance {instance_id}: stop action at step {step}, reward={reward}")
+            return (
+                ToolResponse(text=f"Restoration stopped after {step} step(s)."),
+                reward,
+                {"action": "stop", "step": step},
+            )
+
+        current_image = instance["current_image"]
+        output_dir = instance["output_dir"]
+
+        try:
+            logger.info(f"Instance {instance_id}: applying '{action}' to {current_image}")
+            result = self.toolkit.process_image(
+                tools=[action],
+                img_path=current_image,
+                output_dir=output_dir,
+                is_identify=True,
+            )
+
+            output_path = result.get("output_path")
+            if not output_path or not os.path.exists(output_path):
+                error_msg = "Restoration failed: no output generated"
+                logger.error(error_msg)
+                return ToolResponse(text=error_msg), -0.1, {"error": "restoration_failed"}
+
+            # Update instance state
+            instance["processed_images"].append((action, output_path))
+            instance["actions_history"].append(action)
+            instance["current_image"] = output_path
+            instance["step"] += 1
+
+            # Compute IQA scores for the new image
+            curr_scores = self._get_iqa_scores(output_path)
+            prev_scores = instance["scores_history"][-1]
+            identity_scores = instance["identity_scores"]
+            weights = instance["weights"]
+
+            reward = self._calculate_reward(prev_scores, curr_scores, identity_scores, weights)
+            instance["scores_history"].append(curr_scores)
+            instance["rewards_history"].append(reward)
+
+            # Generate feedback text
+            feedback = self._generate_feedback(
+                action=action,
+                step=instance["step"],
+                curr_scores=curr_scores,
+                reward=reward,
+                actions_history=instance["actions_history"],
+            )
+
+            # Build response with restored image
+            pil_img = None
+            try:
+                from PIL import Image as PILImage
+                pil_img = PILImage.open(output_path).convert("RGB")
+            except Exception as e:
+                logger.warning(f"Could not load result image with PIL: {e}")
+
+            response = ToolResponse(
+                image=[pil_img] if pil_img is not None else None,
+                text=feedback,
+            )
+
+            logger.info(
+                f"Instance {instance_id}: '{action}' done, step={instance['step']}, "
+                f"reward={reward:.4f}, output={output_path}"
+            )
+            return response, reward, {
+                "action": action,
+                "step": instance["step"],
+                "reward": reward,
+                "iqa_scores": curr_scores,
+                "input_path": current_image,
+                "output_path": output_path,
+            }
+
+        except Exception as e:
+            error_msg = f"Restoration error during '{action}': {e}"
+            logger.exception(error_msg)
+            return ToolResponse(text=error_msg), -0.1, {"error": str(e)}
+
+    async def calc_reward(self, instance_id: str, **kwargs) -> float:
+        """Return cumulative reward for the trajectory (sum of step rewards)."""
+        instance = self._instance_dict.get(instance_id)
+        if instance is None:
+            return 0.0
+        return float(sum(instance.get("rewards_history", [])))
+
+    async def release(self, instance_id: str, **kwargs) -> None:
+        if instance_id in self._instance_dict:
+            del self._instance_dict[instance_id]
+            logger.info(f"Released restoration instance {instance_id}")
+
+    def get_instance_state(self, instance_id: str) -> Optional[dict]:
+        return self._instance_dict.get(instance_id)

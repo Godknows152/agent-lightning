@@ -201,27 +201,12 @@ def build_expert_single_step_sft_user_prompt() -> str:
 
 def build_expert_state_prompt(
     *,
-    step_index: int,
-    remaining_steps: int,
-    current_score: float,
-    best_score: float,
-    original_score: float,
-    consecutive_no_improvement: int,
-    history_json: str,
-    latest_feedback: str,
+    history_feedback: str,
 ) -> str:
     """Build the text state paired with the current image at one expert turn."""
 
-    return f"""Select the next restoration action for the current image.
-
-Workflow state:
-- step_index: {step_index}
-- remaining_steps: {remaining_steps}
-- original_aggregate_score: {original_score:.6f}
-- current_aggregate_score: {current_score:.6f}
-- historical_best_aggregate_score: {best_score:.6f}
-- consecutive_no_improvement: {consecutive_no_improvement}
-- latest_iqa_feedback: {latest_feedback}
-- action_and_evaluation_history_json: {history_json}
-
-Respond with exactly one Hermes <tool_call> block following the system instructions, with no extra text."""
+    return (
+        f"{history_feedback}\n\n"
+        "Select the next restoration action for the current image. Respond with exactly one Hermes "
+        "<tool_call> block following the system instructions, with no extra text."
+    )

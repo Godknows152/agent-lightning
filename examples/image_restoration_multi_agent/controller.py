@@ -450,6 +450,7 @@ class ImageRestorationController:
         failures = sum(not step.success for step in state.steps)
         return (
             quality_gain
+            + self.settings.tool_call_reward * state.tool_call_count
             - self.settings.tool_call_cost * state.tool_call_count
             - self.settings.invalid_action_penalty * state.invalid_action_count
             - self.settings.failure_penalty * failures
@@ -476,12 +477,13 @@ class ImageRestorationController:
         repeated_penalty = (
             self.settings.repeated_action_penalty if any(step.tool_name == action for step in state.steps) else 0.0
         )
-        step_reward = clipped_quality - self.settings.tool_call_cost - repeated_penalty
+        step_reward = clipped_quality + self.settings.tool_call_reward - self.settings.tool_call_cost - repeated_penalty
         return step_reward, {
             "delta_from_previous": evaluation.delta_from_previous,
             "delta_from_original": evaluation.delta_from_original,
             "quality_delta": quality_delta,
             "scaled_clipped_quality": clipped_quality,
+            "tool_call_reward": self.settings.tool_call_reward,
             "tool_call_cost": -self.settings.tool_call_cost,
             "repeated_action_penalty": -repeated_penalty,
         }
@@ -496,9 +498,15 @@ class ImageRestorationController:
         repeated_penalty = (
             self.settings.repeated_action_penalty if any(step.tool_name == action for step in state.steps) else 0.0
         )
-        reward = -self.settings.failure_penalty - self.settings.tool_call_cost - repeated_penalty
+        reward = (
+            self.settings.tool_call_reward
+            - self.settings.failure_penalty
+            - self.settings.tool_call_cost
+            - repeated_penalty
+        )
         return reward, {
             "failure_penalty": -self.settings.failure_penalty,
+            "tool_call_reward": self.settings.tool_call_reward,
             "tool_call_cost": -self.settings.tool_call_cost,
             "repeated_action_penalty": -repeated_penalty,
         }

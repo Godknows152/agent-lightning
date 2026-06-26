@@ -207,6 +207,8 @@ def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
 
     assert config.workflow.max_steps == 6
     assert config.workflow.invalid_action_penalty == 10.0
+    assert config.workflow.tool_call_reward == pytest.approx(0.2)
+    assert config.workflow.premature_stop_penalty == pytest.approx(0.0)
     assert config.expert_vlm.max_tokens == 512
     assert config.expert_vlm.temperature == pytest.approx(1.0)
     assert config.runtime.evaluator.device == "cuda:0"

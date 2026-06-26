@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from config import load_example_config
 from factory import DeterministicControllerFactory
 from schemas import DegradationType, RestorationTask, ValidationStatus
@@ -201,6 +202,36 @@ def test_step_iqa_reward_penalizes_immediate_stop(tmp_path: Path) -> None:
 
     assert state.final_reward == -1.0
     assert state.steps[0].reward_components["valid_stop"] == 0.0
+
+
+def test_step_iqa_reward_adds_tool_call_bonus_and_allows_free_early_stop(tmp_path: Path) -> None:
+    factory = _factory()
+    factory.config.workflow = factory.config.workflow.model_copy(
+        update={
+            "reward_mode": "step_iqa_sum_v1",
+            "reward_alpha": 0.5,
+            "reward_scale": 5.0,
+            "tool_call_reward": 0.2,
+            "tool_call_cost": 0.0,
+            "premature_stop_penalty": 0.0,
+            "stop_min_tool_calls": 3,
+        }
+    )
+    task = RestorationTask(
+        image_path=str(_input_image(tmp_path)),
+        degradation_type=DegradationType.FOG,
+        scripted_actions=["scunet", "stop"],
+        score_sequence=[0.0, 0.2],
+        output_dir=str(tmp_path / "run"),
+    )
+
+    state = factory.build(task).run(task, trajectory_id="trajectory-tool-bonus", trace=False).state
+
+    assert [round(step.step_reward, 6) for step in state.steps] == [1.2, 0.0]
+    assert state.final_reward == pytest.approx(1.2)
+    assert state.steps[0].reward_components["tool_call_reward"] == pytest.approx(0.2)
+    assert state.steps[1].reward_components["valid_stop"] == 0.0
+    assert state.steps[1].reward_components["stop_reward"] == 0.0
 
 
 def test_invalid_action_overrides_prior_iqa_gains_with_terminal_penalty(tmp_path: Path) -> None:

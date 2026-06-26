@@ -1,0 +1,6 @@
+.pydeps/
+data/*.parquet
+log/
+outputs/
+__pycache__/
+*.pyc

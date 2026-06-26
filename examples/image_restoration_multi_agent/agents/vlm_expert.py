@@ -164,30 +164,19 @@ def _generated_token_ids(first_choice: dict[str, Any]) -> list[int] | None:
     return _int_list(provider_fields.get("token_ids"))
 
 
-def _history_payload(state: RestorationTrajectoryState) -> list[dict[str, Any]]:
-    """Build a compact, serializable action and feedback history."""
+def _history_feedback_text(state: RestorationTrajectoryState) -> str:
+    """Build the natural-language tool feedback shown to the expert."""
 
-    history: list[dict[str, Any]] = []
+    lines: list[str] = []
     for step in state.steps:
         evaluation = step.evaluation
-        history.append(
-            {
-                "step_index": step.step_index,
-                "action": step.expert_decision.action,
-                "success": step.success,
-                "raw_scores": evaluation.raw_scores if evaluation is not None else None,
-                "normalized_scores": evaluation.normalized_scores if evaluation is not None else None,
-                "aggregate_score": evaluation.aggregate_score if evaluation is not None else None,
-                "delta_from_previous": evaluation.delta_from_previous if evaluation is not None else None,
-                "delta_from_original": evaluation.delta_from_original if evaluation is not None else None,
-                "delta_from_best": evaluation.delta_from_best if evaluation is not None else None,
-                "is_new_best": evaluation.is_new_best if evaluation is not None else None,
-                "step_reward": step.step_reward,
-                "feedback": evaluation.feedback if evaluation is not None else None,
-                "error": step.error,
-            }
+        score_text = (
+            f"IQA aggregate_score={evaluation.aggregate_score:.4f}" if evaluation is not None else "IQA score unavailable"
         )
-    return history
+        lines.append(f"Step {step.step_index}: selected action {step.expert_decision.action}; {score_text}.")
+    if not lines:
+        return "No historical restoration actions have been executed yet."
+    return "Historical tool feedback: " + " ".join(lines)
 
 
 class VLMRestorationExpertAgent:
@@ -243,14 +232,7 @@ class VLMRestorationExpertAgent:
                     min_stop_tool_calls=self.min_stop_tool_calls,
                 )
                 state_prompt = build_expert_state_prompt(
-                    step_index=step_index,
-                    remaining_steps=max(self.max_steps - step_index, 0),
-                    current_score=state.current_evaluation.aggregate_score,
-                    best_score=state.best_evaluation.aggregate_score,
-                    original_score=state.original_evaluation.aggregate_score,
-                    consecutive_no_improvement=state.consecutive_no_improvement,
-                    history_json=json.dumps(_history_payload(state), ensure_ascii=False, separators=(",", ":")),
-                    latest_feedback=state.current_evaluation.feedback,
+                    history_feedback=_history_feedback_text(state),
                 )
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},

@@ -1,0 +1,132 @@
+# Image Restoration Tool Configuration — 2-GPU variant
+#
+# GPU runtime strategy (symmetric pool mode):
+#   Each GPU hosts SGLang + a full replica of all restoration models + IQA.
+#   - worker_devices: one full RestorationToolkit replica per GPU
+#   - iqa_devices: one IQA replica per GPU, matched by worker index
+#   - preload=false: models are loaded on demand instead of at startup
+#   - auto_unload=false: models stay in memory across steps to avoid reload overhead
+#   => GPU 0: SGLang rollout + full restoration models + IQA
+#   => GPU 1: SGLang rollout + full restoration models + IQA
+#
+# This is the same symmetric pool pattern used by the 4-GPU config.
+#
+# Usage:
+#   actor_rollout_ref:
+#     rollout:
+#       multi_turn:
+#         tool_config_path: examples/sglang_multiturn/config/tool_config/restoration_tool_config_2gpu.yaml
+
+tools:
+  - class_name: "verl.tools.restoration_tool.RestorationTool"
+    config:
+      type: native
+      # Base device fallback. Actual restoration models are replicated on each GPU.
+      device: cuda:0
+      # Replicate a complete restoration toolkit on every GPU so concurrent
+      # batch tool calls can be dispatched to independent workers.
+      worker_devices: [cuda:0, cuda:1]
+      # Legacy fallback used only when worker_devices is not configured.
+      model_devices: [cuda:0, cuda:1]
+      # Directory for intermediate output images
+      output_dir: /home/LXJ/tmp/verl_restoration
+      # Load restoration models on demand; keep loaded models resident afterwards.
+      preload: false
+      auto_unload: false
+      # IQA reward computation settings: replicate IQA on every worker GPU so
+      # scoring runs in parallel with restoration requests.
+      use_iqa: true
+      iqa_devices: [cuda:0, cuda:1]
+      # Legacy fallback used only when iqa_devices is not configured.
+      iqa_device: cuda:1
+      # Compute frozen local dataset stats first:
+      # python scripts/compute_iqa_stats.py --parquet data/restoration/train.parquet
+      normalize_iqa_scores: true
+      iqa_stats_path: data/restoration/iqa_stats.json
+      # Optional data-driven metric weights generated from local training data.
+      # Without this file, the tool falls back to the legacy hard-coded map.
+      # v4: semantic-prior weights for rain/snow degradation types.
+      # NIQE reduced from 42% to 30%; qalign/musiq/clipiqa raised to give
+      # specialized deraining/desnowing tools a fairer reward signal.
+      # fog/night weights unchanged from v3.
+      iqa_weight_map_path: data/restoration/iqa_weight_map_v4.json
+      # v2 optimizes final restored IQA: a step receives main reward only when
+      # it improves the trajectory-best weighted IQA over the original image.
+      # suppress_tool_call_reward disables the agent-loop's default per-tool
+      # bonus so extra calls are not rewarded without IQA gains.
+      # All thresholds below are interpreted in normalized IQA space.
+      # reward_mode: final_iqa_v2
+      # suppress_tool_call_reward: true
+      reward_mode: step_mixed_v1
+      suppress_tool_call_reward: false
+      alpha: 0.9
+      reward_scale: 4.0
+      final_iqa_reward_scale: 4.0
+      final_iqa_regression_penalty_scale: 1.0
+      final_iqa_step_penalty: 0.05
+      # Affinity bonus: reward choosing degradation-specific tools over generic ones.
+      # The scale is added on top of the IQA-based reward in step_mixed_v1.
+      # Ignored by final_iqa_v2; kept here for step_mixed_v1 compatibility.
+      affinity_bonus_scale: 0.2
+      # Penalize repeating the same tool when weighted z-score gains are already small.
+      repeat_action_penalty: 0.75
+      repeat_low_gain_penalty: 2.0
+      # ~0.1 means the weighted marginal gain is already close to a plateau.
+      repeat_low_gain_threshold: 0.12
+      # Reward stopping once normalized quality is good enough or recent rewards plateau.
+      stop_min_step: 4
+      # ~0.6 means the weighted improvement over the original image is materially positive.
+      stop_iqa_delta_threshold: 0.6
+      stop_success_reward: 1.8
+      stop_partial_reward: 0.6
+      stop_early_penalty: -1.2
+      stop_continue_penalty: -0.4
+      stop_recent_reward_window: 2
+      stop_recent_reward_threshold: 0.2
+    tool_schema:
+      type: "function"
+      function:
+        name: "restore_image"
+        description: |
+          Apply an image restoration operation to remove degradation.
+          Available restoration actions:
+          - real_esrgan: Super-resolution, deblurring, denoising, compression artifact removal
+          - scunet: High-quality image denoising
+          - retinexformer_fivek: Low-light image enhancement
+          - hvicidnet: Low-light and exposure correction
+          - lightdiff: Low-light enhancement using diffusion model
+          - turbo_rain: Fast deraining
+          - s2former: Rain streak removal
+          - idt: Deraining and raindrop removal
+          - ridcp: Image dehazing
+          - kanet: Image dehazing
+          - turbo_snow: Image desnowing
+          - snowmaster: Advanced desnowing
+          - stop: Stop the restoration process (use when image is sufficiently restored)
+
+          Choose the most appropriate action based on the observed degradation type.
+        parameters:
+          type: "object"
+          properties:
+            action:
+              type: "string"
+              description: |
+                The restoration action to apply. Must be one of:
+                real_esrgan, scunet, retinexformer_fivek, hvicidnet, lightdiff,
+                turbo_rain, s2former, idt, ridcp, kanet, turbo_snow, snowmaster, stop
+              enum:
+                - real_esrgan
+                - scunet
+                - retinexformer_fivek
+                - hvicidnet
+                - lightdiff
+                - turbo_rain
+                - s2former
+                - idt
+                - ridcp
+                - kanet
+                - turbo_snow
+                - snowmaster
+                - stop
+          required:
+            - action

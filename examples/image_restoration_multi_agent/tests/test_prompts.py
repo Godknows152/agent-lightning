@@ -113,19 +113,13 @@ def test_expert_prompt_locks_the_vllm_hermes_wire_format() -> None:
     assert '"args"' not in prompt
 
 
-def test_state_prompt_contains_only_controller_state_and_hermes_reminder() -> None:
+def test_state_prompt_contains_only_natural_language_tool_feedback_and_hermes_reminder() -> None:
     prompt = build_expert_state_prompt(
-        step_index=2,
-        remaining_steps=4,
-        current_score=0.61,
-        best_score=0.67,
-        original_score=0.42,
-        consecutive_no_improvement=1,
-        history_json='[{"action":"ridcp","delta":0.19}]',
-        latest_feedback="IQA aggregate decreased.",
+        history_feedback="Historical tool feedback: Step 0: selected action ridcp; IQA aggregate_score=0.6700.",
     )
 
-    assert "step_index: 2" in prompt
-    assert "historical_best_aggregate_score: 0.670000" in prompt
-    assert 'action_and_evaluation_history_json: [{"action":"ridcp","delta":0.19}]' in prompt
+    assert "Historical tool feedback: Step 0: selected action ridcp; IQA aggregate_score=0.6700." in prompt
+    assert "Workflow state" not in prompt
+    assert "action_and_evaluation_history_json" not in prompt
+    assert "latest_iqa_feedback" not in prompt
     assert "exactly one Hermes <tool_call> block" in prompt
