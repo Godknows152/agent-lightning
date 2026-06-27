@@ -185,6 +185,10 @@ multi_turn:
   # max length of tool response
   max_tool_response_length: 1024
 
+  # Maximum number of model-generated tokens across the full multi-turn
+  # trajectory. Tool observations and zero-loss context are excluded.
+  max_generated_response_length: null
+
   # truncate side of tool response: left, middle, right
   tool_response_truncate_side: middle
 

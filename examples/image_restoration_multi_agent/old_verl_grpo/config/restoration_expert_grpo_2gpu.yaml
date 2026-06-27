@@ -1,4 +1,4 @@
-# Old-verl GRPO config for current image-restoration experts on GPU0/1.
+# Old-verl GRPO config: actor/SGLang train on GPU0/1, restoration/IQA tools stay on GPU2/3.
 
 hydra:
   searchpath:
@@ -14,9 +14,13 @@ data:
   val_files:
     - examples/image_restoration_multi_agent/old_verl_grpo/data/fog_val.parquet
   val_max_samples: 32
-  train_batch_size: 8
+  train_batch_size: 16
   max_prompt_length: 2048
-  max_response_length: 1024
+  # Bound visual tokens for the runtime-reconstructed prompt. The image object
+  # sent to SGLang is downscaled as well, so both processors see this budget.
+  max_image_pixels: 589824  # 768 x 768
+  # Stores model generations plus zero-loss reconstructed decision prompts.
+  max_response_length: 8192
   return_raw_chat: true
   return_multi_modal_inputs: false
 
@@ -51,7 +55,7 @@ actor_rollout_ref:
       param_offload: true
       optimizer_offload: true
     ppo_mini_batch_size: 8
-    ppo_micro_batch_size_per_gpu: 2
+    ppo_micro_batch_size_per_gpu: 1
 
   rollout:
     name: sglang
@@ -62,11 +66,13 @@ actor_rollout_ref:
     disable_multimodal_special_token_generation: true
     n: 3
     tensor_model_parallel_size: 1
-    gpu_memory_utilization: 0.45
-    max_num_seqs: 8
-    max_model_len: 4096
+    # Reserve enough token-pool capacity for the zero-loss reconstructed
+    # decision context while keeping rollout concurrency modest on shared GPUs.
+    gpu_memory_utilization: 0.30
+    max_num_seqs: 4
+    max_model_len: 9728
     enforce_eager: true
-    log_prob_micro_batch_size_per_gpu: 2
+    log_prob_micro_batch_size_per_gpu: 1
 
     agent:
       num_workers: 1
@@ -77,12 +83,15 @@ actor_rollout_ref:
       enable: true
       max_user_turns: 7
       max_assistant_turns: 6
+      # Model-token budget across the full trajectory. Reconstructed prompts
+      # and tool feedback remain available as context without using it.
+      max_generated_response_length: 1024
       round_barrier_size: 0
-      format: hermes
+      format: qwen3_coder
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/restoration_tool_config_current_iqa_2gpu.yaml
 
   ref:
-    log_prob_micro_batch_size_per_gpu: 2
+    log_prob_micro_batch_size_per_gpu: 1
 
 trainer:
   logger:

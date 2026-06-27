@@ -1,5 +1,6 @@
 # Agentlightning specific files
 verl_old
+/outputs/
 meta-llama/**
 **/debug/**/*.png
 **/debug/**/*.json

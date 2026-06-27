@@ -120,7 +120,15 @@ class ToolAgentLoop(AgentLoopBase):
 
         self.prompt_length = self.rollout_config.prompt_length
         self.response_length = self.rollout_config.response_length
+        self.max_generated_response_length = (
+            self.rollout_config.multi_turn.max_generated_response_length or self.response_length
+        )
         self.current_restoration_prompt = self._init_current_restoration_prompt(tool_config_path)
+
+    @staticmethod
+    def _generated_response_length(agent_data: AgentData) -> int:
+        """Return the number of model tokens eligible for policy loss."""
+        return sum(agent_data.response_mask)
 
     @staticmethod
     def _count_image_markers_in_messages(messages: list[dict[str, Any]]) -> int:
@@ -245,8 +253,8 @@ class ToolAgentLoop(AgentLoopBase):
             return aliases[raw_expert]
         return ExpertName(raw_expert)
 
-    def _current_image_user_content(self, text: str) -> str | list[dict[str, Any]]:
-        if self.processor is None:
+    def _current_image_user_content(self, text: str, include_image: bool) -> str | list[dict[str, Any]]:
+        if self.processor is None or not include_image:
             return text
         image_text = text.removeprefix("<image>\n")
         return [{"type": "image"}, {"type": "text", "text": image_text}]
@@ -273,6 +281,7 @@ class ToolAgentLoop(AgentLoopBase):
             include_stop = False
             system_prompt = prompt_config["build_initial_system"](expert_name, registry)
             user_prompt = prompt_config["build_initial_user"]()
+            include_image = True
         else:
             include_stop = agent_data.total_tool_calls >= min_stop_tool_calls
             system_prompt = prompt_config["build_system"](
@@ -281,14 +290,13 @@ class ToolAgentLoop(AgentLoopBase):
                 allow_stop=include_stop,
                 min_stop_tool_calls=min_stop_tool_calls,
             )
-            user_prompt = "<image>\n" + prompt_config["build_state"](
-                history_feedback=self._current_history_feedback_text(agent_data)
-            )
+            user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
+            include_image = False
 
         tool_schemas = [registry.build_tool_schema(include_stop=include_stop)]
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": self._current_image_user_content(user_prompt)},
+            {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
         ]
         return messages, tool_schemas
 
@@ -515,11 +523,19 @@ class ToolAgentLoop(AgentLoopBase):
         self, agent_data: AgentData, sampling_params: dict[str, Any], ignore_termination: bool = False
     ) -> AgentState:
         """Handle the generating state: generate model response and check for tool calls."""
+        generated_tokens = self._generated_response_length(agent_data)
+        remaining_generated_tokens = self.max_generated_response_length - generated_tokens
+        if not ignore_termination and remaining_generated_tokens <= 0:
+            return AgentState.TERMINATED
+
+        generation_params = dict(sampling_params)
+        generation_params["max_new_tokens"] = max(0, remaining_generated_tokens)
+        generation_params.pop("max_generated_response_length", None)
         with simple_timer("generate_sequences", agent_data.metrics):
             output: TokenOutput = await self.server_manager.generate(
                 request_id=agent_data.request_id,
                 prompt_ids=agent_data.prompt_ids,
-                sampling_params=sampling_params,
+                sampling_params=generation_params,
                 image_data=agent_data.image_data,
                 video_data=agent_data.video_data,
             )
@@ -548,8 +564,10 @@ class ToolAgentLoop(AgentLoopBase):
         if output.routed_experts is not None:
             agent_data.routed_experts = output.routed_experts
 
-        # Check hard termination conditions (response length overflow)
-        if not ignore_termination and len(agent_data.response_mask) >= self.response_length:
+        # Only model-generated tokens consume the generation budget. Zero-mask
+        # tool observations and reconstructed prompts still count toward the
+        # trajectory tensor capacity checked after they are appended.
+        if not ignore_termination and self._generated_response_length(agent_data) >= self.max_generated_response_length:
             return AgentState.TERMINATED
 
         # Extract tool calls (use per-sample tools if routed)
@@ -663,10 +681,10 @@ class ToolAgentLoop(AgentLoopBase):
 
         if returned_images_this_turn:
             if use_latest_image_context:
-                # Keep only the newest restoration image in context. This mirrors
-                # the current framework, which sends the current image at each
-                # expert decision instead of accumulating all intermediate images.
-                agent_data.image_data = [returned_images_this_turn[-1]]
+                # Preserve one visual slot and bind it to the latest restoration
+                # result. Later decision prompts carry textual feedback only, so
+                # no additional image tokens enter the training trajectory.
+                agent_data.image_data = self._limit_image_pixels([returned_images_this_turn[-1]], self.max_image_pixels)
             else:
                 if agent_data.image_data is None:
                     agent_data.image_data = []
@@ -689,7 +707,7 @@ class ToolAgentLoop(AgentLoopBase):
             add_messages, schemas = self._build_current_restoration_decision_prompt(agent_data)
             agent_data._active_tool_schemas = schemas
             agent_data.messages.extend(add_messages)
-            images = agent_data.image_data if self.processor is not None else None
+            images = None
             videos = None
             self._log_image_alignment(
                 stage="processing_tools_current_prompt_before_apply_chat_template",

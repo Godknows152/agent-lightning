@@ -589,6 +589,12 @@ def preload_restoration_models_for_sampling(tool_config_path: str) -> bool:
     return True
 
 
+def keep_restoration_models_loaded_between_sampling_steps(tool_config_path: str) -> bool:
+    """Return whether restoration models should remain resident between GRPO steps."""
+    runtime_cfg = _load_restoration_tool_runtime_config(tool_config_path)
+    return bool(runtime_cfg and runtime_cfg.get("keep_models_loaded_between_sampling_steps", False))
+
+
 def unload_restoration_models_after_sampling() -> bool:
     """Unload all restoration models at sampling stage end."""
     unloaded = False

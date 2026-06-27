@@ -390,8 +390,45 @@ class AgentLoopBase(ABC):
         self.dataset_cls = dataset_cls
         self.data_config = data_config.config
         self.apply_chat_template_kwargs = self.data_config.get("apply_chat_template_kwargs", {})
+        self.max_image_pixels = self.data_config.get("max_image_pixels", None)
         self.system_prompt = initialize_system_prompt(self.tokenizer, **self.apply_chat_template_kwargs)
         self.loop = get_event_loop()
+
+    @staticmethod
+    def _limit_image_pixels(
+        images: Optional[list[Image.Image]], max_pixels: Optional[int]
+    ) -> Optional[list[Image.Image]]:
+        """Downscale oversized visual inputs before both local and rollout processing."""
+        if not images or max_pixels is None:
+            return images
+
+        max_pixels = int(max_pixels)
+        if max_pixels <= 0:
+            raise ValueError(f"data.max_image_pixels must be positive when set, got {max_pixels}.")
+
+        resized_images: list[Image.Image] = []
+        for image in images:
+            width, height = image.size
+            if width * height <= max_pixels:
+                resized_images.append(image)
+                continue
+
+            scale = (max_pixels / float(width * height)) ** 0.5
+            # Qwen3.5-VL groups vision patches in 32-pixel units. Aligning the
+            # resized image avoids a later up-rounding that could exceed budget.
+            target_width = max(32, int(width * scale) // 32 * 32)
+            target_height = max(32, int(height * scale) // 32 * 32)
+            while target_width * target_height > max_pixels:
+                if target_width >= target_height and target_width > 32:
+                    target_width -= 32
+                elif target_height > 32:
+                    target_height -= 32
+                else:
+                    break
+
+            resized_images.append(image.resize((target_width, target_height), Image.Resampling.LANCZOS))
+
+        return resized_images
 
     async def process_vision_info(self, messages: list[dict]) -> dict:
         """Extract images and videos from messages.
@@ -407,6 +444,7 @@ class AgentLoopBase(ABC):
             images, videos = await self.dataset_cls.process_vision_info(
                 messages, image_patch_size=self.processor.image_processor.patch_size, config=self.data_config
             )
+            images = self._limit_image_pixels(images, self.max_image_pixels)
             if images is not None:
                 multi_modal_data["images"] = images
             if videos is not None:
@@ -626,16 +664,22 @@ class AgentLoopWorker:
         """
         config = self.rollout_config
 
-        # Phase-managed restoration model loading strategy:
-        # load all restoration models once at sampling start, unload once after sampling.
+        # Phase-managed restoration model loading strategy.
         did_phase_preload = False
+        keep_restoration_models_loaded = False
         tool_config_path = config.multi_turn.tool_config_path if config.multi_turn else None
         if tool_config_path:
             try:
-                from verl.tools.restoration_tool import preload_restoration_models_for_sampling
+                from verl.tools.restoration_tool import (
+                    keep_restoration_models_loaded_between_sampling_steps,
+                    preload_restoration_models_for_sampling,
+                )
 
                 resolved_tool_config_path = resolve_config_path(tool_config_path)
                 did_phase_preload = preload_restoration_models_for_sampling(resolved_tool_config_path)
+                keep_restoration_models_loaded = keep_restoration_models_loaded_between_sampling_steps(
+                    resolved_tool_config_path
+                )
             except Exception as e:
                 logger.warning(f"Phase-managed preload skipped due to error: {e}")
         sampling_params = dict(
@@ -721,7 +765,7 @@ class AgentLoopWorker:
             )
             return output
         finally:
-            if did_phase_preload:
+            if did_phase_preload and not keep_restoration_models_loaded:
                 try:
                     from verl.tools.restoration_tool import unload_restoration_models_after_sampling
 

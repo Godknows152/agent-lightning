@@ -101,19 +101,20 @@ def test_diagnosis_prompt_uses_hermes_without_model_generated_route() -> None:
     assert "route_to" not in str(DIAGNOSIS_TOOL_SCHEMA)
 
 
-def test_expert_prompt_locks_the_vllm_hermes_wire_format() -> None:
+def test_expert_prompt_locks_the_qwen_xml_wire_format() -> None:
     prompt = build_expert_system_prompt(ExpertName.FOG, _registry())
 
     assert EXPERT_PROMPT_VERSION in prompt
-    assert '<tool_call>\n{"name":"restore_image","arguments":{"action":"<action_enum_value>"}}\n</tool_call>' in prompt
-    assert "replace\n<action_enum_value> with one action enum value from the supplied schema" in prompt
-    assert '<tool_call>\n{"name":"restore_image","arguments":{"action":"stop"}}\n</tool_call>' in prompt
+    assert "<function=restore_image>" in prompt
+    assert "<parameter=action>" in prompt
+    assert "<action_enum_value>" in prompt
+    assert "<function=restore_image>\n<parameter=action>\nstop\n</parameter>\n</function>" in prompt
     assert "must be exactly restore_image" in prompt
     assert "arguments object must contain exactly one field named action" in prompt
     assert '"args"' not in prompt
 
 
-def test_state_prompt_contains_only_natural_language_tool_feedback_and_hermes_reminder() -> None:
+def test_state_prompt_contains_only_natural_language_tool_feedback_and_tool_call_reminder() -> None:
     prompt = build_expert_state_prompt(
         history_feedback="Historical tool feedback: Step 0: selected action ridcp; IQA aggregate_score=0.6700.",
     )
@@ -122,4 +123,4 @@ def test_state_prompt_contains_only_natural_language_tool_feedback_and_hermes_re
     assert "Workflow state" not in prompt
     assert "action_and_evaluation_history_json" not in prompt
     assert "latest_iqa_feedback" not in prompt
-    assert "exactly one Hermes <tool_call> block" in prompt
+    assert "tool_call" in prompt.lower()

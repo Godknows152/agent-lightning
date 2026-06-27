@@ -16,7 +16,7 @@ from .dapo import DAPORewardManager
 from .gdpo import GDPORewardManager
 from .limited import RateLimitedRewardManager
 from .naive import NaiveRewardManager
-from .registry import get_reward_manager_cls, register  # noqa: I001
+from .registry import get_reward_manager_cls, register  # noqa: I001  # must precede subclass imports
 from .remote import RemoteRewardManager
 from .visual import VisualRewardManager
 

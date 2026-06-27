@@ -11,7 +11,9 @@ Environment overrides:
   OLD_VERL_MODEL_PATH=/path/to/base-model
   OLD_VERL_ADAPTER_PATH=/path/to/sft-lora-adapter
   OLD_VERL_TOOL_REGISTRY_PATH=/path/to/tools.yaml
-  OLD_VERL_CUDA_VISIBLE_DEVICES=0,1
+  OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,2,3
+  OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
+  OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
   RAY_BIN=/home/LXJ/anaconda3/envs/verl/bin/ray
 EOF
@@ -56,6 +58,7 @@ CONFIG_DIR="${OLD_VERL_DIR}/config"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
 LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
 TOOL_REGISTRY_PATH="${OLD_VERL_TOOL_REGISTRY_PATH:-${EXAMPLE_DIR}/config/tools.yaml}"
+INTERMEDIATE_DIR="${OLD_VERL_INTERMEDIATE_DIR:-/home/LXJ/tmp/agent_lightning_old_verl_restoration}"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/LXJ/anaconda3/envs/verl/bin/python}"
 RAY_BIN="${RAY_BIN:-/home/LXJ/anaconda3/envs/verl/bin/ray}"
@@ -112,7 +115,9 @@ if [[ ! -d "${ADAPTER_PATH}" ]]; then
   exit 1
 fi
 
-export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
+# Expose GPU2/3 as well because the restoration/IQA tool runtime is pinned there.
+# Training still uses two GPUs through trainer.n_gpus_per_node.
+export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 if [[ -d "${LOCAL_PYDEPS}" ]]; then
   export PYTHONPATH="${LOCAL_PYDEPS}:${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
 else
@@ -139,6 +144,16 @@ export LD_LIBRARY_PATH="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packag
 export LD_PRELOAD="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12${LD_PRELOAD:+:${LD_PRELOAD}}"
 
 mkdir -p "${OLD_VERL_DIR}/data" "${OLD_VERL_DIR}/log" "${OLD_VERL_DIR}/outputs/${EXPERT}/${RUN_KIND}" "${SWANLAB_LOG_DIR}"
+
+if [[ "${OLD_VERL_CLEAR_INTERMEDIATE_IMAGES:-1}" == "1" ]]; then
+  if [[ -z "${INTERMEDIATE_DIR}" || "${INTERMEDIATE_DIR}" == "/" ]]; then
+    echo "Refusing to clear an unsafe intermediate image directory: '${INTERMEDIATE_DIR}'" >&2
+    exit 2
+  fi
+  rm -rf -- "${INTERMEDIATE_DIR}"
+  mkdir -p -- "${INTERMEDIATE_DIR}"
+  echo "Cleared sampling intermediate images: ${INTERMEDIATE_DIR}"
+fi
 
 "${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split train --output "${TRAIN_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${TRAIN_LIMIT_ARGS[@]}"
 "${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split val --output "${VAL_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${VAL_LIMIT_ARGS[@]}"

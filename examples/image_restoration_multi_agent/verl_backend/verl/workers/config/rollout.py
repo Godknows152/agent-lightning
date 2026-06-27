@@ -79,6 +79,11 @@ class MultiTurnConfig(BaseConfig):
     max_user_turns: Optional[int] = None
     max_parallel_calls: int = 1
     max_tool_response_length: int = 256
+    # Maximum number of model-generated tokens across the full trajectory.
+    # Tool observations and zero-loss prompt context do not count against this
+    # budget, but still occupy `RolloutConfig.response_length` in the training
+    # sequence.
+    max_generated_response_length: Optional[int] = None
     tool_response_truncate_side: str = "middle"
     use_inference_chat_template: bool = False
     tokenization_sanity_check_mode: str = "strict"

@@ -4,20 +4,22 @@ tools:
   - class_name: "verl.tools.restoration_tool.RestorationTool"
     config:
       type: native
-      device: cuda:0
-      worker_devices: [cuda:0, cuda:1]
-      model_devices: [cuda:0, cuda:1]
+      device: cuda:2
+      worker_devices: [cuda:2, cuda:3]
+      model_devices: [cuda:2, cuda:3]
       output_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration
       preload: false
       auto_unload: false
+      # Keep restoration/IQA runtimes resident on GPU2/3 so GPU0/1 stay available for training.
+      keep_models_loaded_between_sampling_steps: true
       tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
       external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
       restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py
       prompt_min_stop_tool_calls: 3
 
       use_iqa: true
-      iqa_devices: [cuda:0, cuda:1]
-      iqa_device: cuda:1
+      iqa_devices: [cuda:2, cuda:3]
+      iqa_device: cuda:3
       normalize_iqa_scores: true
       iqa_metric_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
       iqa_weight_map_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
