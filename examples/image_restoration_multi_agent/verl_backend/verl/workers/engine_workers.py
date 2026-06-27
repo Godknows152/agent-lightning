@@ -693,7 +693,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
         do_lora_base_sync = False
         if not self.peft_merge and peft_config is not None:
-            self.rollout.sleep_level = 1
+            self.rollout.sleep_level = 2 if self.config.rollout.force_full_sleep_for_lora else 1
             do_lora_base_sync = not self.base_sync_done
 
         # 3. sync weights: For SGLang, we need base first (when needed), then adapter/merged

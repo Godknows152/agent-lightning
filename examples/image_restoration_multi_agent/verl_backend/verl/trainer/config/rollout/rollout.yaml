@@ -52,6 +52,10 @@ cudagraph_capture_sizes: null
 # Whether to free engine KVCache after generation.
 free_cache_engine: True
 
+# In LoRA adapter mode, the default sleep path keeps base weights resident and
+# releases only KV cache. Set true to release weights too during training phases.
+force_full_sleep_for_lora: False
+
 # TP size for rollout. Not effective for hf
 tensor_model_parallel_size: 2
 

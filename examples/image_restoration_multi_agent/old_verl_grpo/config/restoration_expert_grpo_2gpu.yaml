@@ -69,6 +69,7 @@ actor_rollout_ref:
     # Reserve enough token-pool capacity for the zero-loss reconstructed
     # decision context while keeping rollout concurrency modest on shared GPUs.
     gpu_memory_utilization: 0.30
+    force_full_sleep_for_lora: true
     max_num_seqs: 4
     max_model_len: 9728
     enforce_eager: true
