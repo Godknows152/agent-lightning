@@ -20,7 +20,7 @@ data:
   # sent to SGLang is downscaled as well, so both processors see this budget.
   max_image_pixels: 589824  # 768 x 768
   # Stores model generations plus zero-loss reconstructed decision prompts.
-  max_response_length: 8192
+  max_response_length: 2048
   return_raw_chat: true
   return_multi_modal_inputs: false
 
@@ -55,7 +55,7 @@ actor_rollout_ref:
       param_offload: true
       optimizer_offload: true
     ppo_mini_batch_size: 8
-    ppo_micro_batch_size_per_gpu: 1
+    ppo_micro_batch_size_per_gpu: 2
 
   rollout:
     name: sglang
@@ -100,7 +100,7 @@ trainer:
     - swanlab
   project_name: image-restoration-multi-agent
   experiment_name: fog-verl-2gpu
-  resume_mode: disable
+  resume_mode: auto
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog
   log_val_generations: 2
   n_gpus_per_node: 2
@@ -108,8 +108,9 @@ trainer:
   save_freq: 10
   test_freq: 10
   total_epochs: 3
-  total_training_steps: null
+  total_training_steps: 120
   max_actor_ckpt_to_keep: 2
+  keep_best_validation_ckpt: true
   val_before_train: false
   ray_kwargs:
     ray_init:

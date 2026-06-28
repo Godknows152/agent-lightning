@@ -282,22 +282,30 @@ class ToolAgentLoop(AgentLoopBase):
             system_prompt = prompt_config["build_initial_system"](expert_name, registry)
             user_prompt = prompt_config["build_initial_user"]()
             include_image = True
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
+            ]
         else:
             include_stop = agent_data.total_tool_calls >= min_stop_tool_calls
-            system_prompt = prompt_config["build_system"](
-                expert_name,
-                registry,
-                allow_stop=include_stop,
-                min_stop_tool_calls=min_stop_tool_calls,
-            )
             user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
+            if include_stop:
+                user_prompt += (
+                    "\n\nThe stop action is now available. Use action stop only when further processing is unlikely "
+                    "to improve the historical best image."
+                )
+            else:
+                remaining_tool_calls = max(0, min_stop_tool_calls - agent_data.total_tool_calls)
+                user_prompt += (
+                    "\n\nThe stop action is not available yet. Continue with one non-stop restoration action; "
+                    f"{remaining_tool_calls} more restoration tool call(s) are required before stop becomes available."
+                )
             include_image = False
+            messages = [
+                {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
+            ]
 
         tool_schemas = [registry.build_tool_schema(include_stop=include_stop)]
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
-        ]
         return messages, tool_schemas
 
     @staticmethod
@@ -717,7 +725,7 @@ class ToolAgentLoop(AgentLoopBase):
             )
             response_ids = await self.apply_chat_template(
                 add_messages,
-                tools=schemas,
+                tools=None,
                 images=images,
                 videos=videos,
                 remove_system_prompt=False,

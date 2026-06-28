@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import random
 import shutil
@@ -130,15 +131,60 @@ class BaseCheckpointManager:
         assert local_path is not None or hdfs_path is not None, "local_path and hdfs_path cannot be both None"
         return local_path is not None, local_path if local_path is not None else hdfs_path
 
+    @staticmethod
+    def _checkpoint_root_from_path(path: str) -> str:
+        abs_path = os.path.abspath(path)
+        parent = os.path.dirname(abs_path)
+        grandparent = os.path.dirname(parent)
+        if os.path.basename(parent).startswith("global_step_"):
+            return os.path.dirname(parent)
+        if os.path.basename(grandparent).startswith("global_step_"):
+            return os.path.dirname(grandparent)
+        return parent
+
+    @staticmethod
+    def _checkpoint_protection_file(path: str) -> str:
+        return os.path.join(BaseCheckpointManager._checkpoint_root_from_path(path), "best_validation_checkpoint.json")
+
+    @staticmethod
+    def _normalize_protected_path(path: str) -> str:
+        return os.path.abspath(os.path.realpath(path))
+
+    def _is_protected_checkpoint_path(self, path: str) -> bool:
+        protection_file = self._checkpoint_protection_file(path)
+        if not os.path.exists(protection_file):
+            return False
+        try:
+            with open(protection_file, encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as exc:
+            print(f"Failed to read checkpoint protection file {protection_file}: {exc}")
+            return False
+
+        protected_paths = payload.get("protected_paths", [])
+        if not isinstance(protected_paths, list):
+            protected_paths = []
+
+        abs_path = self._normalize_protected_path(path)
+        parent_path = self._normalize_protected_path(os.path.dirname(abs_path))
+        protected = {self._normalize_protected_path(p) for p in protected_paths if isinstance(p, str)}
+        return abs_path in protected or parent_path in protected
+
     def remove_previous_save_local_path(self, path):
         if isinstance(path, str):
             path = [path]
+        protected_paths = []
         for p in path:
             abs_path = os.path.abspath(p)
+            if self._is_protected_checkpoint_path(abs_path):
+                print(f"Checkpoint manager keep protected checkpoint path: {abs_path}")
+                protected_paths.append(p)
+                continue
             print(f"Checkpoint manager remove previous save local path: {abs_path}")
             if not os.path.exists(abs_path):
                 continue
             shutil.rmtree(abs_path, ignore_errors=True)
+        return protected_paths
 
     def ensure_checkpoint_capacity(self, max_ckpt_to_keep: int):
         """
@@ -152,8 +198,8 @@ class BaseCheckpointManager:
             return
         if len(self.previous_saved_paths) >= max_ckpt_to_keep:
             keep_start = len(self.previous_saved_paths) - max_ckpt_to_keep + 1
-            self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
-            self.previous_saved_paths = self.previous_saved_paths[keep_start:]
+            protected_paths = self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
+            self.previous_saved_paths = protected_paths + self.previous_saved_paths[keep_start:]
 
     def register_checkpoint(self, new_path: str, max_ckpt_to_keep: int):
         """
@@ -167,8 +213,8 @@ class BaseCheckpointManager:
             return
         if len(self.previous_saved_paths) > max_ckpt_to_keep:
             keep_start = len(self.previous_saved_paths) - max_ckpt_to_keep
-            self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
-            self.previous_saved_paths = self.previous_saved_paths[keep_start:]
+            protected_paths = self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
+            self.previous_saved_paths = protected_paths + self.previous_saved_paths[keep_start:]
 
     @staticmethod
     def get_rng_state():

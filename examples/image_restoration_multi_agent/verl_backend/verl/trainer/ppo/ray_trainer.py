@@ -316,6 +316,9 @@ class RayPPOTrainer:
         self._create_dataloader(train_dataset, val_dataset, collate_fn, train_sampler)
 
         self.checkpoint_manager = None
+        self.best_validation_score = float("-inf")
+        self.best_validation_step = None
+        self.best_validation_metric = None
 
     def _create_dataloader(self, train_dataset, val_dataset, collate_fn, train_sampler: Optional[Sampler]):
         """
@@ -946,6 +949,95 @@ class RayPPOTrainer:
         with open(local_latest_checkpointed_iteration, "w") as f:
             f.write(str(self.global_steps))
 
+    def _best_checkpoint_meta_path(self) -> str:
+        return os.path.join(self.config.trainer.default_local_dir, "best_validation_checkpoint.json")
+
+    def _select_best_validation_score(self, val_metrics: dict[str, Any]) -> tuple[float | None, str | None]:
+        if not val_metrics:
+            return None, None
+
+        configured_metric = self.config.trainer.get("best_validation_metric", None)
+        if configured_metric:
+            value = val_metrics.get(configured_metric)
+            if value is None:
+                print(f"Configured best_validation_metric not found: {configured_metric}")
+                return None, configured_metric
+            return float(value), configured_metric
+
+        metric_preference_groups = [
+            lambda key: key.startswith("val-core/") and "/reward/mean@" in key,
+            lambda key: key.startswith("val-aux/") and "/reward/mean@" in key,
+            lambda key: key.startswith("val-core/") and "/acc/mean@" in key,
+            lambda key: key.startswith("val-core/") and "/mean@" in key,
+        ]
+        for predicate in metric_preference_groups:
+            keys = sorted(key for key in val_metrics if predicate(key))
+            if keys:
+                score = float(np.mean([float(val_metrics[key]) for key in keys]))
+                return score, ",".join(keys)
+        return None, None
+
+    def _load_best_checkpoint_meta(self) -> None:
+        meta_path = self._best_checkpoint_meta_path()
+        if not os.path.exists(meta_path):
+            return
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                payload = json.load(f)
+            score = payload.get("best_validation_score")
+            if score is not None:
+                self.best_validation_score = float(score)
+                self.best_validation_step = payload.get("best_validation_step")
+                self.best_validation_metric = payload.get("best_validation_metric")
+                print(
+                    "Loaded best validation checkpoint metadata: "
+                    f"step={self.best_validation_step}, score={self.best_validation_score}, "
+                    f"metric={self.best_validation_metric}"
+                )
+        except Exception as exc:
+            print(f"Failed to load best validation checkpoint metadata from {meta_path}: {exc}")
+
+    def _update_best_checkpoint_from_validation(self, val_metrics: dict[str, Any]) -> None:
+        if not self.config.trainer.get("keep_best_validation_ckpt", True):
+            return
+
+        score, metric_name = self._select_best_validation_score(val_metrics)
+        if score is None:
+            print("No validation reward metric found for best checkpoint tracking.")
+            return
+        if score <= self.best_validation_score:
+            return
+
+        local_global_step_folder = os.path.join(
+            self.config.trainer.default_local_dir, f"global_step_{self.global_steps}"
+        )
+        actor_local_path = os.path.join(local_global_step_folder, "actor")
+        if not os.path.isdir(actor_local_path):
+            print(f"Skip best checkpoint update because actor checkpoint does not exist: {actor_local_path}")
+            return
+
+        self.best_validation_score = score
+        self.best_validation_step = self.global_steps
+        self.best_validation_metric = metric_name
+
+        payload = {
+            "best_validation_score": score,
+            "best_validation_step": self.global_steps,
+            "best_validation_metric": metric_name,
+            "checkpoint_path": os.path.abspath(local_global_step_folder),
+            "actor_path": os.path.abspath(actor_local_path),
+            "protected_paths": [
+                os.path.abspath(local_global_step_folder),
+                os.path.abspath(actor_local_path),
+            ],
+        }
+        with open(self._best_checkpoint_meta_path(), "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        print(
+            "New best validation checkpoint: "
+            f"step={self.global_steps}, score={score}, metric={metric_name}, path={actor_local_path}"
+        )
+
     def _load_checkpoint(self):
         if self.config.trainer.resume_mode == "disable":
             return 0
@@ -959,6 +1051,8 @@ class RayPPOTrainer:
                 working_dir = os.getcwd()
                 checkpoint_folder = os.path.join(working_dir, checkpoint_folder)
             global_step_folder = find_latest_ckpt_path(checkpoint_folder)  # None if no latest
+
+        self._load_best_checkpoint_meta()
 
         # find global_step_folder
         if self.config.trainer.resume_mode == "auto":
@@ -1287,6 +1381,7 @@ class RayPPOTrainer:
             val_metrics = self._validate()
             assert val_metrics, f"{val_metrics=}"
             pprint(f"Initial validation metrics: {val_metrics}")
+            self._update_best_checkpoint_from_validation(val_metrics)
             logger.log(data=val_metrics, step=self.global_steps)
             if self.config.trainer.get("val_only", False):
                 return
@@ -1577,6 +1672,7 @@ class RayPPOTrainer:
                 ):
                     with marked_timer("testing", timing_raw, color="green"):
                         val_metrics: dict = self._validate()
+                        self._update_best_checkpoint_from_validation(val_metrics)
                         if is_last_step:
                             last_val_metrics = val_metrics
                     metrics.update(val_metrics)

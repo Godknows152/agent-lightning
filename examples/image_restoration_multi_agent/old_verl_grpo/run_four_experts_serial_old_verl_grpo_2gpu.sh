@@ -19,6 +19,14 @@ exec > >(tee -a "${MAIN_LOG}") 2>&1
 echo "===== serial run started at $(date) ====="
 echo "Log file: ${MAIN_LOG}"
 
+TOOL_INFO_LOG="${LOG_DIR}/restoration_tool_info.log"
+TOOL_DEBUG_LOG="${LOG_DIR}/restoration_tools.log"
+: > "${TOOL_INFO_LOG}"
+: > "${TOOL_DEBUG_LOG}"
+echo "Cleared tool logs:"
+echo "  ${TOOL_INFO_LOG}"
+echo "  ${TOOL_DEBUG_LOG}"
+
 clear_intermediate_images=1
 for expert in "${EXPERTS[@]}"; do
   echo "===== old-verl GRPO start: ${expert} on GPU ${OLD_VERL_CUDA_VISIBLE_DEVICES} ====="
