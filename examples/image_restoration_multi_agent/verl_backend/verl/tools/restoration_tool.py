@@ -45,11 +45,14 @@ Supported restoration actions:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -348,6 +351,219 @@ def _as_device_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
     return [str(item) for item in value]
+
+
+@dataclass
+class _CachedToolResult:
+    result: dict[str, Any]
+    iqa_scores: list[float]
+    cache_key: str
+
+
+class _ToolResultDiskCache:
+    """Bounded disk cache for deterministic restoration tool outputs."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        cache_dir: str,
+        signature: dict[str, Any],
+        max_entries: int,
+        max_size_bytes: int,
+        ttl_seconds: float,
+        cleanup_interval: int,
+    ):
+        self.enabled = bool(enabled) and max_entries > 0 and max_size_bytes > 0
+        self.cache_dir = Path(cache_dir).expanduser().resolve()
+        self.signature = signature
+        self.max_entries = int(max_entries)
+        self.max_size_bytes = int(max_size_bytes)
+        self.ttl_seconds = float(ttl_seconds)
+        self.cleanup_interval = max(1, int(cleanup_interval))
+        self._ops_since_cleanup = 0
+
+        if self.enabled:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            self.cleanup(force=True)
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {str(key): _ToolResultDiskCache._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_ToolResultDiskCache._json_safe(item) for item in value]
+        return str(value)
+
+    @staticmethod
+    def _hash_file(path: str) -> str:
+        digest = hashlib.sha256()
+        with open(path, "rb") as file_obj:
+            for chunk in iter(lambda: file_obj.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    @staticmethod
+    def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+        tmp_path = path.with_name(f"{path.name}.{os.getpid()}.{uuid4().hex}.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as file_obj:
+            json.dump(payload, file_obj, ensure_ascii=False, sort_keys=True)
+        os.replace(tmp_path, path)
+
+    def _entry_dir(self, cache_key: str) -> Path:
+        return self.cache_dir / cache_key[:2] / cache_key
+
+    def _build_key(self, action: str, input_path: str) -> tuple[str, str]:
+        input_hash = self._hash_file(input_path)
+        payload = {
+            "version": 1,
+            "action": action,
+            "input_sha256": input_hash,
+            "signature": self.signature,
+        }
+        key_material = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(key_material).hexdigest(), input_hash
+
+    def _remove_entry(self, entry_dir: Path) -> None:
+        try:
+            shutil.rmtree(entry_dir, ignore_errors=True)
+            parent = entry_dir.parent
+            if parent != self.cache_dir and parent.exists() and not any(parent.iterdir()):
+                parent.rmdir()
+        except Exception as e:
+            logger.debug("Failed to remove restoration tool cache entry %s: %s", entry_dir, e)
+
+    def get(self, action: str, input_path: str, output_dir: str) -> _CachedToolResult | None:
+        if not self.enabled:
+            return None
+        try:
+            cache_key, _ = self._build_key(action, input_path)
+            entry_dir = self._entry_dir(cache_key)
+            metadata_path = entry_dir / "metadata.json"
+            image_path = entry_dir / "image.png"
+            if not metadata_path.is_file() or not image_path.is_file():
+                return None
+
+            with open(metadata_path, encoding="utf-8") as file_obj:
+                metadata = json.load(file_obj)
+            now = time.time()
+            if self.ttl_seconds > 0 and now - float(metadata.get("created_at", now)) > self.ttl_seconds:
+                self._remove_entry(entry_dir)
+                return None
+
+            output_path = Path(output_dir) / f"{Path(input_path).stem}_{action}_{uuid4().hex[:8]}.png"
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(image_path, output_path)
+
+            metadata["last_access"] = now
+            metadata["hits"] = int(metadata.get("hits", 0)) + 1
+            self._write_json_atomic(metadata_path, metadata)
+            self._ops_since_cleanup += 1
+            self.cleanup()
+
+            result = dict(metadata.get("result") or {})
+            result["output_path"] = str(output_path)
+            result_metadata = dict(result.get("metadata") or {})
+            result_metadata["tool_result_cache"] = {"hit": True, "key": cache_key}
+            result["metadata"] = result_metadata
+            result["cache_hit"] = True
+            return _CachedToolResult(
+                result=result,
+                iqa_scores=[float(score) for score in metadata.get("iqa_scores", [])],
+                cache_key=cache_key,
+            )
+        except Exception as e:
+            logger.warning("Restoration tool result cache lookup failed for %s on %s: %s", action, input_path, e)
+            return None
+
+    def put(self, action: str, input_path: str, result: dict[str, Any], iqa_scores: list[float]) -> str | None:
+        if not self.enabled:
+            return None
+        output_path = result.get("output_path")
+        if not output_path or not os.path.isfile(output_path):
+            return None
+        try:
+            cache_key, input_hash = self._build_key(action, input_path)
+            entry_dir = self._entry_dir(cache_key)
+            entry_dir.mkdir(parents=True, exist_ok=True)
+
+            image_path = entry_dir / "image.png"
+            tmp_image_path = entry_dir / f"image.png.{os.getpid()}.{uuid4().hex}.tmp"
+            shutil.copy2(output_path, tmp_image_path)
+            os.replace(tmp_image_path, image_path)
+
+            cached_result = {
+                key: self._json_safe(value) for key, value in result.items() if key not in {"output_path", "cache_hit"}
+            }
+            metadata = {
+                "version": 1,
+                "cache_key": cache_key,
+                "action": action,
+                "input_sha256": input_hash,
+                "created_at": time.time(),
+                "last_access": time.time(),
+                "hits": 0,
+                "signature": self.signature,
+                "iqa_scores": [float(score) for score in iqa_scores],
+                "result": cached_result,
+            }
+            self._write_json_atomic(entry_dir / "metadata.json", metadata)
+            self._ops_since_cleanup += 1
+            self.cleanup()
+            return cache_key
+        except Exception as e:
+            logger.warning("Restoration tool result cache write failed for %s on %s: %s", action, input_path, e)
+            return None
+
+    def cleanup(self, *, force: bool = False) -> None:
+        if not self.enabled:
+            return
+        if not force and self._ops_since_cleanup < self.cleanup_interval:
+            return
+        self._ops_since_cleanup = 0
+
+        now = time.time()
+        entries: list[tuple[float, int, Path]] = []
+        total_size = 0
+        try:
+            shard_dirs = [path for path in self.cache_dir.iterdir() if path.is_dir()]
+        except FileNotFoundError:
+            return
+
+        for shard_dir in shard_dirs:
+            for entry_dir in list(shard_dir.iterdir()):
+                if not entry_dir.is_dir():
+                    continue
+                metadata_path = entry_dir / "metadata.json"
+                image_path = entry_dir / "image.png"
+                if not metadata_path.is_file() or not image_path.is_file():
+                    self._remove_entry(entry_dir)
+                    continue
+                try:
+                    with open(metadata_path, encoding="utf-8") as file_obj:
+                        metadata = json.load(file_obj)
+                    created_at = float(metadata.get("created_at", 0.0))
+                    last_access = float(metadata.get("last_access", created_at))
+                    if self.ttl_seconds > 0 and now - created_at > self.ttl_seconds:
+                        self._remove_entry(entry_dir)
+                        continue
+                    size_bytes = metadata_path.stat().st_size + image_path.stat().st_size
+                except Exception:
+                    self._remove_entry(entry_dir)
+                    continue
+                total_size += size_bytes
+                entries.append((last_access, size_bytes, entry_dir))
+
+        if len(entries) <= self.max_entries and total_size <= self.max_size_bytes:
+            return
+
+        entries.sort(key=lambda item: item[0])
+        while entries and (len(entries) > self.max_entries or total_size > self.max_size_bytes):
+            _, size_bytes, entry_dir = entries.pop(0)
+            self._remove_entry(entry_dir)
+            total_size -= size_bytes
 
 
 @dataclass
@@ -723,6 +939,17 @@ class RestorationTool(BaseTool):
         self._toolkit = None
         self._iqa = None
         self._runtime_pool = None
+        cache_max_size_gb = float(config.get("tool_result_cache_max_size_gb", 20.0))
+        cache_ttl_hours = float(config.get("tool_result_cache_ttl_hours", 24.0))
+        self.tool_result_cache = _ToolResultDiskCache(
+            enabled=bool(config.get("enable_tool_result_cache", False)),
+            cache_dir=str(config.get("tool_result_cache_dir") or Path(self.output_dir) / ".tool_result_cache"),
+            signature=self._build_tool_result_cache_signature(),
+            max_entries=int(config.get("tool_result_cache_max_entries", 5000)),
+            max_size_bytes=int(cache_max_size_gb * 1024**3),
+            ttl_seconds=cache_ttl_hours * 3600,
+            cleanup_interval=int(config.get("tool_result_cache_cleanup_interval", 256)),
+        )
 
         logger.info(
             f"RestorationTool initialized: device={self.device}, iqa_device={self.iqa_device}, "
@@ -742,8 +969,36 @@ class RestorationTool(BaseTool):
             f"metric_config_path={self.iqa_metric_config_path}, "
             f"weight_map_path={self.iqa_weight_map_path}, "
             f"tool_registry_path={self.tool_registry_path}, "
+            f"tool_result_cache_enabled={self.tool_result_cache.enabled}, "
+            f"tool_result_cache_dir={self.tool_result_cache.cache_dir}, "
+            f"tool_result_cache_max_entries={self.tool_result_cache.max_entries}, "
+            f"tool_result_cache_max_size_gb={cache_max_size_gb}, "
+            f"tool_result_cache_ttl_hours={cache_ttl_hours}, "
             f"candidate_actions={sorted(self.candidate_tool_runtimes)}"
         )
+
+    def _path_signature(self, path: str | None, *, hash_file: bool = False) -> dict[str, Any] | None:
+        if path is None:
+            return None
+        signature: dict[str, Any] = {"path": str(path)}
+        if hash_file and os.path.isfile(path):
+            try:
+                signature["sha256"] = _ToolResultDiskCache._hash_file(path)
+            except Exception as e:
+                logger.debug("Failed to hash signature file %s: %s", path, e)
+        return signature
+
+    def _build_tool_result_cache_signature(self) -> dict[str, Any]:
+        return {
+            "tool_registry": self._path_signature(self.tool_registry_path, hash_file=True),
+            "candidate_tool_runtimes": _ToolResultDiskCache._json_safe(self.candidate_tool_runtimes),
+            "preload_models": _ToolResultDiskCache._json_safe(self.preload_models),
+            "use_iqa": self.use_iqa,
+            "normalize_iqa_scores": self.normalize_iqa_scores,
+            "iqa_stats": self._path_signature(self.iqa_stats_path, hash_file=True),
+            "iqa_qalign": self._path_signature(self.iqa_qalign_path, hash_file=False),
+            "iqa_metric_config": self._path_signature(self.iqa_metric_config_path, hash_file=True),
+        }
 
     @property
     def toolkit(self):
@@ -1295,11 +1550,57 @@ class RestorationTool(BaseTool):
 
         try:
             logger.info(f"Instance {instance_id}: applying '{action}' to {current_image}")
-            if action in self.candidate_tool_runtimes:
-                if self.use_parallel_workers:
+            cache_hit = False
+            cache_key = None
+            cached_result = self.tool_result_cache.get(action, current_image, output_dir)
+            if cached_result is not None and cached_result.iqa_scores:
+                result = cached_result.result
+                curr_scores = cached_result.iqa_scores
+                cache_hit = True
+                cache_key = cached_result.cache_key
+                logger.info(
+                    "Instance %s: cache hit for '%s' on %s (key=%s)",
+                    instance_id,
+                    action,
+                    current_image,
+                    cache_key,
+                )
+            else:
+                if action in self.candidate_tool_runtimes:
+                    if self.use_parallel_workers:
+
+                        def _restore_and_score(worker: _RestorationRuntimeWorker):
+                            result = self._run_candidate_action(action, current_image, output_dir, worker.device)
+                            output_path = result.get("output_path")
+                            if output_path and os.path.exists(output_path):
+                                curr_scores = self._get_iqa_scores_on_worker(worker, output_path)
+                            else:
+                                curr_scores = self._zero_iqa_scores()
+                            return result, curr_scores, worker.index, worker.device, worker.iqa_device
+
+                        result, curr_scores, worker_index, worker_device, worker_iqa_device = (
+                            await self.runtime_pool.run(_restore_and_score)
+                        )
+                        logger.info(
+                            "Instance %s: worker %s completed candidate '%s' (tool=%s, iqa=%s)",
+                            instance_id,
+                            worker_index,
+                            action,
+                            worker_device,
+                            worker_iqa_device,
+                        )
+                    else:
+                        result = self._run_candidate_action(action, current_image, output_dir, self.device)
+                        curr_scores = None
+                elif self.use_parallel_workers:
 
                     def _restore_and_score(worker: _RestorationRuntimeWorker):
-                        result = self._run_candidate_action(action, current_image, output_dir, worker.device)
+                        result = worker.toolkit.process_image(
+                            tools=[action],
+                            img_path=current_image,
+                            output_dir=output_dir,
+                            is_identify=True,
+                        )
                         output_path = result.get("output_path")
                         if output_path and os.path.exists(output_path):
                             curr_scores = self._get_iqa_scores_on_worker(worker, output_path)
@@ -1311,7 +1612,7 @@ class RestorationTool(BaseTool):
                         _restore_and_score
                     )
                     logger.info(
-                        "Instance %s: worker %s completed candidate '%s' (tool=%s, iqa=%s)",
+                        "Instance %s: worker %s completed '%s' (tool=%s, iqa=%s)",
                         instance_id,
                         worker_index,
                         action,
@@ -1319,43 +1620,13 @@ class RestorationTool(BaseTool):
                         worker_iqa_device,
                     )
                 else:
-                    result = self._run_candidate_action(action, current_image, output_dir, self.device)
-                    curr_scores = None
-            elif self.use_parallel_workers:
-
-                def _restore_and_score(worker: _RestorationRuntimeWorker):
-                    result = worker.toolkit.process_image(
+                    result = self.toolkit.process_image(
                         tools=[action],
                         img_path=current_image,
                         output_dir=output_dir,
                         is_identify=True,
                     )
-                    output_path = result.get("output_path")
-                    if output_path and os.path.exists(output_path):
-                        curr_scores = self._get_iqa_scores_on_worker(worker, output_path)
-                    else:
-                        curr_scores = self._zero_iqa_scores()
-                    return result, curr_scores, worker.index, worker.device, worker.iqa_device
-
-                result, curr_scores, worker_index, worker_device, worker_iqa_device = await self.runtime_pool.run(
-                    _restore_and_score
-                )
-                logger.info(
-                    "Instance %s: worker %s completed '%s' (tool=%s, iqa=%s)",
-                    instance_id,
-                    worker_index,
-                    action,
-                    worker_device,
-                    worker_iqa_device,
-                )
-            else:
-                result = self.toolkit.process_image(
-                    tools=[action],
-                    img_path=current_image,
-                    output_dir=output_dir,
-                    is_identify=True,
-                )
-                curr_scores = None
+                    curr_scores = None
 
             output_path = result.get("output_path")
             if not output_path or not os.path.exists(output_path):
@@ -1370,6 +1641,8 @@ class RestorationTool(BaseTool):
             # Compute IQA scores for the new image
             if curr_scores is None:
                 curr_scores = self._get_iqa_scores(output_path)
+            if not cache_hit:
+                cache_key = self.tool_result_cache.put(action, current_image, result, curr_scores)
             prev_scores = instance["scores_history"][-1]
             identity_scores = instance["identity_scores"]
             weights = instance["weights"]
@@ -1440,6 +1713,7 @@ class RestorationTool(BaseTool):
                 f"best_identity_delta={reward_info['best_identity_delta']:.4f}, "
                 f"repeat_penalty={reward_info['repeat_penalty']:.4f}, "
                 f"affinity_bonus={reward_info['affinity_bonus']:.4f}, "
+                f"cache_hit={cache_hit}, "
                 f"output={output_path}"
             )
             metrics = {
@@ -1461,7 +1735,10 @@ class RestorationTool(BaseTool):
                 "iqa_scores": curr_scores,
                 "input_path": current_image,
                 "output_path": output_path,
+                "tool_result_cache_hit": cache_hit,
             }
+            if cache_key is not None:
+                metrics["tool_result_cache_key"] = cache_key
             if self.suppress_tool_call_reward:
                 metrics["skip_tool_call_reward"] = True
             return response, reward, metrics
