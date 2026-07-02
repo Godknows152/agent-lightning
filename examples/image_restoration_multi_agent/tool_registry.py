@@ -113,9 +113,13 @@ class ToolRegistry:
 
         actions = list(self.actions if include_stop else self._tools.keys())
         description = (
-            "Apply one registered restoration action or stop the trajectory."
+            "Apply exactly one registered restoration action or stop the trajectory."
             if include_stop
-            else "Apply one registered restoration action."
+            else "Apply exactly one registered restoration action."
+        )
+        action_description = (
+            "Select exactly one action enum value. Action meanings:\n"
+            f"{self.build_tool_descriptions(include_stop=include_stop)}"
         )
         return {
             "type": "function",
@@ -127,6 +131,7 @@ class ToolRegistry:
                     "properties": {
                         "action": {
                             "type": "string",
+                            "description": action_description,
                             "enum": actions,
                         }
                     },

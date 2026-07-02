@@ -20,7 +20,7 @@ data:
   # sent to SGLang is downscaled as well, so both processors see this budget.
   max_image_pixels: 589824  # 768 x 768
   # Stores model generations plus zero-loss reconstructed decision prompts.
-  max_response_length: 2048
+  max_response_length: 3072
   return_raw_chat: true
   return_multi_modal_inputs: false
 
@@ -45,7 +45,7 @@ actor_rollout_ref:
     freeze_vision_tower: true
     optim:
       lr: 1.0e-5
-    entropy_coeff: 0.005
+    entropy_coeff: 0.002
     ppo_epochs: 1
     use_kl_loss: true
     kl_loss_coef: 0.05
@@ -86,7 +86,7 @@ actor_rollout_ref:
       max_assistant_turns: 6
       # Model-token budget across the full trajectory. Reconstructed prompts
       # and tool feedback remain available as context without using it.
-      max_generated_response_length: 1024
+      max_generated_response_length: 1536
       round_barrier_size: 0
       format: qwen3_coder
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/restoration_tool_config_current_iqa_2gpu.yaml
@@ -98,17 +98,17 @@ trainer:
   logger:
     - console
     - swanlab
-  project_name: image-restoration-multi-agent
-  experiment_name: fog-verl-2gpu
+  project_name: 4expert_grpo
+  experiment_name: fog_grpo
   resume_mode: auto
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0629
   log_val_generations: 2
   n_gpus_per_node: 2
   nnodes: 1
   save_freq: 10
   test_freq: 10
   total_epochs: 3
-  total_training_steps: 120
+  total_training_steps: null
   max_actor_ckpt_to_keep: 2
   keep_best_validation_ckpt: true
   val_before_train: false
@@ -123,7 +123,7 @@ trainer:
           SGLANG_DISABLE_CUDNN_CHECK: "1"
           RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1"
           RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/full/swanlab"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0629/swanlab"
           SWANLAB_MODE: "cloud"
           VERL_LOGGING_LEVEL: "WARN"
           VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log"

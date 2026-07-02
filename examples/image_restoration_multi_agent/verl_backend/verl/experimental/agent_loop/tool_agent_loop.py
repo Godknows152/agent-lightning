@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from enum import Enum
 from pathlib import Path
@@ -98,6 +99,12 @@ class ToolAgentLoop(AgentLoopBase):
     TOOL_CALL_REWARD = 2.0
     NO_TOOL_LENGTH_THRESHOLD = 256
     NO_TOOL_LENGTH_PENALTY_ALPHA = 3.0
+    FORMAT_AFTER_TOOL_CALL_PENALTY = -1.0
+    FORMAT_MULTIPLE_TOOL_CALLS_PENALTY = -1.0
+    FORMAT_ROLE_LABEL_PENALTY = -1.0
+    TOOL_CALL_START_TOKEN = "<tool_call>"
+    TOOL_CALL_END_TOKEN = "</tool_call>"
+    ROLE_LABEL_PATTERN = re.compile(r"(?im)(?:^|\n)\s*(?:user|assistant)\s*(?=\n|$)")
     # Per-occurrence penalty for choosing the same tool more than once in a trajectory.
     # E.g. scale=0.5 → using scunet 3 times costs -0.5*(3-1) = -1.0 total.
     TRAJECTORY_REPEAT_PENALTY_SCALE = 0.5
@@ -129,6 +136,84 @@ class ToolAgentLoop(AgentLoopBase):
     def _generated_response_length(agent_data: AgentData) -> int:
         """Return the number of model tokens eligible for policy loss."""
         return sum(agent_data.response_mask)
+
+    def _apply_no_tool_call_penalty(self, agent_data: AgentData, response_len: int, reason: str) -> None:
+        """Apply the heavy no-tool penalty, plus length penalty for long no-tool generations."""
+
+        agent_data.tool_rewards.append(self.EARLY_STOP_PENALTY)
+        agent_data.extra_fields["no_tool_call_penalty"] = self.EARLY_STOP_PENALTY
+        agent_data.extra_fields["no_tool_call_penalty_applied"] = True
+        agent_data.extra_fields["no_tool_call_penalty_reason"] = reason
+        agent_data.extra_fields["no_tool_call_response_length"] = response_len
+
+        if response_len > self.NO_TOOL_LENGTH_THRESHOLD:
+            denom = max(1, self.response_length - self.NO_TOOL_LENGTH_THRESHOLD)
+            length_ratio = (response_len - self.NO_TOOL_LENGTH_THRESHOLD) / denom
+            length_ratio = max(0.0, min(1.0, float(length_ratio)))
+            no_tool_length_penalty = -self.NO_TOOL_LENGTH_PENALTY_ALPHA * length_ratio
+            agent_data.tool_rewards.append(no_tool_length_penalty)
+            agent_data.extra_fields["no_tool_length_penalty"] = no_tool_length_penalty
+
+    def _first_complete_tool_call_token_count(self, token_ids: list[int]) -> int | None:
+        """Return the shortest generated prefix containing the first complete tool call."""
+
+        for index in range(1, len(token_ids) + 1):
+            text = self.tokenizer.decode(token_ids[:index])
+            tool_call_start = text.find(self.TOOL_CALL_START_TOKEN)
+            if tool_call_start >= 0 and text.find(self.TOOL_CALL_END_TOKEN, tool_call_start) >= 0:
+                return index
+        return None
+
+    def _apply_tool_call_format_guardrails(
+        self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
+    ) -> tuple[list[int], list[float] | None]:
+        """Trim generated text after the first tool call and penalize restoration format drift."""
+
+        if not token_ids:
+            return token_ids, log_probs
+        if getattr(agent_data, "data_source", "") != "restoration":
+            return token_ids, log_probs
+
+        text = self.tokenizer.decode(token_ids)
+        first_tool_call_start = text.find(self.TOOL_CALL_START_TOKEN)
+        first_tool_call_end = (
+            text.find(self.TOOL_CALL_END_TOKEN, first_tool_call_start) if first_tool_call_start >= 0 else -1
+        )
+        has_complete_tool_call = first_tool_call_start >= 0 and first_tool_call_end >= 0
+
+        format_penalties: dict[str, float] = {}
+        if has_complete_tool_call:
+            after_tool_call = text[first_tool_call_end + len(self.TOOL_CALL_END_TOKEN) :]
+            if after_tool_call.strip():
+                format_penalties["after_tool_call_text"] = self.FORMAT_AFTER_TOOL_CALL_PENALTY
+
+        if text.count(self.TOOL_CALL_START_TOKEN) > 1 or text.count(self.TOOL_CALL_END_TOKEN) > 1:
+            format_penalties["multiple_tool_calls"] = self.FORMAT_MULTIPLE_TOOL_CALLS_PENALTY
+
+        if self.ROLE_LABEL_PATTERN.search(text):
+            format_penalties["role_label_text"] = self.FORMAT_ROLE_LABEL_PENALTY
+
+        if format_penalties:
+            total_penalty = float(sum(format_penalties.values()))
+            agent_data.tool_rewards.append(total_penalty)
+            agent_data.extra_fields.setdefault("format_penalties", []).append(format_penalties)
+            agent_data.extra_fields["format_penalty_total"] = float(
+                agent_data.extra_fields.get("format_penalty_total", 0.0) + total_penalty
+            )
+
+        keep_token_count = self._first_complete_tool_call_token_count(token_ids) if has_complete_tool_call else None
+        if keep_token_count is None or keep_token_count >= len(token_ids):
+            return token_ids, log_probs
+
+        agent_data.extra_fields.setdefault("format_truncations", []).append(
+            {
+                "original_tokens": len(token_ids),
+                "kept_tokens": keep_token_count,
+                "dropped_tokens": len(token_ids) - keep_token_count,
+            }
+        )
+        trimmed_log_probs = log_probs[:keep_token_count] if log_probs else None
+        return token_ids[:keep_token_count], trimmed_log_probs
 
     @staticmethod
     def _count_image_markers_in_messages(messages: list[dict[str, Any]]) -> int:
@@ -429,19 +514,11 @@ class ToolAgentLoop(AgentLoopBase):
                 no_tool_call = agent_data.total_tool_calls == 0
 
                 if no_tool_call and not agent_data.extra_fields.get("no_tool_call_penalty_applied", False):
-                    agent_data.tool_rewards.append(self.EARLY_STOP_PENALTY)
-                    agent_data.extra_fields["no_tool_call_penalty"] = self.EARLY_STOP_PENALTY
-                    agent_data.extra_fields["no_tool_call_penalty_applied"] = True
-
-                # Penalize length-hacking when no tool was used in the whole trajectory.
-                # The penalty increases linearly after a safe threshold.
-                if len(agent_data.tool_rewards) > 0 and response_len > self.NO_TOOL_LENGTH_THRESHOLD and no_tool_call:
-                    denom = max(1, self.response_length - self.NO_TOOL_LENGTH_THRESHOLD)
-                    length_ratio = (response_len - self.NO_TOOL_LENGTH_THRESHOLD) / denom
-                    length_ratio = max(0.0, min(1.0, float(length_ratio)))
-                    no_tool_length_penalty = -self.NO_TOOL_LENGTH_PENALTY_ALPHA * length_ratio
-                    agent_data.tool_rewards.append(no_tool_length_penalty)
-                    agent_data.extra_fields["no_tool_length_penalty"] = no_tool_length_penalty
+                    self._apply_no_tool_call_penalty(
+                        agent_data,
+                        response_len=response_len,
+                        reason="trajectory_ended_without_tool_call",
+                    )
 
                 # Expose decomposed reward parts for easier diagnosis in logs.
                 # Trajectory-level duplicate penalty: penalize choosing the same
@@ -563,11 +640,16 @@ class ToolAgentLoop(AgentLoopBase):
                 agent_data.extra_fields["max_global_steps"] = max_global_steps
 
         agent_data.assistant_turns += 1
-        agent_data.response_ids = output.token_ids
+        response_ids, response_logprobs = self._apply_tool_call_format_guardrails(
+            agent_data,
+            output.token_ids,
+            output.log_probs,
+        )
+        agent_data.response_ids = response_ids
         agent_data.prompt_ids += agent_data.response_ids
         agent_data.response_mask += [1] * len(agent_data.response_ids)
-        if output.log_probs:
-            agent_data.response_logprobs += output.log_probs
+        if response_logprobs:
+            agent_data.response_logprobs += response_logprobs
 
         if output.routed_experts is not None:
             agent_data.routed_experts = output.routed_experts
@@ -575,8 +657,9 @@ class ToolAgentLoop(AgentLoopBase):
         # Only model-generated tokens consume the generation budget. Zero-mask
         # tool observations and reconstructed prompts still count toward the
         # trajectory tensor capacity checked after they are appended.
-        if not ignore_termination and self._generated_response_length(agent_data) >= self.max_generated_response_length:
-            return AgentState.TERMINATED
+        generated_budget_exhausted = (
+            not ignore_termination and self._generated_response_length(agent_data) >= self.max_generated_response_length
+        )
 
         # Extract tool calls (use per-sample tools if routed)
         active_tools = getattr(agent_data, "_active_tools", self.tools)
@@ -593,7 +676,7 @@ class ToolAgentLoop(AgentLoopBase):
             # If we are at max turns, still execute the tool call (e.g. "stop")
             # so its reward is computed, but mark that the loop should terminate
             # after processing the tool response.
-            if at_max_assistant_turns or at_max_user_turns:
+            if at_max_assistant_turns or at_max_user_turns or generated_budget_exhausted:
                 agent_data.extra_fields["_terminate_after_tool"] = True
             return AgentState.PROCESSING_TOOLS
         else:
@@ -601,9 +684,12 @@ class ToolAgentLoop(AgentLoopBase):
             # Enforce tool usage per assistant turn for restoration.
             # Any step that does not call a tool is treated as early stop and penalized.
             if getattr(agent_data, "data_source", "") == "restoration":
-                agent_data.tool_rewards.append(self.EARLY_STOP_PENALTY)
-                agent_data.extra_fields["no_tool_call_penalty"] = self.EARLY_STOP_PENALTY
-                agent_data.extra_fields["no_tool_call_penalty_applied"] = True
+                reason = (
+                    "generated_budget_exhausted_without_tool_call"
+                    if generated_budget_exhausted
+                    else "turn_without_tool_call"
+                )
+                self._apply_no_tool_call_penalty(agent_data, response_len=len(agent_data.response_ids), reason=reason)
             return AgentState.TERMINATED
 
     async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:

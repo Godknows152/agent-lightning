@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from typing import cast
 
@@ -28,46 +26,23 @@ def _registry() -> ToolRegistry:
     return ToolRegistry.from_yaml(config.tools_config)
 
 
-def _extract_tools_schema(prompt: str) -> dict[str, object]:
-    match = re.search(r"<tools>\n(.*?)\n</tools>", prompt, flags=re.DOTALL)
-    assert match is not None
-    payload: object = json.loads(match.group(1))
-    assert isinstance(payload, dict)
-    return cast(dict[str, object], payload)
-
-
-def _extract_tool_descriptions(prompt: str) -> str:
-    match = re.search(r"<tool_descriptions>\n(.*?)\n</tool_descriptions>", prompt, flags=re.DOTALL)
-    assert match is not None
-    return match.group(1)
-
-
 def test_all_expert_prompts_embed_the_same_complete_tool_schema() -> None:
     registry = _registry()
     prompts = {expert: build_expert_system_prompt(expert, registry) for expert in ExpertName}
-    schemas = [_extract_tools_schema(prompt) for prompt in prompts.values()]
 
-    assert all(schema == schemas[0] for schema in schemas[1:])
-    action_schema_value = schemas[0]["parameters"]
-    assert isinstance(action_schema_value, dict)
-    action_schema = cast(dict[str, object], action_schema_value)
-    properties_value = action_schema["properties"]
-    assert isinstance(properties_value, dict)
-    properties = cast(dict[str, object], properties_value)
-    action_value = properties["action"]
-    assert isinstance(action_value, dict)
-    action = cast(dict[str, object], action_value)
-    assert action["enum"] == list(registry.actions)
+    assert all("<tools>" not in prompt for prompt in prompts.values())
+    assert all("<tool_descriptions>" not in prompt for prompt in prompts.values())
     assert all(expert.value not in prompts[expert] for expert in ExpertName)
     assert all("primary degradation is" not in prompt for prompt in prompts.values())
     assert all("specialized through training data" not in prompt for prompt in prompts.values())
     assert all("You are an image restoration expert." in prompt for prompt in prompts.values())
 
 
-def test_expert_prompt_embeds_tool_descriptions_from_registry() -> None:
+def test_expert_tool_schema_embeds_action_descriptions_from_registry() -> None:
     registry = _registry()
-    prompt = build_expert_system_prompt(ExpertName.FOG, registry)
-    descriptions = _extract_tool_descriptions(prompt)
+    schema = registry.build_tool_schema()
+    action_schema = schema["function"]["parameters"]["properties"]["action"]
+    descriptions = action_schema["description"]
 
     assert "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in descriptions
     assert "- hvicidnet: HVI-CIDNet low-light image enhancement model." in descriptions
@@ -77,15 +52,16 @@ def test_expert_prompt_embeds_tool_descriptions_from_registry() -> None:
 def test_single_step_prompt_hides_stop_description() -> None:
     registry = _registry()
     prompt = build_expert_single_step_sft_system_prompt(ExpertName.FOG, registry)
-    schema = _extract_tools_schema(prompt)
-    descriptions = _extract_tool_descriptions(prompt)
+    schema = registry.build_tool_schema(include_stop=False)["function"]
 
     parameters = cast(dict[str, object], schema["parameters"])
     properties = cast(dict[str, object], parameters["properties"])
     action = cast(dict[str, object], properties["action"])
     assert "stop" not in action["enum"]
-    assert "- stop:" not in descriptions
-    assert "- focalnet_dehaze:" in descriptions
+    assert "- stop:" not in str(action["description"])
+    assert "- focalnet_dehaze:" in str(action["description"])
+    assert "<tools>" not in prompt
+    assert "<tool_descriptions>" not in prompt
 
 
 def test_diagnosis_prompt_uses_hermes_without_model_generated_route() -> None:
@@ -105,12 +81,11 @@ def test_expert_prompt_locks_the_qwen_xml_wire_format() -> None:
     prompt = build_expert_system_prompt(ExpertName.FOG, _registry())
 
     assert EXPERT_PROMPT_VERSION in prompt
-    assert "<function=restore_image>" in prompt
-    assert "<parameter=action>" in prompt
-    assert "<action_enum_value>" in prompt
-    assert "<function=restore_image>\n<parameter=action>\nstop\n</parameter>\n</function>" in prompt
-    assert "must be exactly restore_image" in prompt
-    assert "arguments object must contain exactly one field named action" in prompt
+    assert "<function=restore_image>" not in prompt
+    assert "<parameter=action>" not in prompt
+    assert "<action_enum_value>" not in prompt
+    assert "Call restore_image exactly once." in prompt
+    assert "action argument must be one enum value" in prompt
     assert '"args"' not in prompt
 
 

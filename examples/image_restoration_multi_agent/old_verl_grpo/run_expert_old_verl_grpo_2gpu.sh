@@ -14,6 +14,9 @@ Environment overrides:
   OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,2,3
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
+  OLD_VERL_OUTPUT_SUFFIX=0629
+  OLD_VERL_RUN_TAG=fog_0629
+  OLD_VERL_OUTPUT_DIR=/path/to/output-dir
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
   RAY_BIN=/home/LXJ/anaconda3/envs/verl/bin/ray
 EOF
@@ -71,7 +74,11 @@ RUN_KIND="full"
 TRAIN_LIMIT_ARGS=()
 VAL_LIMIT_ARGS=()
 HYDRA_OVERRIDES=()
-EXPERIMENT_NAME="${EXPERT_SLUG}-verl-2gpu"
+OUTPUT_SUFFIX="${OLD_VERL_OUTPUT_SUFFIX:-0629}"
+RUN_TAG="${OLD_VERL_RUN_TAG:-${EXPERT}_${OUTPUT_SUFFIX}}"
+OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${RUN_TAG}}"
+PROJECT_NAME="${OLD_VERL_PROJECT_NAME:-4expert_grpo}"
+EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_grpo}"
 
 if [[ "${SMOKE}" == "1" ]]; then
   RUN_KIND="smoke"
@@ -115,8 +122,8 @@ if [[ ! -d "${ADAPTER_PATH}" ]]; then
   exit 1
 fi
 
-# Expose GPU2/3 as well because the restoration/IQA tool runtime is pinned there.
-# Training still uses two GPUs through trainer.n_gpus_per_node.
+# Expose GPU3 as cuda:3 because the restoration/IQA tool runtime is pinned there.
+# Keep GPU0/1 visible for trainer.n_gpus_per_node=2; do not hide GPU2 or CUDA indices will be remapped.
 export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 if [[ -d "${LOCAL_PYDEPS}" ]]; then
   export PYTHONPATH="${LOCAL_PYDEPS}:${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
@@ -128,7 +135,7 @@ export XFORMERS_IGNORE_FLASH_VERSION_CHECK=1
 export SGLANG_DISABLE_CUDNN_CHECK=1
 export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES="${RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES:-1}"
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO="${RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO:-0}"
-export SWANLAB_LOG_DIR="${OLD_VERL_SWANLAB_LOG_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}/${RUN_KIND}/swanlab}"
+export SWANLAB_LOG_DIR="${OLD_VERL_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
 if [[ -n "${OLD_VERL_SWANLAB_MODE:-}" ]]; then
   export SWANLAB_MODE="${OLD_VERL_SWANLAB_MODE}"
 elif [[ -n "${GRPO_SWANLAB_MODE:-}" ]]; then
@@ -143,7 +150,7 @@ export VERL_LOG_DIR="${OLD_VERL_DIR}/log"
 export LD_LIBRARY_PATH="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/torch/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH:-}"
 export LD_PRELOAD="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12${LD_PRELOAD:+:${LD_PRELOAD}}"
 
-mkdir -p "${OLD_VERL_DIR}/data" "${OLD_VERL_DIR}/log" "${OLD_VERL_DIR}/outputs/${EXPERT}/${RUN_KIND}" "${SWANLAB_LOG_DIR}"
+mkdir -p "${OLD_VERL_DIR}/data" "${OLD_VERL_DIR}/log" "${OUTPUT_DIR}" "${SWANLAB_LOG_DIR}"
 
 if [[ "${OLD_VERL_CLEAR_INTERMEDIATE_IMAGES:-1}" == "1" ]]; then
   if [[ -z "${INTERMEDIATE_DIR}" || "${INTERMEDIATE_DIR}" == "/" ]]; then
@@ -166,7 +173,9 @@ echo "Running old-verl ${RUN_KIND} GRPO for ${EXPERT} on CUDA_VISIBLE_DEVICES=${
 echo "Model:   ${MODEL_PATH}"
 echo "Adapter: ${ADAPTER_PATH}"
 echo "Data:    ${TRAIN_PARQUET} / ${VAL_PARQUET}"
-echo "SwanLab: project=image-restoration-multi-agent experiment=${EXPERIMENT_NAME} mode=${SWANLAB_MODE} log_dir=${SWANLAB_LOG_DIR}"
+echo "Output:  ${OUTPUT_DIR}"
+echo "Resume:  configured by ${CONFIG_DIR}/restoration_expert_grpo_2gpu.yaml"
+echo "SwanLab: project=${PROJECT_NAME} experiment=${EXPERIMENT_NAME} mode=${SWANLAB_MODE} log_dir=${SWANLAB_LOG_DIR}"
 
 cd "${ROOT}"
 "${PYTHON_BIN}" -u -m verl.trainer.main_ppo \
@@ -177,9 +186,9 @@ cd "${ROOT}"
   actor_rollout_ref.model.path="${MODEL_PATH}" \
   actor_rollout_ref.model.lora_adapter_path="${ADAPTER_PATH}" \
   trainer.logger='["console","swanlab"]' \
-  trainer.project_name="image-restoration-multi-agent" \
+  trainer.project_name="${PROJECT_NAME}" \
   trainer.experiment_name="${EXPERIMENT_NAME}" \
-  trainer.default_local_dir="${OLD_VERL_DIR}/outputs/${EXPERT}/${RUN_KIND}" \
+  trainer.default_local_dir="${OUTPUT_DIR}" \
   trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR="${SWANLAB_LOG_DIR}" \
   trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE="${SWANLAB_MODE}" \
   "${HYDRA_OVERRIDES[@]}" \

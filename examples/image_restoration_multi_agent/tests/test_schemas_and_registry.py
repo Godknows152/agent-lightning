@@ -30,6 +30,8 @@ def test_tool_schema_contains_all_actions_and_stop() -> None:
     action_schema = schema["function"]["parameters"]["properties"]["action"]
     assert action_schema["enum"] == list(registry.actions)
     assert action_schema["enum"][-1] == STOP_ACTION
+    assert "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in action_schema["description"]
+    assert "- stop: Stop the trajectory and keep the historical best restored image." in action_schema["description"]
     assert schema["function"]["parameters"]["additionalProperties"] is False
     assert set(registry.actions[:-1]) == {
         "real_esrgan",
