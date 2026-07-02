@@ -267,6 +267,109 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     return metrics
 
 
+def _as_bool_array(value: Any, length: int) -> np.ndarray:
+    """Convert a non-tensor batch field into a boolean array with a stable length."""
+
+    if value is None:
+        return np.zeros(length, dtype=bool)
+    array = np.asarray(value, dtype=object)
+    if array.shape == ():
+        return np.full(length, bool(array.item()), dtype=bool)
+    if len(array) != length:
+        logger.warning("Expected rollout flag field length %s, got %s; ignoring field", length, len(array))
+        return np.zeros(length, dtype=bool)
+    return np.asarray([bool(item) for item in array], dtype=bool)
+
+
+def _as_negative_penalty_array(value: Any, length: int) -> np.ndarray:
+    """Return True for trajectories whose penalty field contains a negative value."""
+
+    if value is None:
+        return np.zeros(length, dtype=bool)
+    array = np.asarray(value, dtype=object)
+    if array.shape == ():
+        array = np.full(length, array.item(), dtype=object)
+    if len(array) != length:
+        logger.warning("Expected rollout penalty field length %s, got %s; ignoring field", length, len(array))
+        return np.zeros(length, dtype=bool)
+
+    flags = []
+    for item in array:
+        try:
+            flags.append(item is not None and float(item) < 0.0)
+        except (TypeError, ValueError):
+            flags.append(False)
+    return np.asarray(flags, dtype=bool)
+
+
+def _as_minus_10_penalty_array(value: Any, length: int) -> np.ndarray:
+    """Return True for trajectories whose tool reward list contains a -10-style penalty."""
+
+    if value is None:
+        return np.zeros(length, dtype=bool)
+    array = np.asarray(value, dtype=object)
+    if array.shape == ():
+        array = np.full(length, array.item(), dtype=object)
+    if len(array) != length:
+        logger.warning("Expected tool_rewards field length %s, got %s; ignoring field", length, len(array))
+        return np.zeros(length, dtype=bool)
+
+    flags = []
+    for item in array:
+        values = item if isinstance(item, (list, tuple, np.ndarray)) else [item]
+        has_minus_10 = False
+        for value_item in values:
+            try:
+                if value_item is not None and float(value_item) <= -10.0:
+                    has_minus_10 = True
+                    break
+            except (TypeError, ValueError):
+                continue
+        flags.append(has_minus_10)
+    return np.asarray(flags, dtype=bool)
+
+
+def compute_restoration_penalty_metrics(batch: DataProto) -> dict[str, Any]:
+    """Count restoration trajectories that received guardrail/tool-use penalties in the current training step."""
+
+    batch_size = len(batch)
+    if batch_size == 0:
+        return {}
+
+    no_tool_flags = _as_bool_array(batch.non_tensor_batch.get("no_tool_call_penalty_applied"), batch_size)
+    no_tool_length_flags = _as_negative_penalty_array(batch.non_tensor_batch.get("no_tool_length_penalty"), batch_size)
+    invalid_tool_flags = _as_bool_array(batch.non_tensor_batch.get("invalid_tool_call_penalty_applied"), batch_size)
+    unknown_tool_flags = _as_bool_array(batch.non_tensor_batch.get("unknown_tool_call_penalty_applied"), batch_size)
+    tool_error_flags = _as_bool_array(batch.non_tensor_batch.get("tool_execution_error_penalty_applied"), batch_size)
+    format_penalty_flags = _as_negative_penalty_array(batch.non_tensor_batch.get("format_penalty_total"), batch_size)
+    minus_10_flags = _as_minus_10_penalty_array(batch.non_tensor_batch.get("tool_rewards"), batch_size)
+
+    heavy_penalty_flags = no_tool_flags | invalid_tool_flags | unknown_tool_flags | tool_error_flags
+    any_penalty_flags = heavy_penalty_flags | no_tool_length_flags | format_penalty_flags
+
+    def _count(flags: np.ndarray) -> int:
+        return int(np.count_nonzero(flags))
+
+    def _ratio(flags: np.ndarray) -> float:
+        return float(np.count_nonzero(flags) / batch_size)
+
+    return {
+        "restoration_penalty/no_tool_call_count": _count(no_tool_flags),
+        "restoration_penalty/no_tool_call_ratio": _ratio(no_tool_flags),
+        "restoration_penalty/no_tool_length_count": _count(no_tool_length_flags),
+        "restoration_penalty/invalid_tool_call_count": _count(invalid_tool_flags),
+        "restoration_penalty/unknown_tool_call_count": _count(unknown_tool_flags),
+        "restoration_penalty/tool_execution_error_count": _count(tool_error_flags),
+        "restoration_penalty/format_penalty_count": _count(format_penalty_flags),
+        "restoration_penalty/minus_10_penalty_count": _count(minus_10_flags),
+        "restoration_penalty/minus_10_penalty_ratio": _ratio(minus_10_flags),
+        "restoration_penalty/heavy_penalty_count": _count(heavy_penalty_flags),
+        "restoration_penalty/heavy_penalty_ratio": _ratio(heavy_penalty_flags),
+        "restoration_penalty/any_penalty_count": _count(any_penalty_flags),
+        "restoration_penalty/any_penalty_ratio": _ratio(any_penalty_flags),
+    }
+
+
 def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> dict[str, Any]:
     """
     Computes timing metrics for different processing stages in PPO training.

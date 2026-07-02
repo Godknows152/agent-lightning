@@ -1,8 +1,4 @@
-# Old-verl GRPO config: actor/SGLang train on GPU0/1, restoration/IQA tools stay on GPU2/3.
-
-hydra:
-  searchpath:
-    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+# Shared old-verl GRPO config: actor/SGLang train on GPU0/1, restoration/IQA tools stay on GPU2/3.
 
 defaults:
   - ppo_trainer
@@ -44,8 +40,8 @@ actor_rollout_ref:
   actor:
     freeze_vision_tower: true
     optim:
-      lr: 3.0e-5
-    entropy_coeff: 0.02
+      lr: 1.0e-5
+    entropy_coeff: 0.01
     ppo_epochs: 1
     use_kl_loss: true
     kl_loss_coef: 0.05
@@ -65,10 +61,10 @@ actor_rollout_ref:
     top_p: 0.9
     disable_multimodal_special_token_generation: true
     n: 3
-    tensor_model_parallel_size: 2
+    tensor_model_parallel_size: 1
     # Reserve enough token-pool capacity for the zero-loss reconstructed
     # decision context while keeping rollout concurrency modest on shared GPUs.
-    gpu_memory_utilization: 0.2
+    gpu_memory_utilization: 0.30
     force_full_sleep_for_lora: true
     max_num_seqs: 4
     max_model_len: 9728
@@ -100,8 +96,8 @@ trainer:
     - swanlab
   project_name: 4expert_grpo
   experiment_name: fog_grpo_0702
-  resume_mode: resume_path
-  resume_from_path: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0629/global_step_80
+  resume_mode: auto
+  resume_from_path: null
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0702
   log_val_generations: 2
   n_gpus_per_node: 2

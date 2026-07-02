@@ -43,6 +43,7 @@ from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
 from verl.trainer.ppo.metric_utils import (
     compute_data_metrics,
+    compute_restoration_penalty_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
     compute_variance_proxy_metrics,
@@ -1703,6 +1704,7 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                metrics.update(compute_restoration_penalty_metrics(batch=batch))
                 # GDPO per-component reward metrics
                 gdpo_reward_keys = self.config.algorithm.get("gdpo_reward_keys", None)
                 if gdpo_reward_keys and self.config.algorithm.adv_estimator in ("gdpo", AdvantageEstimator.GDPO):

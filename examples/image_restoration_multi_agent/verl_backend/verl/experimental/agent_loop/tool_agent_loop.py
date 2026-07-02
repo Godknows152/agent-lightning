@@ -884,8 +884,21 @@ class ToolAgentLoop(AgentLoopBase):
             tool_execution_response, tool_reward, res = await tool.execute(
                 instance_id, tool_args, agent_data=agent_data
             )
+        except json.JSONDecodeError as e:
+            logger.warning("Error when executing tool: invalid tool arguments for '%s': %s", tool_call.name, e)
+            agent_data.extra_fields["invalid_tool_call_penalty_applied"] = True
+            agent_data.extra_fields["invalid_tool_call_penalty_reason"] = "invalid_json_arguments"
+            return (
+                ToolResponse(
+                    text=f"Error when executing tool: invalid tool arguments for '{tool_call.name}'",
+                ),
+                0.0,
+                {"skip_tool_call_reward": True},
+            )
         except KeyError:
             logger.warning(f"Error when executing tool: unknown tool '{tool_call.name}'")
+            agent_data.extra_fields["unknown_tool_call_penalty_applied"] = True
+            agent_data.extra_fields["unknown_tool_call_penalty_reason"] = "unknown_tool_name"
             return (
                 ToolResponse(
                     text=f"Error when executing tool: unknown tool '{tool_call.name}'",
@@ -895,6 +908,8 @@ class ToolAgentLoop(AgentLoopBase):
             )
         except Exception as e:
             logger.warning(f"Error when executing tool: {e}")
+            agent_data.extra_fields["tool_execution_error_penalty_applied"] = True
+            agent_data.extra_fields["tool_execution_error_penalty_reason"] = type(e).__name__
             return (
                 ToolResponse(
                     text=f"Error when executing tool: {e}",

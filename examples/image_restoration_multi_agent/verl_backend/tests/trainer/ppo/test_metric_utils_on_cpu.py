@@ -20,10 +20,13 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import torch
+from tensordict import TensorDict
+from verl import DataProto
 from verl.trainer.ppo.metric_utils import (
     bootstrap_metric,
     calc_maj_val,
     compute_data_metrics,
+    compute_restoration_penalty_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
     process_validation_metrics,
@@ -68,6 +71,39 @@ class TestReduceMetrics(unittest.TestCase):
         result = reduce_metrics(metrics)
 
         self.assertEqual(result["single"], 5.0)
+
+
+class TestRestorationPenaltyMetrics(unittest.TestCase):
+    """Tests for restoration rollout penalty counters."""
+
+    def test_counts_guardrail_and_tool_penalties(self):
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[4]),
+            non_tensor_batch={
+                "no_tool_call_penalty_applied": np.array([True, False, None, False], dtype=object),
+                "no_tool_length_penalty": np.array([None, -1.0, 0.0, None], dtype=object),
+                "invalid_tool_call_penalty_applied": np.array([False, True, False, False], dtype=object),
+                "unknown_tool_call_penalty_applied": np.array([False, False, True, False], dtype=object),
+                "tool_execution_error_penalty_applied": np.array([False, False, False, True], dtype=object),
+                "format_penalty_total": np.array([0.0, -1.0, None, 0.0], dtype=object),
+                "tool_rewards": np.array([[-10.0], [1.0, -10.5], [], [-1.0]], dtype=object),
+            },
+        )
+
+        metrics = compute_restoration_penalty_metrics(batch)
+
+        self.assertEqual(metrics["restoration_penalty/no_tool_call_count"], 1)
+        self.assertEqual(metrics["restoration_penalty/no_tool_length_count"], 1)
+        self.assertEqual(metrics["restoration_penalty/invalid_tool_call_count"], 1)
+        self.assertEqual(metrics["restoration_penalty/unknown_tool_call_count"], 1)
+        self.assertEqual(metrics["restoration_penalty/tool_execution_error_count"], 1)
+        self.assertEqual(metrics["restoration_penalty/format_penalty_count"], 1)
+        self.assertEqual(metrics["restoration_penalty/minus_10_penalty_count"], 2)
+        self.assertEqual(metrics["restoration_penalty/heavy_penalty_count"], 4)
+        self.assertEqual(metrics["restoration_penalty/any_penalty_count"], 4)
+        self.assertAlmostEqual(metrics["restoration_penalty/minus_10_penalty_ratio"], 0.5)
+        self.assertAlmostEqual(metrics["restoration_penalty/heavy_penalty_ratio"], 1.0)
+        self.assertAlmostEqual(metrics["restoration_penalty/no_tool_call_ratio"], 0.25)
 
 
 class TestMetric(unittest.TestCase):

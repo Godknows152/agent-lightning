@@ -149,6 +149,17 @@ DEGRADATION_ACTION_AFFINITY: dict[str, dict[str, float]] = {
     "snow": {"turbo_snow": 1.0, "snowmaster": 1.0},
 }
 
+# Action groups that share the repeat penalty within a trajectory. Derain and
+# generic restoration tools intentionally fall back to their individual actions.
+TOOL_REPEAT_TYPE_GROUPS: dict[str, tuple[str, ...]] = {
+    "dehaze": ("ridcp", "kanet", "focalnet_dehaze", "mb_taylorformer_dehaze"),
+    "desnow": ("focalnet_desnow", "s2former", "turbo_snow"),
+    "low_light": ("retinexformer_fivek", "hvicidnet", "lightdiff"),
+}
+TOOL_REPEAT_TYPE_BY_ACTION: dict[str, str] = {
+    action: group_name for group_name, actions in TOOL_REPEAT_TYPE_GROUPS.items() for action in actions
+}
+
 # Legacy IQA metric weights per degradation type (QAlign, MANIQA, MUSIQ, CLIPIQA, NIQE).
 # Prefer loading a data-driven map from local training data via ``iqa_weight_map_path``.
 SCORE_WEIGHT_MAP: dict[str, list[float]] = {
@@ -1141,14 +1152,16 @@ class RestorationTool(BaseTool):
             return await self.runtime_pool.run(lambda worker: self._get_iqa_scores_on_worker(worker, image_path))
         return self._get_iqa_scores(image_path)
 
-    def _count_consecutive_repeats(self, actions_history: list[str], action: str) -> int:
-        """Count how many trailing actions match the current action."""
-        repeat_count = 0
-        for previous_action in reversed(actions_history):
-            if previous_action != action:
-                break
-            repeat_count += 1
-        return repeat_count
+    def _repeat_type_key(self, action: str) -> str:
+        """Return the repeat-penalty grouping key for an action."""
+        return TOOL_REPEAT_TYPE_BY_ACTION.get(action, action)
+
+    def _count_trajectory_type_repeats(self, actions_history: list[str], action: str) -> int:
+        """Count prior actions in the trajectory that share the current action's repeat type."""
+        repeat_type_key = self._repeat_type_key(action)
+        return sum(
+            1 for previous_action in actions_history if self._repeat_type_key(previous_action) == repeat_type_key
+        )
 
     def _calculate_reward(
         self,
@@ -1160,7 +1173,7 @@ class RestorationTool(BaseTool):
         actions_history: list[str],
         degradation_type: str | None = None,
         best_identity_delta: float = 0.0,
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         """Compute reward and diagnostics for a restoration step.
 
         Args:
@@ -1202,7 +1215,8 @@ class RestorationTool(BaseTool):
                 if not already_given:
                     affinity_bonus = self.affinity_bonus_scale * affinity_score
 
-        repeat_count = self._count_consecutive_repeats(actions_history, action)
+        repeat_tool_type_key = self._repeat_type_key(action)
+        repeat_count = self._count_trajectory_type_repeats(actions_history, action)
         repeat_penalty = 0.0
         if repeat_count > 0:
             repeat_penalty += self.repeat_action_penalty * repeat_count
@@ -1218,6 +1232,8 @@ class RestorationTool(BaseTool):
             "repeat_penalty": float(repeat_penalty),
             "affinity_bonus": float(affinity_bonus),
             "consecutive_action_count": float(repeat_count + 1),
+            "same_type_action_count": float(repeat_count + 1),
+            "repeat_tool_type_key": repeat_tool_type_key,
             "best_identity_delta": float(max(best_identity_delta, identity)),
             "best_improvement": float(max(0.0, identity - best_identity_delta)),
             "regression_penalty": 0.0,
@@ -1233,7 +1249,7 @@ class RestorationTool(BaseTool):
         action: str,
         actions_history: list[str],
         best_identity_delta: float,
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         """Reward improvements to the trajectory-best final IQA score.
 
         The summed v2 reward tracks the best weighted IQA improvement achieved
@@ -1253,7 +1269,8 @@ class RestorationTool(BaseTool):
         base_reward = best_improvement * self.final_iqa_reward_scale
         regression_penalty = regression * self.final_iqa_regression_penalty_scale
 
-        repeat_count = self._count_consecutive_repeats(actions_history, action)
+        repeat_tool_type_key = self._repeat_type_key(action)
+        repeat_count = self._count_trajectory_type_repeats(actions_history, action)
         repeat_penalty = 0.0
         if repeat_count > 0:
             repeat_penalty += self.repeat_action_penalty * repeat_count
@@ -1275,6 +1292,8 @@ class RestorationTool(BaseTool):
             "repeat_penalty": float(repeat_penalty),
             "affinity_bonus": 0.0,
             "consecutive_action_count": float(repeat_count + 1),
+            "same_type_action_count": float(repeat_count + 1),
+            "repeat_tool_type_key": repeat_tool_type_key,
             "best_identity_delta": float(max(best_identity_delta, identity)),
             "best_improvement": float(best_improvement),
             "regression_penalty": float(regression_penalty),
@@ -1328,7 +1347,8 @@ class RestorationTool(BaseTool):
         actions_history: list[str],
         marginal: float,
         identity_delta: float,
-        consecutive_action_count: int,
+        same_type_action_count: int,
+        repeat_tool_type_key: str | None = None,
         degradation_type: str | None = None,
         best_identity_delta: float | None = None,
         best_improvement: float | None = None,
@@ -1341,6 +1361,19 @@ class RestorationTool(BaseTool):
             degradation_type: Optional degradation category for affinity hints.
         """
         history_str = " → ".join(actions_history) if actions_history else "none"
+        repeat_tool_type_key = repeat_tool_type_key or action
+
+        def _repeat_feedback_line(final_iqa_mode: bool) -> str:
+            if repeat_tool_type_key == action:
+                prefix = f"Trajectory uses of '{action}': {same_type_action_count}."
+            else:
+                prefix = f"Trajectory uses of {repeat_tool_type_key} tools: {same_type_action_count}."
+            suffix = (
+                " Reusing the same tool type without a new best IQA is discouraged."
+                if final_iqa_mode
+                else " Reusing the same tool type without clear gains is discouraged."
+            )
+            return prefix + suffix
 
         if self.reward_mode == REWARD_MODE_FINAL_IQA_V2:
             best_identity_delta = identity_delta if best_identity_delta is None else best_identity_delta
@@ -1361,11 +1394,8 @@ class RestorationTool(BaseTool):
                 )
             if step_penalty > 0.0:
                 lines.append(f"Each extra tool call has a step cost of {step_penalty:.4f}.")
-            if consecutive_action_count > 1:
-                lines.append(
-                    f"Consecutive uses of '{action}': {consecutive_action_count}. "
-                    "Repeating the same tool without a new best IQA is discouraged."
-                )
+            if same_type_action_count > 1:
+                lines.append(_repeat_feedback_line(final_iqa_mode=True))
             if best_improvement > 0.0:
                 lines.append(
                     "This action set a new trajectory-best IQA. Continue only if another "
@@ -1389,11 +1419,8 @@ class RestorationTool(BaseTool):
             f"Improvement over original image: {identity_delta:.4f}",
             f"Action history: {history_str}",
         ]
-        if consecutive_action_count > 1:
-            lines.append(
-                f"Consecutive uses of '{action}': {consecutive_action_count}. "
-                "Repeating the same tool without clear gains is discouraged."
-            )
+        if same_type_action_count > 1:
+            lines.append(_repeat_feedback_line(final_iqa_mode=False))
         # NOTE: degradation-type affinity hints are intentionally omitted from the
         # feedback text.  The model must learn to diagnose the degradation and
         # choose appropriate tools on its own — revealing the degradation type or
@@ -1684,7 +1711,8 @@ class RestorationTool(BaseTool):
                 actions_history=instance["actions_history"],
                 marginal=float(reward_info["marginal"]),
                 identity_delta=identity_delta,
-                consecutive_action_count=int(reward_info["consecutive_action_count"]),
+                same_type_action_count=int(reward_info["same_type_action_count"]),
+                repeat_tool_type_key=str(reward_info["repeat_tool_type_key"]),
                 degradation_type=instance.get("degradation_type"),
                 best_identity_delta=float(reward_info["best_identity_delta"]),
                 best_improvement=float(reward_info["best_improvement"]),
@@ -1732,6 +1760,8 @@ class RestorationTool(BaseTool):
                 "repeat_penalty": reward_info["repeat_penalty"],
                 "affinity_bonus": reward_info["affinity_bonus"],
                 "consecutive_action_count": int(reward_info["consecutive_action_count"]),
+                "same_type_action_count": int(reward_info["same_type_action_count"]),
+                "repeat_tool_type_key": reward_info["repeat_tool_type_key"],
                 "iqa_scores": curr_scores,
                 "input_path": current_image,
                 "output_path": output_path,

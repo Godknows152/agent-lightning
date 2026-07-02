@@ -32,6 +32,7 @@ clear_intermediate_images=1
 for expert in "${EXPERTS[@]}"; do
   echo "===== old-verl GRPO start: ${expert} on GPU ${OLD_VERL_CUDA_VISIBLE_DEVICES} ====="
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES="${clear_intermediate_images}" \
+    OLD_VERL_CONFIG_NAME="${expert}_config_2gpu" \
     "${SCRIPT_DIR}/run_expert_old_verl_grpo_2gpu.sh" "${expert}" "$@"
   echo "===== old-verl GRPO done: ${expert} ====="
   clear_intermediate_images=0

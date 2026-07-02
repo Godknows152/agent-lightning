@@ -14,6 +14,7 @@ Environment overrides:
   OLD_VERL_MODEL_PATH=/path/to/base-model
   OLD_VERL_ADAPTER_PATH=/path/to/sft-lora-adapter
   OLD_VERL_TOOL_REGISTRY_PATH=/path/to/tools.yaml
+  OLD_VERL_CONFIG_NAME=fog_config_2gpu
   OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,2,3
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
@@ -61,6 +62,7 @@ EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
 CONFIG_DIR="${OLD_VERL_DIR}/config"
+CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-restoration_expert_grpo_2gpu}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
 LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
 TOOL_REGISTRY_PATH="${OLD_VERL_TOOL_REGISTRY_PATH:-${EXAMPLE_DIR}/config/tools.yaml}"
@@ -177,13 +179,14 @@ echo "Model:   ${MODEL_PATH}"
 echo "Adapter: ${ADAPTER_PATH}"
 echo "Data:    ${TRAIN_PARQUET} / ${VAL_PARQUET}"
 echo "Output:  ${OUTPUT_DIR}"
-echo "Resume:  configured by ${CONFIG_DIR}/restoration_expert_grpo_2gpu.yaml"
+echo "Config:  ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
+echo "Resume:  configured by ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
 echo "SwanLab: project=${PROJECT_NAME} experiment=${EXPERIMENT_NAME} mode=${SWANLAB_MODE} log_dir=${SWANLAB_LOG_DIR}"
 
 cd "${ROOT}"
 "${PYTHON_BIN}" -u -m verl.trainer.main_ppo \
   --config-path "${CONFIG_DIR}" \
-  --config-name restoration_expert_grpo_2gpu \
+  --config-name "${CONFIG_NAME}" \
   data.train_files="${TRAIN_PARQUET}" \
   data.val_files="${VAL_PARQUET}" \
   actor_rollout_ref.model.path="${MODEL_PATH}" \

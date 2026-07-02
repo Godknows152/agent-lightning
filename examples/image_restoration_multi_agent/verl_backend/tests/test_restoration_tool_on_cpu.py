@@ -62,6 +62,51 @@ def test_repeat_penalty_discourages_low_gain_repeats_on_cpu():
     assert repeated_reward["repeat_penalty"] > 0.0
     assert repeated_reward["reward"] < fresh_reward["reward"]
     assert repeated_reward["consecutive_action_count"] == pytest.approx(2.0)
+    assert repeated_reward["same_type_action_count"] == pytest.approx(2.0)
+
+
+def test_repeat_penalty_groups_restoration_tool_types_on_cpu():
+    tool = _build_tool(
+        alpha=0.9,
+        reward_scale=5.0,
+        repeat_action_penalty=0.2,
+        repeat_low_gain_penalty=0.0,
+    )
+    reward_kwargs = {
+        "prev_scores": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "curr_scores": [1.10, 1.10, 1.10, 1.10, 1.10],
+        "identity_scores": [1.0, 1.0, 1.0, 1.0, 1.0],
+        "weights": [0.2, 0.2, 0.2, 0.2, 0.2],
+    }
+
+    dehaze_reward = tool._calculate_reward(
+        **reward_kwargs,
+        action="kanet",
+        actions_history=["ridcp", "real_esrgan", "focalnet_dehaze"],
+    )
+    desnow_reward = tool._calculate_reward(
+        **reward_kwargs,
+        action="turbo_snow",
+        actions_history=["s2former"],
+    )
+    derain_reward = tool._calculate_reward(
+        **reward_kwargs,
+        action="idt",
+        actions_history=["turbo_rain", "s2former"],
+    )
+    generic_reward = tool._calculate_reward(
+        **reward_kwargs,
+        action="scunet",
+        actions_history=["real_esrgan", "nafnet_denoise"],
+    )
+
+    assert dehaze_reward["repeat_tool_type_key"] == "dehaze"
+    assert dehaze_reward["repeat_penalty"] == pytest.approx(0.4)
+    assert dehaze_reward["same_type_action_count"] == pytest.approx(3.0)
+    assert desnow_reward["repeat_tool_type_key"] == "desnow"
+    assert desnow_reward["repeat_penalty"] == pytest.approx(0.2)
+    assert derain_reward["repeat_penalty"] == pytest.approx(0.0)
+    assert generic_reward["repeat_penalty"] == pytest.approx(0.0)
 
 
 def test_final_iqa_v2_rewards_only_new_best_iqa_on_cpu():
@@ -145,10 +190,11 @@ def test_feedback_calls_out_repeated_low_gain_pattern_on_cpu():
         actions_history=["ridcp", "ridcp", "ridcp", "ridcp"],
         marginal=0.01,
         identity_delta=0.35,
-        consecutive_action_count=4,
+        same_type_action_count=4,
+        repeat_tool_type_key="dehaze",
     )
 
-    assert "Consecutive uses of 'ridcp': 4" in feedback
+    assert "Trajectory uses of dehaze tools: 4" in feedback
     assert "Recent gains are small" in feedback
 
 
@@ -162,7 +208,7 @@ def test_final_iqa_v2_feedback_focuses_on_trajectory_best_on_cpu():
         actions_history=["scunet", "ridcp", "real_esrgan"],
         marginal=0.07,
         identity_delta=0.15,
-        consecutive_action_count=1,
+        same_type_action_count=1,
         best_identity_delta=0.15,
         best_improvement=0.05,
         regression_penalty=0.0,
@@ -185,7 +231,7 @@ def test_final_iqa_v2_feedback_calls_out_regression_on_cpu():
         actions_history=["scunet", "ridcp"],
         marginal=-0.02,
         identity_delta=0.08,
-        consecutive_action_count=1,
+        same_type_action_count=1,
         best_identity_delta=0.10,
         best_improvement=0.0,
         regression_penalty=0.04,
