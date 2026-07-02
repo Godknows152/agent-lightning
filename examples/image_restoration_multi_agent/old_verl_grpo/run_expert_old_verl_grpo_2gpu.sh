@@ -6,6 +6,9 @@ usage() {
 Usage:
   run_expert_old_verl_grpo_2gpu.sh <fog|low_light|rain|snow> [--smoke] [hydra overrides...]
 
+Default fog resume run:
+  bash examples/image_restoration_multi_agent/old_verl_grpo/run_expert_old_verl_grpo_2gpu.sh fog
+
 Environment overrides:
   OLD_VERL_SMOKE=1
   OLD_VERL_MODEL_PATH=/path/to/base-model
