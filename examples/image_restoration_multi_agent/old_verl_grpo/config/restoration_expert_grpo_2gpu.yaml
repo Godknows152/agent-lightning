@@ -45,7 +45,7 @@ actor_rollout_ref:
     freeze_vision_tower: true
     optim:
       lr: 3.0e-5
-    entropy_coeff: 0.02
+    entropy_coeff: 0.008
     ppo_epochs: 1
     use_kl_loss: true
     kl_loss_coef: 0.05

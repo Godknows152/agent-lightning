@@ -41,7 +41,7 @@ tools:
       repeat_action_penalty: 0.75
       repeat_low_gain_penalty: 2.0
       repeat_low_gain_threshold: 0.12
-      stop_min_step: 4
+      stop_min_step: 3
       stop_iqa_delta_threshold: 0.6
       stop_success_reward: 1.8
       stop_partial_reward: 0.6
