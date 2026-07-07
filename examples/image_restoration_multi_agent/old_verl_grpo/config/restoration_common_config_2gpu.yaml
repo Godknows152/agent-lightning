@@ -1,4 +1,4 @@
-# Shared old-verl GRPO config: actor/SGLang train on GPU0/1, restoration/IQA tools stay on GPU2/3.
+# Shared old-verl GRPO config: actor/SGLang train on GPU0/1, restoration/IQA tools stay on GPU2.
 
 defaults:
   - ppo_trainer
@@ -9,7 +9,7 @@ data:
     - examples/image_restoration_multi_agent/old_verl_grpo/data/fog_train.parquet
   val_files:
     - examples/image_restoration_multi_agent/old_verl_grpo/data/fog_val.parquet
-  val_max_samples: 32
+  # val_max_samples: 32
   train_batch_size: 16
   max_prompt_length: 2048
   # Bound visual tokens for the runtime-reconstructed prompt. The image object
@@ -41,7 +41,8 @@ actor_rollout_ref:
     freeze_vision_tower: true
     optim:
       lr: 3.0e-5
-    entropy_coeff: 0.006
+    entropy_coeff: 0.0
+    calculate_entropy: false
     ppo_epochs: 1
     use_kl_loss: true
     kl_loss_coef: 0.05

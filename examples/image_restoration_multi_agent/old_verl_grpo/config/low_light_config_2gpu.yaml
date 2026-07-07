@@ -19,12 +19,12 @@ actor_rollout_ref:
     lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/low_light
 
 trainer:
-  experiment_name: low_light_grpo_0702
+  experiment_name: low_light_grpo_0707
   resume_mode: auto
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/low_light_0702
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/low_light_0707
   ray_kwargs:
     ray_init:
       runtime_env:
         env_vars:
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/low_light_0702/swanlab"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/low_light_0707/swanlab"
