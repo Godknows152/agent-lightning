@@ -15,9 +15,10 @@ Environment overrides:
   OLD_VERL_ADAPTER_PATH=/path/to/sft-lora-adapter
   OLD_VERL_TOOL_REGISTRY_PATH=/path/to/tools.yaml
   OLD_VERL_CONFIG_NAME=fog_config_2gpu  # defaults to <expert>_config_2gpu
-  OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,2,3
+  OLD_VERL_CUDA_VISIBLE_DEVICES=0,1
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
+  OLD_VERL_SHOW_KNOWN_WARNINGS=1  # show otherwise-suppressed third-party warning spam
   OLD_VERL_OUTPUT_SUFFIX=0702  # optional trainer output/name override; YAML wins when unset
   OLD_VERL_RUN_TAG=fog_0702   # optional trainer output override; YAML wins when unset
   OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional trainer output override; YAML wins when unset
@@ -172,15 +173,21 @@ if [[ -n "${SWANLAB_MODE_OVERRIDE}" ]]; then
   CONFIG_OVERRIDES+=("trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE_OVERRIDE}")
 fi
 
-# Expose GPU2 as cuda:2 because the restoration/IQA tool runtime is pinned there.
-# Keep GPU0/1 visible for trainer.n_gpus_per_node=2; include GPU2 so the tool device is available.
-export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+# Keep GPU0/1 visible for trainer.n_gpus_per_node=2 and the symmetric tool pool.
+export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
 if [[ -d "${LOCAL_PYDEPS}" ]]; then
   export PYTHONPATH="${LOCAL_PYDEPS}:${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
 else
   export PYTHONPATH="${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
 fi
 export PYTHONUNBUFFERED=1
+# Hide harmless import-time warnings from optional CUDA/NPU dependencies. The
+# high-volume LoRA warning is filtered locally around adapter loading because
+# its message starts with a dynamic parameter name. Keep all other warnings visible.
+if [[ "${OLD_VERL_SHOW_KNOWN_WARNINGS:-0}" != "1" ]]; then
+  KNOWN_WARNING_FILTERS="ignore:The pynvml package is deprecated:FutureWarning,ignore:NPU not support router replay for now:UserWarning"
+  export PYTHONWARNINGS="${KNOWN_WARNING_FILTERS}${PYTHONWARNINGS:+,${PYTHONWARNINGS}}"
+fi
 export XFORMERS_IGNORE_FLASH_VERSION_CHECK=1
 export SGLANG_DISABLE_CUDNN_CHECK=1
 export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES="${RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES:-1}"

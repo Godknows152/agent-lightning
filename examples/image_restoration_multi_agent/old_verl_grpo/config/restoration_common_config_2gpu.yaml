@@ -1,4 +1,4 @@
-# Shared old-verl GRPO config: actor/SGLang train on GPU0/1, restoration/IQA tools stay on GPU2.
+# Shared old-verl GRPO config: actor/SGLang and restoration/IQA tools share GPU0/1.
 
 defaults:
   - ppo_trainer
@@ -41,8 +41,8 @@ actor_rollout_ref:
     freeze_vision_tower: true
     optim:
       lr: 3.0e-5
-    entropy_coeff: 0.0
-    calculate_entropy: false
+    entropy_coeff: 0.005
+    calculate_entropy: true
     ppo_epochs: 1
     use_kl_loss: true
     kl_loss_coef: 0.05
@@ -107,7 +107,7 @@ trainer:
   test_freq: 10
   total_epochs: 3
   total_training_steps: null
-  max_actor_ckpt_to_keep: 2
+  max_actor_ckpt_to_keep: 5
   keep_best_validation_ckpt: true
   val_before_train: false
   ray_kwargs:

@@ -19,10 +19,10 @@ actor_rollout_ref:
     lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/fog
 
 trainer:
-  experiment_name: fog_grpo_0702
+  experiment_name: fog_grpo_0710
   resume_mode: auto
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0702
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0710
   ray_kwargs:
     ray_init:
       runtime_env:
