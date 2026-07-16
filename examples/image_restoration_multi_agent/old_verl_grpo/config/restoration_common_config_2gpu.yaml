@@ -27,17 +27,31 @@ algorithm:
 
 actor_rollout_ref:
   model:
-    # Start a fresh GRPO LoRA from the merged SFT model. With the GRPO LoRA
-    # disabled, this same merged checkpoint is the frozen KL reference policy.
-    path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/Merged/fog
-    lora_adapter_path: null
+    # Continue training the expert SFT LoRA on the shared raw base. A separate
+    # frozen reference engine loads the same initial adapter for KL computation.
+    path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/fog
     trust_remote_code: true
     use_remove_padding: false
     enable_gradient_checkpointing: true
     enable_activation_offload: false
     lora_rank: 16
     lora_alpha: 32
-    target_modules: all-linear
+    # Restrict GRPO LoRA to language-model projections. Using `all-linear`
+    # also selects vision-tower modules that SGLang's LoRA pool cannot load.
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+      - in_proj_qkv
+      - in_proj_z
+      - in_proj_b
+      - in_proj_a
+      - out_proj
 
   actor:
     freeze_vision_tower: true
@@ -91,6 +105,7 @@ actor_rollout_ref:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/restoration_tool_config_current_iqa_2gpu.yaml
 
   ref:
+    use_separate_lora_reference: true
     log_prob_micro_batch_size_per_gpu: 1
 
 trainer:

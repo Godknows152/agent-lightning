@@ -16,8 +16,8 @@ data:
 
 actor_rollout_ref:
   model:
-    path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/Merged/low_light
-    lora_adapter_path: null
+    path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/low_light
 
 trainer:
   experiment_name: low_light_0716

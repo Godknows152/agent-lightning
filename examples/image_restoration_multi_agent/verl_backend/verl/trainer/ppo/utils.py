@@ -78,6 +78,25 @@ def need_reference_policy(
     return config.algorithm.get("use_kl_in_reward", False) or config.actor_rollout_ref.actor.use_kl_loss
 
 
+def use_reference_policy_in_actor(config: DictConfig) -> bool:
+    """Return whether LoRA reference log-probs should disable the actor adapter.
+
+    By default, VERL reuses the actor engine for LoRA reference log-probs and
+    disables its adapter, which makes the raw base model the reference policy.
+    ``use_separate_lora_reference`` opts into a dedicated, frozen reference
+    engine so both actor and reference can start from the same pretrained LoRA.
+    """
+    model_config = config.actor_rollout_ref.model
+    lora_rank = model_config.get("lora", {}).get("rank", 0)
+    if lora_rank <= 0:
+        lora_rank = model_config.get("lora_rank", 0)
+
+    has_lora = lora_rank > 0 or model_config.get("lora_adapter_path") is not None
+    ref_config = config.actor_rollout_ref.get("ref", {})
+    use_separate_reference = ref_config.get("use_separate_lora_reference", False)
+    return has_lora and not use_separate_reference
+
+
 def need_teacher_policy(
     config: DictConfig,
 ) -> bool:

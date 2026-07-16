@@ -88,7 +88,10 @@ actor_rollout_ref:
       - model
       - optimizer
       - extra
-      load_contents: ${.save_contents}
+      load_contents:
+      - model
+      - optimizer
+      - extra
       async_save: false
       mbridge_config: {}
     use_fused_kernels: ${oc.select:actor_rollout_ref.model.use_fused_kernels,false}
@@ -183,6 +186,7 @@ actor_rollout_ref:
       dtype: bfloat16
     rollout_n: ${oc.select:actor_rollout_ref.rollout.n,1}
     strategy: torchtitan
+    use_separate_lora_reference: false
     use_torch_compile: ${oc.select:actor_rollout_ref.actor.use_torch_compile,true}
     log_prob_micro_batch_size: null
     log_prob_micro_batch_size_per_gpu: null
@@ -242,6 +246,7 @@ actor_rollout_ref:
     enforce_eager: false
     cudagraph_capture_sizes: null
     free_cache_engine: true
+    force_full_sleep_for_lora: false
     tensor_model_parallel_size: 2
     data_parallel_size: 1
     expert_parallel_size: 1
@@ -282,7 +287,8 @@ actor_rollout_ref:
       tool_config_path: null
       max_user_turns: null
       max_parallel_calls: 1
-      max_tool_response_length: 256
+      max_tool_response_length: 1024
+      max_generated_response_length: null
       tool_response_truncate_side: middle
       use_inference_chat_template: false
       tokenization_sanity_check_mode: strict

@@ -299,9 +299,10 @@ class FSDPEngine(BaseEngine):
             print(f"Loading pre-trained LoRA adapter to from: {lora_adapter_path}")
             # Copy adapter to local if needed
             local_adapter_path = copy_to_local(lora_adapter_path, use_shm=self.model_config.use_shm)
+            is_trainable = not self.engine_config.forward_only
 
             if os.environ.get("OLD_VERL_SHOW_KNOWN_WARNINGS") == "1":
-                module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=True)
+                module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=is_trainable)
             else:
                 # PEFT loads the adapter correctly, but torch reports one no-op
                 # copy for every LoRA tensor while the base model is still meta-initialized.
@@ -312,7 +313,7 @@ class FSDPEngine(BaseEngine):
                         category=UserWarning,
                         module=r"torch\.nn\.modules\.module",
                     )
-                    module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=True)
+                    module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=is_trainable)
             peft_config = module.peft_config["default"]
             # Ensure task_type is TaskType enum, not string
             if isinstance(peft_config.task_type, str):
@@ -327,6 +328,7 @@ class FSDPEngine(BaseEngine):
                 "target_parameters": convert_to_regular_types(self.model_config.target_parameters),
                 "exclude_modules": convert_to_regular_types(self.model_config.exclude_modules),
                 "bias": "none",
+                "inference_mode": self.engine_config.forward_only,
             }
             module = get_peft_model(module, LoraConfig(**lora_config))
 
