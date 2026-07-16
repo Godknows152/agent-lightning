@@ -27,8 +27,10 @@ algorithm:
 
 actor_rollout_ref:
   model:
-    path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/fog
+    # Start a fresh GRPO LoRA from the merged SFT model. With the GRPO LoRA
+    # disabled, this same merged checkpoint is the frozen KL reference policy.
+    path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/Merged/fog
+    lora_adapter_path: null
     trust_remote_code: true
     use_remove_padding: false
     enable_gradient_checkpointing: true
@@ -96,10 +98,10 @@ trainer:
     - console
     - swanlab
   project_name: 4expert_grpo
-  experiment_name: fog_grpo_0702
-  resume_mode: auto
+  experiment_name: fog_grpo_merged_sft_0716
+  resume_mode: disable
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0702
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716
   log_val_generations: 2
   n_gpus_per_node: 2
   nnodes: 1
@@ -121,7 +123,7 @@ trainer:
           SGLANG_DISABLE_CUDNN_CHECK: "1"
           RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1"
           RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_0702/swanlab"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/swanlab"
           SWANLAB_MODE: "cloud"
           VERL_LOGGING_LEVEL: "WARN"
           VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log"
