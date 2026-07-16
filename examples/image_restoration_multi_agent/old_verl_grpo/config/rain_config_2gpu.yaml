@@ -20,8 +20,8 @@ actor_rollout_ref:
     lora_adapter_path: null
 
 trainer:
-  experiment_name: rain_grpo_merged_sft_0716
-  resume_mode: disable
+  experiment_name: rain_0716
+  resume_mode: auto
   resume_from_path: null
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain_merged_sft_0716
   ray_kwargs:

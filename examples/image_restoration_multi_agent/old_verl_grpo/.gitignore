@@ -2,5 +2,6 @@
 data/*.parquet
 log/
 outputs/
+0716old_outputs/
 __pycache__/
 *.pyc
