@@ -6,6 +6,9 @@ usage() {
 Usage:
   run_expert_old_verl_grpo_2gpu.sh <fog|low_light|rain|snow> [--smoke] [hydra overrides...]
 
+All non-help invocations start in the background. The command prints the PID
+and writes stdout/stderr only to old_verl_grpo/log/<expert>_<timestamp>.log.
+
 Default fog resume run:
   bash examples/image_restoration_multi_agent/old_verl_grpo/run_expert_old_verl_grpo_2gpu.sh fog
 
@@ -52,16 +55,13 @@ case "${EXPERT}" in
     ;;
 esac
 
-case "${EXPERT}" in
-  low_light) EXPERT_SLUG="low-light" ;;
-  *) EXPERT_SLUG="${EXPERT}" ;;
-esac
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
+LOG_DIR="${OLD_VERL_DIR}/log"
 CONFIG_DIR="${OLD_VERL_DIR}/config"
 CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
@@ -73,6 +73,26 @@ PYTHON_BIN="${PYTHON_BIN:-/home/LXJ/anaconda3/envs/verl/bin/python}"
 RAY_BIN="${RAY_BIN:-/home/LXJ/anaconda3/envs/verl/bin/ray}"
 MODEL_PATH_OVERRIDE="${OLD_VERL_MODEL_PATH:-}"
 ADAPTER_PATH_OVERRIDE="${OLD_VERL_ADAPTER_PATH:-}"
+
+mkdir -p "${LOG_DIR}"
+if [[ "${OLD_VERL_RUN_IN_FOREGROUND:-0}" != "1" ]]; then
+  TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+  MAIN_LOG="${LOG_DIR}/${EXPERT}_${TIMESTAMP}.log"
+  CHILD_ARGS=("${EXPERT}")
+  if [[ "${SMOKE}" == "1" ]]; then
+    CHILD_ARGS+=(--smoke)
+  fi
+  CHILD_ARGS+=("$@")
+  nohup env \
+    OLD_VERL_RUN_IN_FOREGROUND=1 \
+    OLD_VERL_MAIN_LOG="${MAIN_LOG}" \
+    bash "${SCRIPT_PATH}" "${CHILD_ARGS[@]}" \
+    >"${MAIN_LOG}" 2>&1 </dev/null &
+  BACKGROUND_PID=$!
+  echo "Started ${EXPERT} GRPO in background (PID ${BACKGROUND_PID})."
+  echo "Log file: ${MAIN_LOG}"
+  exit 0
+fi
 
 TRAIN_PARQUET="${OLD_VERL_DIR}/data/${EXPERT}_train.parquet"
 VAL_PARQUET="${OLD_VERL_DIR}/data/${EXPERT}_val.parquet"
@@ -110,22 +130,22 @@ if [[ "${SMOKE}" == "1" ]]; then
   VAL_LIMIT_ARGS=(--limit "${OLD_VERL_SMOKE_VAL_LIMIT:-2}")
   SWANLAB_MODE_OVERRIDE="offline"
   HYDRA_OVERRIDES+=(
-    data.train_batch_size=1
-    data.val_max_samples=1
-    actor_rollout_ref.rollout.n=2
-    actor_rollout_ref.rollout.gpu_memory_utilization=0.45
-    actor_rollout_ref.rollout.max_num_seqs=2
-    actor_rollout_ref.rollout.max_model_len=4096
-    actor_rollout_ref.rollout.enforce_eager=true
-    actor_rollout_ref.actor.ppo_mini_batch_size=1
-    actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1
-    actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1
-    actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1
-    trainer.total_epochs=1
-    trainer.total_training_steps=1
-    trainer.save_freq=-1
-    trainer.test_freq=-1
-    trainer.val_before_train=false
+    "data.train_batch_size=1"
+    "data.val_max_samples=1"
+    "actor_rollout_ref.rollout.n=2"
+    "actor_rollout_ref.rollout.gpu_memory_utilization=0.45"
+    "actor_rollout_ref.rollout.max_num_seqs=2"
+    "actor_rollout_ref.rollout.max_model_len=4096"
+    "actor_rollout_ref.rollout.enforce_eager=true"
+    "actor_rollout_ref.actor.ppo_mini_batch_size=1"
+    "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1"
+    "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1"
+    "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1"
+    "trainer.total_epochs=1"
+    "trainer.total_training_steps=1"
+    "trainer.save_freq=-1"
+    "trainer.test_freq=-1"
+    "trainer.val_before_train=false"
   )
 fi
 
@@ -173,7 +193,8 @@ if [[ -n "${SWANLAB_MODE_OVERRIDE}" ]]; then
   CONFIG_OVERRIDES+=("trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE_OVERRIDE}")
 fi
 
-# Keep GPU0/1 visible for trainer.n_gpus_per_node=2 and the symmetric tool pool.
+# Expose only physical GPU0/1 to the trainer, rollout, restoration, and IQA
+# workers. The zero-GPU AgentLoop does not require an additional visible GPU.
 export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
 if [[ -d "${LOCAL_PYDEPS}" ]]; then
   export PYTHONPATH="${LOCAL_PYDEPS}:${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
@@ -181,6 +202,7 @@ else
   export PYTHONPATH="${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
 fi
 export PYTHONUNBUFFERED=1
+export HF_HUB_DISABLE_PROGRESS_BARS=1
 # Hide harmless import-time warnings from optional CUDA/NPU dependencies. The
 # high-volume LoRA warning is filtered locally around adapter loading because
 # its message starts with a dynamic parameter name. Keep all other warnings visible.

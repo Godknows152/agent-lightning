@@ -1,8 +1,9 @@
 # Old-verl RestorationTool config using current project IQA calibration.
 #
-# Symmetric 2-GPU tool pool:
-#   - GPU0 hosts one RestorationToolkit replica and one IQA replica.
-#   - GPU1 hosts one RestorationToolkit replica and one IQA replica.
+# Restoration/IQA GPU placement:
+#   - The launcher exposes only physical GPUs 0,1 as logical cuda:0,1.
+#   - Actor/SGLang and restoration/IQA share logical cuda:0/1 (physical GPU0/1).
+#   - Two restoration runtime workers distribute requests across those two GPUs.
 
 tools:
   - class_name: "verl.tools.restoration_tool.RestorationTool"
