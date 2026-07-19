@@ -25,6 +25,7 @@ from uuid import uuid4
 import torch
 import yaml
 from PIL import Image
+
 from verl.experimental.agent_loop.agent_loop import (
     AgentLoopBase,
     AgentLoopOutput,
@@ -96,6 +97,7 @@ class AgentData:
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
     EARLY_STOP_PENALTY = -10.0
+    MALFORMED_TOOL_CALL_PENALTY = -10.0
     TOOL_CALL_REWARD = 2.0
     NO_TOOL_LENGTH_THRESHOLD = 256
     NO_TOOL_LENGTH_PENALTY_ALPHA = 3.0
@@ -104,6 +106,7 @@ class ToolAgentLoop(AgentLoopBase):
     FORMAT_ROLE_LABEL_PENALTY = -1.0
     TOOL_CALL_START_TOKEN = "<tool_call>"
     TOOL_CALL_END_TOKEN = "</tool_call>"
+    TOOL_CALL_ATTEMPT_MARKERS = ("<tool_call", "</tool_call>", "<function=", "<parameter=")
     ROLE_LABEL_PATTERN = re.compile(r"(?im)(?:^|\n)\s*(?:user|assistant)\s*(?=\n|$)")
     # Per-occurrence penalty for choosing the same tool more than once in a trajectory.
     # E.g. scale=0.5 → using scunet 3 times costs -0.5*(3-1) = -1.0 total.
@@ -137,6 +140,16 @@ class ToolAgentLoop(AgentLoopBase):
         """Return the number of model tokens eligible for policy loss."""
         return sum(agent_data.response_mask)
 
+    def _unproductive_response_length_penalty(self, response_len: int) -> float | None:
+        """Return the existing scaled length penalty for a long unproductive response."""
+
+        if response_len <= self.NO_TOOL_LENGTH_THRESHOLD:
+            return None
+        denom = max(1, self.response_length - self.NO_TOOL_LENGTH_THRESHOLD)
+        length_ratio = (response_len - self.NO_TOOL_LENGTH_THRESHOLD) / denom
+        length_ratio = max(0.0, min(1.0, float(length_ratio)))
+        return -self.NO_TOOL_LENGTH_PENALTY_ALPHA * length_ratio
+
     def _apply_no_tool_call_penalty(self, agent_data: AgentData, response_len: int, reason: str) -> None:
         """Apply the heavy no-tool penalty, plus length penalty for long no-tool generations."""
 
@@ -146,13 +159,66 @@ class ToolAgentLoop(AgentLoopBase):
         agent_data.extra_fields["no_tool_call_penalty_reason"] = reason
         agent_data.extra_fields["no_tool_call_response_length"] = response_len
 
-        if response_len > self.NO_TOOL_LENGTH_THRESHOLD:
-            denom = max(1, self.response_length - self.NO_TOOL_LENGTH_THRESHOLD)
-            length_ratio = (response_len - self.NO_TOOL_LENGTH_THRESHOLD) / denom
-            length_ratio = max(0.0, min(1.0, float(length_ratio)))
-            no_tool_length_penalty = -self.NO_TOOL_LENGTH_PENALTY_ALPHA * length_ratio
+        no_tool_length_penalty = self._unproductive_response_length_penalty(response_len)
+        if no_tool_length_penalty is not None:
             agent_data.tool_rewards.append(no_tool_length_penalty)
             agent_data.extra_fields["no_tool_length_penalty"] = no_tool_length_penalty
+
+    @staticmethod
+    def _record_invalid_tool_call(
+        agent_data: AgentData,
+        *,
+        reason: str,
+        penalty: float | None = None,
+        action: str | None = None,
+        response_len: int | None = None,
+    ) -> None:
+        """Record an invalid parsed/tool-reported call without misclassifying it as no-tool."""
+
+        agent_data.extra_fields["invalid_tool_call_penalty_applied"] = True
+        agent_data.extra_fields["invalid_tool_call_penalty_reason"] = reason
+        if penalty is not None:
+            agent_data.extra_fields["invalid_tool_call_penalty"] = float(penalty)
+        if action is not None:
+            agent_data.extra_fields["invalid_tool_call_action"] = action
+        if response_len is not None:
+            agent_data.extra_fields["invalid_tool_call_response_length"] = response_len
+
+    def _apply_malformed_tool_call_penalty(self, agent_data: AgentData, response_len: int) -> None:
+        """Apply the heavy penalty to an attempted tool call whose XML could not be parsed."""
+
+        agent_data.tool_rewards.append(self.MALFORMED_TOOL_CALL_PENALTY)
+        penalty_total = self.MALFORMED_TOOL_CALL_PENALTY
+        invalid_tool_length_penalty = self._unproductive_response_length_penalty(response_len)
+        if invalid_tool_length_penalty is not None:
+            agent_data.tool_rewards.append(invalid_tool_length_penalty)
+            agent_data.extra_fields["invalid_tool_length_penalty"] = invalid_tool_length_penalty
+            penalty_total += invalid_tool_length_penalty
+        self._record_invalid_tool_call(
+            agent_data,
+            reason="malformed_tool_call_xml",
+            penalty=penalty_total,
+            response_len=response_len,
+        )
+
+    def _classify_restoration_turn_without_parsed_tool(
+        self,
+        agent_data: AgentData,
+        *,
+        generated_budget_exhausted: bool,
+    ) -> None:
+        """Classify an empty parser result as malformed XML or a genuine no-tool response."""
+
+        response_len = len(agent_data.response_ids)
+        response_text = self.tokenizer.decode(agent_data.response_ids)
+        if any(marker in response_text for marker in self.TOOL_CALL_ATTEMPT_MARKERS):
+            self._apply_malformed_tool_call_penalty(agent_data, response_len=response_len)
+            return
+
+        reason = (
+            "generated_budget_exhausted_without_tool_call" if generated_budget_exhausted else "turn_without_tool_call"
+        )
+        self._apply_no_tool_call_penalty(agent_data, response_len=response_len, reason=reason)
 
     def _first_complete_tool_call_token_count(self, token_ids: list[int]) -> int | None:
         """Return the shortest generated prefix containing the first complete tool call."""
@@ -164,6 +230,31 @@ class ToolAgentLoop(AgentLoopBase):
                 return index
         return None
 
+    def _strip_trailing_termination_tokens(self, token_ids: list[int]) -> list[int]:
+        """Remove trailing EOS/Pad tokens before checking tool-call format.
+
+        SGLang includes the matched stop token in ``output_ids``. For Qwen this
+        produces a raw suffix such as ``</tool_call><|im_end|>`` even though the
+        model emitted no user-visible text after the tool call. Only terminal
+        EOS/Pad tokens are ignored here so genuine text or role-label suffixes
+        still receive the existing format penalties.
+        """
+
+        termination_token_ids: set[int] = set()
+        for attribute_name in ("eos_token_id", "pad_token_id"):
+            token_id = getattr(self.tokenizer, attribute_name, None)
+            if token_id is None:
+                continue
+            if isinstance(token_id, int):
+                termination_token_ids.add(token_id)
+            else:
+                termination_token_ids.update(int(item) for item in token_id)
+
+        format_token_ids = list(token_ids)
+        while format_token_ids and format_token_ids[-1] in termination_token_ids:
+            format_token_ids.pop()
+        return format_token_ids
+
     def _apply_tool_call_format_guardrails(
         self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
     ) -> tuple[list[int], list[float] | None]:
@@ -174,7 +265,8 @@ class ToolAgentLoop(AgentLoopBase):
         if getattr(agent_data, "data_source", "") != "restoration":
             return token_ids, log_probs
 
-        text = self.tokenizer.decode(token_ids)
+        format_token_ids = self._strip_trailing_termination_tokens(token_ids)
+        text = self.tokenizer.decode(format_token_ids)
         first_tool_call_start = text.find(self.TOOL_CALL_START_TOKEN)
         first_tool_call_end = (
             text.find(self.TOOL_CALL_END_TOKEN, first_tool_call_start) if first_tool_call_start >= 0 else -1
@@ -513,12 +605,16 @@ class ToolAgentLoop(AgentLoopBase):
                 response_len = len(agent_data.response_ids or [])
                 no_tool_call = agent_data.total_tool_calls == 0
 
-                if no_tool_call and not agent_data.extra_fields.get("no_tool_call_penalty_applied", False):
+                failure_already_classified = agent_data.extra_fields.get(
+                    "no_tool_call_penalty_applied", False
+                ) or agent_data.extra_fields.get("invalid_tool_call_penalty_applied", False)
+                if no_tool_call and not failure_already_classified:
                     self._apply_no_tool_call_penalty(
                         agent_data,
                         response_len=response_len,
                         reason="trajectory_ended_without_tool_call",
                     )
+                no_tool_penalty_applied = bool(agent_data.extra_fields.get("no_tool_call_penalty_applied", False))
 
                 # Expose decomposed reward parts for easier diagnosis in logs.
                 # Trajectory-level duplicate penalty: penalize choosing the same
@@ -543,7 +639,8 @@ class ToolAgentLoop(AgentLoopBase):
 
                 agent_data.extra_fields["reward_components"] = {
                     "tool_call_reward_per_step": self.TOOL_CALL_REWARD,
-                    "early_stop_penalty": self.EARLY_STOP_PENALTY if no_tool_call else 0.0,
+                    "early_stop_penalty": self.EARLY_STOP_PENALTY if no_tool_penalty_applied else 0.0,
+                    "invalid_tool_call_penalty": float(agent_data.extra_fields.get("invalid_tool_call_penalty", 0.0)),
                     "no_tool_length_threshold": self.NO_TOOL_LENGTH_THRESHOLD,
                     "no_tool_length_penalty_alpha": self.NO_TOOL_LENGTH_PENALTY_ALPHA,
                     "response_length": response_len,
@@ -682,14 +779,13 @@ class ToolAgentLoop(AgentLoopBase):
         else:
             # No tool call — terminate.
             # Enforce tool usage per assistant turn for restoration.
-            # Any step that does not call a tool is treated as early stop and penalized.
+            # Malformed XML is an invalid attempted call; only responses without
+            # any tool-call marker are classified as genuine no-tool turns.
             if getattr(agent_data, "data_source", "") == "restoration":
-                reason = (
-                    "generated_budget_exhausted_without_tool_call"
-                    if generated_budget_exhausted
-                    else "turn_without_tool_call"
+                self._classify_restoration_turn_without_parsed_tool(
+                    agent_data,
+                    generated_budget_exhausted=generated_budget_exhausted,
                 )
-                self._apply_no_tool_call_penalty(agent_data, response_len=len(agent_data.response_ids), reason=reason)
             return AgentState.TERMINATED
 
     async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
@@ -884,10 +980,17 @@ class ToolAgentLoop(AgentLoopBase):
             tool_execution_response, tool_reward, res = await tool.execute(
                 instance_id, tool_args, agent_data=agent_data
             )
+            if isinstance(res, dict) and res.get("error") == "invalid_action":
+                action = str(tool_args.get("action", ""))
+                self._record_invalid_tool_call(
+                    agent_data,
+                    reason="invalid_action",
+                    penalty=tool_reward,
+                    action=action,
+                )
         except json.JSONDecodeError as e:
             logger.warning("Error when executing tool: invalid tool arguments for '%s': %s", tool_call.name, e)
-            agent_data.extra_fields["invalid_tool_call_penalty_applied"] = True
-            agent_data.extra_fields["invalid_tool_call_penalty_reason"] = "invalid_json_arguments"
+            self._record_invalid_tool_call(agent_data, reason="invalid_json_arguments")
             return (
                 ToolResponse(
                     text=f"Error when executing tool: invalid tool arguments for '{tool_call.name}'",

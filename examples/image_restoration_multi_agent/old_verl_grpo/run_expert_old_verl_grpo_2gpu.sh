@@ -4,18 +4,20 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  run_expert_old_verl_grpo_2gpu.sh <fog|low_light|rain|snow> [--smoke] [hydra overrides...]
+  run_expert_old_verl_grpo_2gpu.sh <fog|low_light|rain|snow> [--smoke|--preflight] [hydra overrides...]
 
-All non-help invocations start in the background. The command prints the PID
-and writes stdout/stderr only to old_verl_grpo/log/<expert>_<timestamp>.log.
+Training and smoke runs start in the background. Preflight runs in the current
+shell without creating datasets, starting Ray, or allocating a model on GPU.
 
-Default fog resume run:
+Default fog run from its completed SFT LoRA:
   bash examples/image_restoration_multi_agent/old_verl_grpo/run_expert_old_verl_grpo_2gpu.sh fog
 
 Environment overrides:
   OLD_VERL_SMOKE=1
   OLD_VERL_MODEL_PATH=/path/to/base-model
   OLD_VERL_ADAPTER_PATH=/path/to/sft-lora-adapter
+  OLD_VERL_SFT_ADAPTER_ROOT=/path/to/four-expert-adapter-root
+  OLD_VERL_PREFLIGHT_ONLY=1
   OLD_VERL_TOOL_REGISTRY_PATH=/path/to/tools.yaml
   OLD_VERL_CONFIG_NAME=fog_config_2gpu  # defaults to <expert>_config_2gpu
   OLD_VERL_CUDA_VISIBLE_DEVICES=0,1
@@ -41,8 +43,12 @@ if [[ $# -gt 0 ]]; then
 fi
 
 SMOKE="${OLD_VERL_SMOKE:-0}"
+PREFLIGHT_ONLY="${OLD_VERL_PREFLIGHT_ONLY:-0}"
 if [[ "${1:-}" == "--smoke" ]]; then
   SMOKE=1
+  shift
+elif [[ "${1:-}" == "--preflight" ]]; then
+  PREFLIGHT_ONLY=1
   shift
 fi
 
@@ -68,14 +74,17 @@ CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
 LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
 TOOL_REGISTRY_PATH="${OLD_VERL_TOOL_REGISTRY_PATH:-${EXAMPLE_DIR}/config/tools.yaml}"
 INTERMEDIATE_DIR="${OLD_VERL_INTERMEDIATE_DIR:-/home/LXJ/tmp/agent_lightning_old_verl_restoration}"
+DEFAULT_MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
+DEFAULT_SFT_ADAPTER_ROOT="${ROOT}/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/LXJ/anaconda3/envs/verl/bin/python}"
 RAY_BIN="${RAY_BIN:-/home/LXJ/anaconda3/envs/verl/bin/ray}"
-MODEL_PATH_OVERRIDE="${OLD_VERL_MODEL_PATH:-}"
-ADAPTER_PATH_OVERRIDE="${OLD_VERL_ADAPTER_PATH:-}"
+MODEL_PATH_OVERRIDE="${OLD_VERL_MODEL_PATH:-${DEFAULT_MODEL_PATH}}"
+SFT_ADAPTER_ROOT="${OLD_VERL_SFT_ADAPTER_ROOT:-${DEFAULT_SFT_ADAPTER_ROOT}}"
+ADAPTER_PATH_OVERRIDE="${OLD_VERL_ADAPTER_PATH:-${SFT_ADAPTER_ROOT}/${EXPERT}}"
 
 mkdir -p "${LOG_DIR}"
-if [[ "${OLD_VERL_RUN_IN_FOREGROUND:-0}" != "1" ]]; then
+if [[ "${OLD_VERL_RUN_IN_FOREGROUND:-0}" != "1" && "${PREFLIGHT_ONLY}" != "1" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
   MAIN_LOG="${LOG_DIR}/${EXPERT}_${TIMESTAMP}.log"
   CHILD_ARGS=("${EXPERT}")
@@ -130,17 +139,17 @@ if [[ "${SMOKE}" == "1" ]]; then
   VAL_LIMIT_ARGS=(--limit "${OLD_VERL_SMOKE_VAL_LIMIT:-2}")
   SWANLAB_MODE_OVERRIDE="offline"
   HYDRA_OVERRIDES+=(
-    "data.train_batch_size=1"
+    "data.train_batch_size=2"
     "data.val_max_samples=1"
     "actor_rollout_ref.rollout.n=2"
     "actor_rollout_ref.rollout.gpu_memory_utilization=0.45"
     "actor_rollout_ref.rollout.max_num_seqs=2"
     "actor_rollout_ref.rollout.max_model_len=4096"
     "actor_rollout_ref.rollout.enforce_eager=true"
-    "actor_rollout_ref.actor.ppo_mini_batch_size=1"
+    "actor_rollout_ref.actor.ppo_mini_batch_size=2"
     "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1"
-    "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=1"
-    "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=1"
+    "actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=2"
+    "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2"
     "trainer.total_epochs=1"
     "trainer.total_training_steps=1"
     "trainer.save_freq=-1"
@@ -157,21 +166,27 @@ if [[ ! -x "${RAY_BIN}" ]]; then
   echo "Ray executable not found or not executable: ${RAY_BIN}" >&2
   exit 1
 fi
-if [[ -n "${MODEL_PATH_OVERRIDE}" && ! -d "${MODEL_PATH_OVERRIDE}" ]]; then
+if [[ ! -d "${MODEL_PATH_OVERRIDE}" ]]; then
   echo "Model path not found: ${MODEL_PATH_OVERRIDE}" >&2
   exit 1
 fi
-if [[ -n "${ADAPTER_PATH_OVERRIDE}" && ! -d "${ADAPTER_PATH_OVERRIDE}" ]]; then
+if [[ ! -d "${ADAPTER_PATH_OVERRIDE}" ]]; then
   echo "SFT adapter path not found: ${ADAPTER_PATH_OVERRIDE}" >&2
   exit 1
 fi
+if [[ ! -s "${ADAPTER_PATH_OVERRIDE}/adapter_config.json" ]]; then
+  echo "SFT adapter config is missing or empty: ${ADAPTER_PATH_OVERRIDE}/adapter_config.json" >&2
+  exit 1
+fi
+if [[ ! -s "${ADAPTER_PATH_OVERRIDE}/adapter_model.safetensors" ]]; then
+  echo "SFT adapter weights are missing or empty: ${ADAPTER_PATH_OVERRIDE}/adapter_model.safetensors" >&2
+  exit 1
+fi
 
-if [[ -n "${MODEL_PATH_OVERRIDE}" ]]; then
-  CONFIG_OVERRIDES+=("actor_rollout_ref.model.path=${MODEL_PATH_OVERRIDE}")
-fi
-if [[ -n "${ADAPTER_PATH_OVERRIDE}" ]]; then
-  CONFIG_OVERRIDES+=("actor_rollout_ref.model.lora_adapter_path=${ADAPTER_PATH_OVERRIDE}")
-fi
+CONFIG_OVERRIDES+=(
+  "actor_rollout_ref.model.path=${MODEL_PATH_OVERRIDE}"
+  "actor_rollout_ref.model.lora_adapter_path=${ADAPTER_PATH_OVERRIDE}"
+)
 if [[ -n "${PROJECT_NAME_OVERRIDE}" ]]; then
   CONFIG_OVERRIDES+=("trainer.project_name=${PROJECT_NAME_OVERRIDE}")
 fi
@@ -225,6 +240,132 @@ export VERL_LOG_DIR="${OLD_VERL_DIR}/log"
 export LD_LIBRARY_PATH="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/torch/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH:-}"
 export LD_PRELOAD="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12${LD_PRELOAD:+:${LD_PRELOAD}}"
 
+"${PYTHON_BIN}" - "${MODEL_PATH_OVERRIDE}" "${ADAPTER_PATH_OVERRIDE}" "${EXPERT}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+model_path = Path(sys.argv[1]).expanduser().resolve()
+adapter_path = Path(sys.argv[2]).expanduser().resolve()
+expert = sys.argv[3]
+config_path = adapter_path / "adapter_config.json"
+
+with config_path.open(encoding="utf-8") as file:
+    config = json.load(file)
+
+expected_targets = {
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+    "in_proj_qkv",
+    "in_proj_z",
+    "in_proj_b",
+    "in_proj_a",
+    "out_proj",
+}
+actual_targets = set(config.get("target_modules", []))
+adapter_base = Path(config.get("base_model_name_or_path", "")).expanduser().resolve()
+errors = []
+if config.get("peft_type") != "LORA":
+    errors.append(f"peft_type={config.get('peft_type')!r}, expected 'LORA'")
+if config.get("task_type") != "CAUSAL_LM":
+    errors.append(f"task_type={config.get('task_type')!r}, expected 'CAUSAL_LM'")
+if config.get("r") != 16:
+    errors.append(f"r={config.get('r')!r}, expected 16")
+if config.get("lora_alpha") != 32:
+    errors.append(f"lora_alpha={config.get('lora_alpha')!r}, expected 32")
+if actual_targets != expected_targets:
+    errors.append(
+        "target_modules differ: "
+        f"missing={sorted(expected_targets - actual_targets)}, "
+        f"unexpected={sorted(actual_targets - expected_targets)}"
+    )
+if adapter_base != model_path:
+    errors.append(f"base model mismatch: adapter={adapter_base}, configured={model_path}")
+if adapter_path.name != expert:
+    errors.append(f"adapter directory {adapter_path.name!r} does not match expert {expert!r}")
+
+if errors:
+    raise SystemExit("Invalid SFT adapter:\n- " + "\n- ".join(errors))
+
+print(
+    f"Validated {expert} SFT LoRA: {adapter_path} "
+    f"(r={config['r']}, alpha={config['lora_alpha']}, targets={len(actual_targets)})"
+)
+PY
+
+if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
+  "${PYTHON_BIN}" - \
+    "${CONFIG_DIR}" \
+    "${CONFIG_NAME}" \
+    "${MODEL_PATH_OVERRIDE}" \
+    "${ADAPTER_PATH_OVERRIDE}" \
+    "${CONFIG_OVERRIDES[@]}" \
+    "${HYDRA_OVERRIDES[@]}" \
+    "$@" <<'PY'
+import sys
+from pathlib import Path
+
+from hydra import compose, initialize_config_dir
+
+config_dir = str(Path(sys.argv[1]).resolve())
+config_name = sys.argv[2]
+expected_model = str(Path(sys.argv[3]).resolve())
+expected_adapter = str(Path(sys.argv[4]).resolve())
+overrides = sys.argv[5:]
+
+with initialize_config_dir(version_base=None, config_dir=config_dir):
+    config = compose(config_name=config_name, overrides=overrides)
+
+actual_model = str(Path(config.actor_rollout_ref.model.path).resolve())
+actual_adapter = str(Path(config.actor_rollout_ref.model.lora_adapter_path).resolve())
+errors = []
+if actual_model != expected_model:
+    errors.append(f"composed base model mismatch: {actual_model} != {expected_model}")
+if actual_adapter != expected_adapter:
+    errors.append(f"composed adapter mismatch: {actual_adapter} != {expected_adapter}")
+if config.actor_rollout_ref.model.lora_rank != 16:
+    errors.append(f"composed lora_rank={config.actor_rollout_ref.model.lora_rank!r}, expected 16")
+if config.actor_rollout_ref.model.lora_alpha != 32:
+    errors.append(f"composed lora_alpha={config.actor_rollout_ref.model.lora_alpha!r}, expected 32")
+if config.actor_rollout_ref.ref.use_separate_lora_reference is not True:
+    errors.append("frozen KL reference is not configured to retain the initial SFT LoRA")
+if config.actor_rollout_ref.ref.fsdp_config.model_dtype != "bfloat16":
+    errors.append(
+        f"frozen reference model_dtype={config.actor_rollout_ref.ref.fsdp_config.model_dtype!r}, "
+        "expected 'bfloat16'"
+    )
+if config.actor_rollout_ref.ref.fsdp_config.param_offload is not True:
+    errors.append("frozen KL reference parameter offload is not enabled")
+micro_batch_sizes = {
+    "actor.ppo_micro_batch_size_per_gpu": (
+        config.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu,
+        1,
+    ),
+    "rollout.log_prob_micro_batch_size_per_gpu": (
+        config.actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu,
+        2,
+    ),
+    "ref.log_prob_micro_batch_size_per_gpu": (
+        config.actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu,
+        2,
+    ),
+}
+for name, (value, expected) in micro_batch_sizes.items():
+    if value != expected:
+        errors.append(f"{name}={value!r}, expected {expected}")
+
+if errors:
+    raise SystemExit("Invalid composed RL config:\n- " + "\n- ".join(errors))
+PY
+  echo "Preflight passed for ${EXPERT}: actor and frozen KL reference use ${ADAPTER_PATH_OVERRIDE}"
+  exit 0
+fi
+
 mkdir -p "${OLD_VERL_DIR}/data" "${OLD_VERL_DIR}/log"
 if [[ -n "${OUTPUT_DIR_OVERRIDE}" ]]; then
   mkdir -p "${OUTPUT_DIR_OVERRIDE}"
@@ -251,8 +392,8 @@ if [[ "${OLD_VERL_STOP_RAY:-1}" == "1" ]]; then
 fi
 
 echo "Running old-verl ${RUN_KIND} GRPO for ${EXPERT} on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-echo "Model:   ${MODEL_PATH_OVERRIDE:-configured by YAML}"
-echo "Adapter: ${ADAPTER_PATH_OVERRIDE:-configured by YAML}"
+echo "Model:   ${MODEL_PATH_OVERRIDE}"
+echo "Adapter: ${ADAPTER_PATH_OVERRIDE}"
 echo "Data:    ${TRAIN_PARQUET} / ${VAL_PARQUET}"
 echo "Output:  ${OUTPUT_DIR_OVERRIDE:-configured by YAML}"
 echo "Config:  ${CONFIG_DIR}/${CONFIG_NAME}.yaml"

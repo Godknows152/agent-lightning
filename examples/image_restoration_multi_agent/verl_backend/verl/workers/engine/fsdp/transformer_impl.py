@@ -80,6 +80,23 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 device_name = get_device_name()
 
 
+def _cast_frozen_lora_model_to_dtype(
+    module: torch.nn.Module,
+    *,
+    forward_only: bool,
+    model_dtype: str | torch.dtype | None,
+) -> None:
+    """Align a frozen LoRA model with its configured dtype before FSDP wrapping."""
+    if not forward_only:
+        return
+
+    from verl.utils.torch_dtypes import PrecisionType
+
+    target_dtype = PrecisionType.to_dtype(model_dtype or torch.bfloat16)
+    module.to(dtype=target_dtype)
+    logger.info("Cast frozen LoRA model parameters to %s before FSDP wrapping.", target_dtype)
+
+
 class FSDPEngine(BaseEngine):
     """
     Concrete Engine implementation using PyTorch FullyShardedDataParallel (FSDP).
@@ -300,9 +317,15 @@ class FSDPEngine(BaseEngine):
             # Copy adapter to local if needed
             local_adapter_path = copy_to_local(lora_adapter_path, use_shm=self.model_config.use_shm)
             is_trainable = not self.engine_config.forward_only
+            peft_load_kwargs = {
+                "is_trainable": is_trainable,
+                # Keep trainable adapters in FP32 for optimizer stability. Frozen
+                # references are explicitly aligned with model_dtype below.
+                "autocast_adapter_dtype": is_trainable,
+            }
 
             if os.environ.get("OLD_VERL_SHOW_KNOWN_WARNINGS") == "1":
-                module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=is_trainable)
+                module = PeftModel.from_pretrained(module, local_adapter_path, **peft_load_kwargs)
             else:
                 # PEFT loads the adapter correctly, but torch reports one no-op
                 # copy for every LoRA tensor while the base model is still meta-initialized.
@@ -313,7 +336,7 @@ class FSDPEngine(BaseEngine):
                         category=UserWarning,
                         module=r"torch\.nn\.modules\.module",
                     )
-                    module = PeftModel.from_pretrained(module, local_adapter_path, is_trainable=is_trainable)
+                    module = PeftModel.from_pretrained(module, local_adapter_path, **peft_load_kwargs)
             peft_config = module.peft_config["default"]
             # Ensure task_type is TaskType enum, not string
             if isinstance(peft_config.task_type, str):
@@ -332,6 +355,11 @@ class FSDPEngine(BaseEngine):
             }
             module = get_peft_model(module, LoraConfig(**lora_config))
 
+        _cast_frozen_lora_model_to_dtype(
+            module,
+            forward_only=self.engine_config.forward_only,
+            model_dtype=self.engine_config.model_dtype,
+        )
         return module
 
     def _build_fsdp_module(self, module):

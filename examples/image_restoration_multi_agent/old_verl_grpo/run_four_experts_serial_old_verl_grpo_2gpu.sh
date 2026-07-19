@@ -10,6 +10,12 @@ export OLD_VERL_CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
 export RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES="${RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES:-1}"
 export RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO="${RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO:-0}"
 
+if [[ -n "${OLD_VERL_ADAPTER_PATH:-}" ]]; then
+  echo "OLD_VERL_ADAPTER_PATH cannot be used for a four-expert run because each expert requires its own LoRA." >&2
+  echo "Use OLD_VERL_SFT_ADAPTER_ROOT to override the root containing fog/snow/rain/low_light." >&2
+  exit 2
+fi
+
 mkdir -p "${LOG_DIR}"
 if [[ "${OLD_VERL_BACKGROUND_CHILD:-0}" != "1" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
