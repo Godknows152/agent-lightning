@@ -101,13 +101,13 @@ class ToolAgentLoop(AgentLoopBase):
     TOOL_CALL_REWARD = 2.0
     NO_TOOL_LENGTH_THRESHOLD = 256
     NO_TOOL_LENGTH_PENALTY_ALPHA = 3.0
-    FORMAT_AFTER_TOOL_CALL_PENALTY = -1.0
-    FORMAT_MULTIPLE_TOOL_CALLS_PENALTY = -1.0
-    FORMAT_ROLE_LABEL_PENALTY = -1.0
+    FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = -1.0
     TOOL_CALL_START_TOKEN = "<tool_call>"
     TOOL_CALL_END_TOKEN = "</tool_call>"
     TOOL_CALL_ATTEMPT_MARKERS = ("<tool_call", "</tool_call>", "<function=", "<parameter=")
-    ROLE_LABEL_PATTERN = re.compile(r"(?im)(?:^|\n)\s*(?:user|assistant)\s*(?=\n|$)")
+    FORGED_ROLE_AFTER_TOOL_CALL_PATTERN = re.compile(
+        r"(?im)(?:^|\n|<\|im_end\|>)\s*(?:<\|im_start\|>\s*)?" r"(?:user|assistant)\s*(?::|(?=\n|$)|(?=<\|channel\|>))"
+    )
     # Per-occurrence penalty for choosing the same tool more than once in a trajectory.
     # E.g. scale=0.5 → using scunet 3 times costs -0.5*(3-1) = -1.0 total.
     TRAJECTORY_REPEAT_PENALTY_SCALE = 0.5
@@ -140,6 +140,35 @@ class ToolAgentLoop(AgentLoopBase):
         """Return the number of model tokens eligible for policy loss."""
         return sum(agent_data.response_mask)
 
+    @staticmethod
+    def _record_penalty(
+        agent_data: AgentData,
+        *,
+        reason: str,
+        value: float,
+        occurrences: int = 1,
+        model_response: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Record one real negative reward contribution with a stable cause."""
+
+        value = float(value)
+        if value >= 0.0:
+            return
+
+        record: dict[str, Any] = {
+            "reason": reason,
+            "value": value,
+            "occurrences": max(1, int(occurrences)),
+        }
+        if agent_data.assistant_turns > 0:
+            record["assistant_turn"] = int(agent_data.assistant_turns)
+        if model_response is not None:
+            record["model_response"] = model_response
+        if details:
+            record["details"] = details
+        agent_data.extra_fields.setdefault("penalty_records", []).append(record)
+
     def _unproductive_response_length_penalty(self, response_len: int) -> float | None:
         """Return the existing scaled length penalty for a long unproductive response."""
 
@@ -158,11 +187,26 @@ class ToolAgentLoop(AgentLoopBase):
         agent_data.extra_fields["no_tool_call_penalty_applied"] = True
         agent_data.extra_fields["no_tool_call_penalty_reason"] = reason
         agent_data.extra_fields["no_tool_call_response_length"] = response_len
+        response_text = self.tokenizer.decode(agent_data.response_ids)
+        self._record_penalty(
+            agent_data,
+            reason="no_tool_call",
+            value=self.EARLY_STOP_PENALTY,
+            model_response=response_text,
+            details={"trigger": reason, "response_length": response_len},
+        )
 
         no_tool_length_penalty = self._unproductive_response_length_penalty(response_len)
         if no_tool_length_penalty is not None:
             agent_data.tool_rewards.append(no_tool_length_penalty)
             agent_data.extra_fields["no_tool_length_penalty"] = no_tool_length_penalty
+            self._record_penalty(
+                agent_data,
+                reason="unproductive_response_too_long",
+                value=no_tool_length_penalty,
+                model_response=response_text,
+                details={"context": "no_tool_call", "response_length": response_len},
+            )
 
     @staticmethod
     def _record_invalid_tool_call(
@@ -189,11 +233,26 @@ class ToolAgentLoop(AgentLoopBase):
 
         agent_data.tool_rewards.append(self.MALFORMED_TOOL_CALL_PENALTY)
         penalty_total = self.MALFORMED_TOOL_CALL_PENALTY
+        response_text = self.tokenizer.decode(agent_data.response_ids)
+        self._record_penalty(
+            agent_data,
+            reason="malformed_tool_call_xml",
+            value=self.MALFORMED_TOOL_CALL_PENALTY,
+            model_response=response_text,
+            details={"response_length": response_len},
+        )
         invalid_tool_length_penalty = self._unproductive_response_length_penalty(response_len)
         if invalid_tool_length_penalty is not None:
             agent_data.tool_rewards.append(invalid_tool_length_penalty)
             agent_data.extra_fields["invalid_tool_length_penalty"] = invalid_tool_length_penalty
             penalty_total += invalid_tool_length_penalty
+            self._record_penalty(
+                agent_data,
+                reason="unproductive_response_too_long",
+                value=invalid_tool_length_penalty,
+                model_response=response_text,
+                details={"context": "malformed_tool_call_xml", "response_length": response_len},
+            )
         self._record_invalid_tool_call(
             agent_data,
             reason="malformed_tool_call_xml",
@@ -235,9 +294,9 @@ class ToolAgentLoop(AgentLoopBase):
 
         SGLang includes the matched stop token in ``output_ids``. For Qwen this
         produces a raw suffix such as ``</tool_call><|im_end|>`` even though the
-        model emitted no user-visible text after the tool call. Only terminal
-        EOS/Pad tokens are ignored here so genuine text or role-label suffixes
-        still receive the existing format penalties.
+        model emitted no user-visible text after the tool call. Terminal
+        EOS/Pad tokens are ignored before checking specifically for forged
+        user/assistant role output.
         """
 
         termination_token_ids: set[int] = set()
@@ -258,7 +317,7 @@ class ToolAgentLoop(AgentLoopBase):
     def _apply_tool_call_format_guardrails(
         self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
     ) -> tuple[list[int], list[float] | None]:
-        """Trim generated text after the first tool call and penalize restoration format drift."""
+        """Trim after the first tool call and penalize only forged user/assistant role output."""
 
         if not token_ids:
             return token_ids, log_probs
@@ -273,24 +332,20 @@ class ToolAgentLoop(AgentLoopBase):
         )
         has_complete_tool_call = first_tool_call_start >= 0 and first_tool_call_end >= 0
 
-        format_penalties: dict[str, float] = {}
+        forged_role_match: re.Match[str] | None = None
         if has_complete_tool_call:
             after_tool_call = text[first_tool_call_end + len(self.TOOL_CALL_END_TOKEN) :]
-            if after_tool_call.strip():
-                format_penalties["after_tool_call_text"] = self.FORMAT_AFTER_TOOL_CALL_PENALTY
+            forged_role_match = self.FORGED_ROLE_AFTER_TOOL_CALL_PATTERN.search(after_tool_call)
 
-        if text.count(self.TOOL_CALL_START_TOKEN) > 1 or text.count(self.TOOL_CALL_END_TOKEN) > 1:
-            format_penalties["multiple_tool_calls"] = self.FORMAT_MULTIPLE_TOOL_CALLS_PENALTY
-
-        if self.ROLE_LABEL_PATTERN.search(text):
-            format_penalties["role_label_text"] = self.FORMAT_ROLE_LABEL_PENALTY
-
-        if format_penalties:
-            total_penalty = float(sum(format_penalties.values()))
-            agent_data.tool_rewards.append(total_penalty)
-            agent_data.extra_fields.setdefault("format_penalties", []).append(format_penalties)
-            agent_data.extra_fields["format_penalty_total"] = float(
-                agent_data.extra_fields.get("format_penalty_total", 0.0) + total_penalty
+        if forged_role_match is not None:
+            penalty = self.FORGED_ROLE_AFTER_TOOL_CALL_PENALTY
+            agent_data.tool_rewards.append(penalty)
+            self._record_penalty(
+                agent_data,
+                reason="forged_user_or_assistant_role_after_tool_call",
+                value=penalty,
+                model_response=text,
+                details={"matched_role_marker": forged_role_match.group(0).strip()},
             )
 
         keep_token_count = self._first_complete_tool_call_token_count(token_ids) if has_complete_tool_call else None
@@ -636,6 +691,13 @@ class ToolAgentLoop(AgentLoopBase):
                     agent_data.extra_fields["trajectory_repeat_counts"] = {
                         a: c for a, c in action_counts.items() if c > 1
                     }
+                    self._record_penalty(
+                        agent_data,
+                        reason="repeated_restoration_action",
+                        value=trajectory_repeat_penalty,
+                        occurrences=total_repeats,
+                        details={"repeated_action_counts": agent_data.extra_fields["trajectory_repeat_counts"]},
+                    )
 
                 agent_data.extra_fields["reward_components"] = {
                     "tool_call_reward_per_step": self.TOOL_CALL_REWARD,
@@ -988,6 +1050,13 @@ class ToolAgentLoop(AgentLoopBase):
                     penalty=tool_reward,
                     action=action,
                 )
+                self._record_penalty(
+                    agent_data,
+                    reason="invalid_restoration_action",
+                    value=tool_reward,
+                    model_response=self.tokenizer.decode(agent_data.response_ids),
+                    details={"action": action},
+                )
         except json.JSONDecodeError as e:
             logger.warning("Error when executing tool: invalid tool arguments for '%s': %s", tool_call.name, e)
             self._record_invalid_tool_call(agent_data, reason="invalid_json_arguments")
@@ -1002,6 +1071,13 @@ class ToolAgentLoop(AgentLoopBase):
             logger.warning(f"Error when executing tool: unknown tool '{tool_call.name}'")
             agent_data.extra_fields["unknown_tool_call_penalty_applied"] = True
             agent_data.extra_fields["unknown_tool_call_penalty_reason"] = "unknown_tool_name"
+            self._record_penalty(
+                agent_data,
+                reason="unknown_tool_name",
+                value=-1.0,
+                model_response=self.tokenizer.decode(agent_data.response_ids),
+                details={"tool_name": tool_call.name},
+            )
             return (
                 ToolResponse(
                     text=f"Error when executing tool: unknown tool '{tool_call.name}'",

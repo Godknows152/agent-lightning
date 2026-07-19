@@ -462,6 +462,147 @@ class RayPPOTrainer:
                 dump_path=rollout_data_dir,
             )
 
+    def _decode_model_answers(self, response_ids: torch.Tensor, response_mask: torch.Tensor) -> list[dict[str, Any]]:
+        """Decode each contiguous model-generated span from a multi-turn response."""
+
+        token_ids = response_ids.detach().cpu().tolist()
+        mask = response_mask.detach().cpu().tolist()
+        answer_token_spans: list[list[int]] = []
+        current_span: list[int] = []
+        for token_id, is_model_token in zip(token_ids, mask, strict=True):
+            if int(is_model_token) == 1:
+                current_span.append(int(token_id))
+            elif current_span:
+                answer_token_spans.append(current_span)
+                current_span = []
+        if current_span:
+            answer_token_spans.append(current_span)
+
+        return [
+            {
+                "assistant_turn": index,
+                "raw_text": self.tokenizer.decode(span, skip_special_tokens=False),
+                "visible_text": self.tokenizer.decode(span, skip_special_tokens=True),
+            }
+            for index, span in enumerate(answer_token_spans, start=1)
+        ]
+
+    def _dump_penalized_samples(self, batch: DataProto) -> list[dict[str, Any]]:
+        """Deterministically sample penalized trajectories and save their model answers as JSONL."""
+
+        dump_dir = self.config.trainer.get("penalized_samples_dir", None)
+        max_samples = int(self.config.trainer.get("penalized_samples_per_step", 0))
+        penalty_records = batch.non_tensor_batch.get("penalty_records")
+        if not dump_dir or max_samples <= 0 or penalty_records is None:
+            return []
+
+        records_array = np.asarray(penalty_records, dtype=object)
+
+        def _is_negative_penalty(record: Any) -> bool:
+            if not isinstance(record, dict):
+                return False
+            try:
+                return float(record.get("value", 0.0)) < 0.0
+            except (TypeError, ValueError):
+                return False
+
+        penalized_indices = [
+            index
+            for index, records in enumerate(records_array)
+            if isinstance(records, (list, tuple, np.ndarray))
+            and any(_is_negative_penalty(record) for record in records)
+        ]
+        if not penalized_indices:
+            return []
+
+        if len(penalized_indices) > max_samples:
+            rng = np.random.default_rng(self.global_steps)
+            selected_indices = sorted(
+                int(index) for index in rng.choice(penalized_indices, size=max_samples, replace=False).tolist()
+            )
+        else:
+            selected_indices = penalized_indices
+
+        prompts = batch.batch["prompts"]
+        responses = batch.batch["responses"]
+        response_masks = batch.batch["response_mask"]
+        scores = batch.batch["token_level_scores"].sum(-1).detach().cpu().tolist()
+
+        def _batch_metadata(key: str, index: int) -> Any:
+            values = batch.non_tensor_batch.get(key)
+            if values is None or len(values) <= index:
+                return None
+            return values[index]
+
+        samples = []
+        for index in selected_indices:
+            records = [record for record in records_array[index] if isinstance(record, dict)]
+            samples.append(
+                {
+                    "step": int(self.global_steps),
+                    "batch_index": index,
+                    "uid": _batch_metadata("uid", index),
+                    "request_id": _batch_metadata("request_id", index),
+                    "data_source": _batch_metadata("data_source", index),
+                    "score": float(scores[index]),
+                    "prompt": self.tokenizer.decode(
+                        prompts[index].detach().cpu().tolist(),
+                        skip_special_tokens=True,
+                    ),
+                    "model_answers": self._decode_model_answers(responses[index], response_masks[index]),
+                    "penalties": records,
+                }
+            )
+
+        resolved_dump_dir = os.path.abspath(os.path.expanduser(str(dump_dir)))
+        os.makedirs(resolved_dump_dir, exist_ok=True)
+        filename = os.path.join(resolved_dump_dir, f"step_{self.global_steps:06d}.jsonl")
+        with open(filename, "w", encoding="utf-8") as file:
+            for sample in samples:
+                file.write(json.dumps(sample, ensure_ascii=False, default=str) + "\n")
+        print(f"Dumped {len(samples)} penalized model-answer samples to {filename}")
+        return samples
+
+    def _log_penalized_samples_to_swanlab(self, samples: list[dict[str, Any]]) -> None:
+        """Upload the sampled penalized answers to a separate SwanLab media group."""
+
+        if not samples or "swanlab" not in self.config.trainer.logger:
+            return
+
+        import swanlab
+
+        table = swanlab.echarts.Table()
+        rows = []
+        for sample in samples:
+            penalties = sample["penalties"]
+            triggering_answers = [
+                {
+                    "assistant_turn": record.get("assistant_turn"),
+                    "model_response": record["model_response"],
+                }
+                for record in penalties
+                if record.get("model_response")
+            ]
+            if not triggering_answers:
+                triggering_answers = sample["model_answers"]
+            rows.append(
+                [
+                    sample["step"],
+                    sample["batch_index"],
+                    json.dumps([record.get("reason") for record in penalties], ensure_ascii=False),
+                    json.dumps([record.get("value") for record in penalties], ensure_ascii=False),
+                    json.dumps(triggering_answers, ensure_ascii=False),
+                ]
+            )
+        table.add(
+            headers=["step", "batch_index", "penalty_reasons", "penalty_values", "model_answers"],
+            rows=rows,
+        )
+        swanlab.log(
+            {"restoration_penalty_samples/penalized_model_answers": table},
+            step=self.global_steps,
+        )
+
     def _maybe_log_val_generations(self, inputs, outputs, scores):
         """Log a table of validation samples to the configured logger (wandb or swanlab)"""
 
@@ -1665,6 +1806,9 @@ class RayPPOTrainer:
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
                         self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
+                    with marked_timer("dump_penalized_samples", timing_raw, color="green"):
+                        penalized_samples = self._dump_penalized_samples(batch)
+                        self._log_penalized_samples_to_swanlab(penalized_samples)
 
                 # validate
                 if self.config.trainer.test_freq > 0 and (

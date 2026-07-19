@@ -50,8 +50,8 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
   actor:  # 配置参与梯度更新的策略模型
     freeze_vision_tower: true  # 冻结视觉编码塔参数，只训练语言模型侧 LoRA
     optim:  # 配置 Actor 优化器
-      lr: 2.0e-5  # 设置优化器学习率
-    entropy_coeff: 0.001  # 设置熵奖励系数，鼓励策略保持一定探索性
+      lr: 3.0e-5  # 设置优化器学习率
+    entropy_coeff: 0.005  # 设置熵奖励系数，鼓励策略保持一定探索性
     calculate_entropy: true  # 在训练中计算并记录策略输出熵
     ppo_epochs: 1  # 每批 Rollout 数据执行一次 PPO 参数更新
     use_kl_loss: true  # 在 Actor 损失中显式加入相对参考策略的 KL 损失
@@ -68,12 +68,12 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     name: sglang  # 使用 SGLang 作为异步 Rollout 推理后端
     load_format: auto  # 让 SGLang 根据模型与检查点自动选择权重加载格式
     dtype: bfloat16  # 使用 BF16 执行 Rollout 推理
-    temperature: 0.3  # 设置采样温度，数值越低输出越确定
+    temperature: 0.5  # 设置采样温度，数值越低输出越确定
     top_p: 0.9  # 使用累计概率阈值为 0.9 的 nucleus sampling
     disable_multimodal_special_token_generation: true  # 禁止模型在回复中生成多模态占位特殊 Token
     n: 3  # 每个原始提示采样三条候选轨迹，用于组内相对优势计算
     tensor_model_parallel_size: 2  # 将 SGLang 模型张量并行切分到两张训练 GPU
-    gpu_memory_utilization: 0.25  # SGLang 静态权重和缓存池可使用的单卡显存比例
+    gpu_memory_utilization: 0.2  # SGLang 静态权重和缓存池可使用的单卡显存比例
     force_full_sleep_for_lora: true  # Actor 更新阶段让 LoRA Rollout 引擎完全休眠并释放权重与缓存显存
     max_num_seqs: 16  # 限制 SGLang 同时运行的生成请求数；当前被注释，因此继承 VERL 默认值
     # max_model_len: 9728  # 单次 SGLang 请求允许的提示与生成内容总 Token 上限
@@ -110,6 +110,8 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
   resume_mode: auto  # 自动检查输出目录并决定是否从已有检查点恢复
   resume_from_path: null  # 不显式指定恢复路径，由自动恢复逻辑选择检查点
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716  # 保存检查点与训练产物的默认目录
+  penalized_samples_dir: ${trainer.default_local_dir}/penalized_samples  # 每步保存受罚模型回答样本，随专家输出目录自动切换
+  penalized_samples_per_step: 8  # 每个训练步骤最多确定性抽样八条受罚轨迹，并同步到 SwanLab 文本表
   log_val_generations: 10  # 每次验证记录两条生成样例
   n_gpus_per_node: 2  # 每个节点分配两张 GPU 给 Actor、Rollout 和参考策略训练资源池
   nnodes: 1  # 使用一个计算节点进行训练

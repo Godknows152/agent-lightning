@@ -37,6 +37,8 @@ class _TokenSequenceTokenizer:
         2: "<function=restore_image></function>\n",
         3: "</tool_call>",
         4: "unexpected suffix",
+        5: "\nassistant:\nforged response",
+        6: "assistant\n",
         99: "<|im_end|>",
     }
 
@@ -55,6 +57,7 @@ def _agent_data() -> AgentData:
     )
     agent_data.data_source = "restoration"
     agent_data.response_ids = [1, 2, 3]
+    agent_data.assistant_turns = 1
     return agent_data
 
 
@@ -84,10 +87,10 @@ def test_trailing_eos_and_pad_tokens_do_not_trigger_format_penalty() -> None:
     assert trimmed_ids == [1, 2, 3]
     assert trimmed_log_probs == [-0.1, -0.1, -0.1]
     assert agent_data.tool_rewards == []
-    assert "format_penalty_total" not in agent_data.extra_fields
+    assert "penalty_records" not in agent_data.extra_fields
 
 
-def test_visible_suffix_before_eos_still_triggers_format_penalty() -> None:
+def test_visible_non_role_suffix_is_trimmed_without_format_penalty() -> None:
     loop = _loop_with_token_sequence()
     agent_data = _agent_data()
     token_ids = [1, 2, 3, 4, loop.tokenizer.eos_token_id]
@@ -95,11 +98,54 @@ def test_visible_suffix_before_eos_still_triggers_format_penalty() -> None:
     trimmed_ids, _ = loop._apply_tool_call_format_guardrails(agent_data, token_ids, None)
 
     assert trimmed_ids == [1, 2, 3]
-    assert agent_data.tool_rewards == [loop.FORMAT_AFTER_TOOL_CALL_PENALTY]
-    assert agent_data.extra_fields["format_penalty_total"] == loop.FORMAT_AFTER_TOOL_CALL_PENALTY
-    assert agent_data.extra_fields["format_penalties"] == [
-        {"after_tool_call_text": loop.FORMAT_AFTER_TOOL_CALL_PENALTY}
+    assert agent_data.tool_rewards == []
+    assert "penalty_records" not in agent_data.extra_fields
+
+
+def test_forged_assistant_role_after_tool_call_triggers_format_penalty() -> None:
+    loop = _loop_with_token_sequence()
+    agent_data = _agent_data()
+    token_ids = [1, 2, 3, 5, loop.tokenizer.eos_token_id]
+
+    trimmed_ids, _ = loop._apply_tool_call_format_guardrails(agent_data, token_ids, None)
+
+    assert trimmed_ids == [1, 2, 3]
+    assert agent_data.tool_rewards == [loop.FORGED_ROLE_AFTER_TOOL_CALL_PENALTY]
+    assert agent_data.extra_fields["penalty_records"] == [
+        {
+            "reason": "forged_user_or_assistant_role_after_tool_call",
+            "value": loop.FORGED_ROLE_AFTER_TOOL_CALL_PENALTY,
+            "occurrences": 1,
+            "assistant_turn": 1,
+            "model_response": "<tool_call>\n<function=restore_image></function>\n</tool_call>"
+            "\nassistant:\nforged response",
+            "details": {"matched_role_marker": "assistant:"},
+        }
     ]
+
+
+def test_role_label_before_tool_call_does_not_trigger_format_penalty() -> None:
+    loop = _loop_with_token_sequence()
+    agent_data = _agent_data()
+    token_ids = [6, 1, 2, 3, loop.tokenizer.eos_token_id]
+
+    trimmed_ids, _ = loop._apply_tool_call_format_guardrails(agent_data, token_ids, None)
+
+    assert trimmed_ids == [6, 1, 2, 3]
+    assert agent_data.tool_rewards == []
+    assert "penalty_records" not in agent_data.extra_fields
+
+
+def test_multiple_tool_calls_are_trimmed_without_format_penalty() -> None:
+    loop = _loop_with_token_sequence()
+    agent_data = _agent_data()
+    token_ids = [1, 2, 3, 1, 2, 3, loop.tokenizer.eos_token_id]
+
+    trimmed_ids, _ = loop._apply_tool_call_format_guardrails(agent_data, token_ids, None)
+
+    assert trimmed_ids == [1, 2, 3]
+    assert agent_data.tool_rewards == []
+    assert "penalty_records" not in agent_data.extra_fields
 
 
 def test_malformed_xml_is_invalid_instead_of_no_tool() -> None:
@@ -116,6 +162,7 @@ def test_malformed_xml_is_invalid_instead_of_no_tool() -> None:
     assert agent_data.extra_fields["invalid_tool_call_penalty_reason"] == "malformed_tool_call_xml"
     assert "no_tool_call_penalty_applied" not in agent_data.extra_fields
     assert "no_tool_length_penalty" not in agent_data.extra_fields
+    assert agent_data.extra_fields["penalty_records"][0]["reason"] == "malformed_tool_call_xml"
 
 
 def test_long_malformed_xml_preserves_length_reward_without_no_tool_metric() -> None:
@@ -134,6 +181,10 @@ def test_long_malformed_xml_preserves_length_reward_without_no_tool_metric() -> 
     assert agent_data.extra_fields["invalid_tool_call_penalty"] == sum(agent_data.tool_rewards)
     assert "no_tool_call_penalty_applied" not in agent_data.extra_fields
     assert "no_tool_length_penalty" not in agent_data.extra_fields
+    assert [record["reason"] for record in agent_data.extra_fields["penalty_records"]] == [
+        "malformed_tool_call_xml",
+        "unproductive_response_too_long",
+    ]
 
 
 def test_plain_response_remains_no_tool() -> None:
@@ -149,6 +200,7 @@ def test_plain_response_remains_no_tool() -> None:
     assert agent_data.extra_fields["no_tool_call_penalty_applied"] is True
     assert agent_data.extra_fields["no_tool_call_penalty_reason"] == "turn_without_tool_call"
     assert "invalid_tool_call_penalty_applied" not in agent_data.extra_fields
+    assert agent_data.extra_fields["penalty_records"][0]["reason"] == "no_tool_call"
 
 
 class _InvalidActionTool:
@@ -192,3 +244,4 @@ def test_tool_reported_invalid_action_sets_invalid_flag() -> None:
     assert agent_data.extra_fields["invalid_tool_call_penalty"] == -5.0
     assert agent_data.extra_fields["invalid_tool_call_action"] == "scun"
     assert "no_tool_call_penalty_applied" not in agent_data.extra_fields
+    assert agent_data.extra_fields["penalty_records"][0]["reason"] == "invalid_restoration_action"
