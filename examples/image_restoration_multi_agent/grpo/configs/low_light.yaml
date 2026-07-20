@@ -2,7 +2,7 @@ expert_name: low_light_expert
 stage_config: ../../config/stage_h.yaml
 model_path: ../../../../../Models/Qwen3.5-9B
 adapter_path: ../../../../../Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/low_light
-chat_template: ../templates/qwen35_hermes_nothink.jinja
+chat_template: ../templates/qwen35_native_tool_nothink.jinja
 train_data: ../data/low_light_train.jsonl
 val_data: ../data/low_light_val.jsonl
 output_dir: ../outputs/qwen3_5_20260625_fresh/low_light

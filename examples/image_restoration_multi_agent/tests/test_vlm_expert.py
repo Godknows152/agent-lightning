@@ -122,6 +122,18 @@ def _parsed_tool_call(action: str = "scunet", function_name: str = "restore_imag
     ]
 
 
+def _raw_qwen3_call(action: str = "scunet", function_name: str = "restore_image") -> str:
+    return (
+        "<tool_call>\n"
+        f"<function={function_name}>\n"
+        "<parameter=action>\n"
+        f"{action}\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+
+
 def _evaluation(score: float, feedback: str = "quality feedback") -> EvaluationResult:
     return EvaluationResult(
         status=ExecutionStatus.SUCCESS,
@@ -184,28 +196,27 @@ def _state(image_path: Path, *, with_history: bool = False) -> RestorationTrajec
 @pytest.mark.parametrize(
     ("raw_response", "expected_status"),
     [
-        (
-            '<tool_call>{"name":"restore_image","arguments":{"action":"scunet"}}</tool_call>',
-            ExpertParseStatus.VALID,
-        ),
+        (_raw_qwen3_call(), ExpertParseStatus.VALID),
         ('{"name":"restore_image","arguments":{"action":"scunet"}}', ExpertParseStatus.INVALID_TOOL_CALL),
         (
-            '<tool_call>{"name":"restore_image","arguments":{}}</tool_call>',
+            "<tool_call>\n<function=restore_image>\n</function>\n</tool_call>",
             ExpertParseStatus.MISSING_FIELD,
         ),
+        (_raw_qwen3_call(function_name="other"), ExpertParseStatus.UNKNOWN_FUNCTION),
+        (_raw_qwen3_call(action="not_registered"), ExpertParseStatus.UNKNOWN_ACTION),
+        (_raw_qwen3_call() + _raw_qwen3_call(action="stop"), ExpertParseStatus.MULTIPLE_TOOL_CALLS),
+        ("<tool_call>\n<function=restore_image>\n</tool_call>", ExpertParseStatus.INVALID_TOOL_CALL),
         (
-            '<tool_call>{"name":"other","arguments":{"action":"scunet"}}</tool_call>',
-            ExpertParseStatus.UNKNOWN_FUNCTION,
+            "<tool_call>\n<function=restore_image>\n<parameter=action>scunet\n</function>\n</tool_call>",
+            ExpertParseStatus.INVALID_TOOL_CALL,
         ),
         (
-            '<tool_call>{"name":"restore_image","arguments":{"action":"not_registered"}}</tool_call>',
-            ExpertParseStatus.UNKNOWN_ACTION,
+            "<tool_call>\n<function=restore_image>\n"
+            "<parameter=action>scunet</parameter>\n<parameter=action>stop</parameter>\n"
+            "</function>\n</tool_call>",
+            ExpertParseStatus.INVALID_TOOL_CALL,
         ),
-        (
-            '<tool_call>{"name":"restore_image","arguments":{"action":"scunet"}}</tool_call>'
-            '<tool_call>{"name":"restore_image","arguments":{"action":"stop"}}</tool_call>',
-            ExpertParseStatus.MULTIPLE_TOOL_CALLS,
-        ),
+        ("reasoning before\n" + _raw_qwen3_call(), ExpertParseStatus.INVALID_TOOL_CALL),
         ("", ExpertParseStatus.EMPTY_RESPONSE),
     ],
 )
@@ -214,6 +225,28 @@ def test_parse_expert_response_statuses(raw_response: str, expected_status: Expe
 
     assert status == expected_status
     assert (action is not None) is (expected_status == ExpertParseStatus.VALID)
+
+
+def test_parse_expert_response_prefers_openai_tool_calls_and_validates_arguments() -> None:
+    status, _, action, tool_call_id, _ = parse_expert_response(
+        "raw text that must not be used",
+        _registry(),
+        _parsed_tool_call("scunet"),
+    )
+
+    assert status == ExpertParseStatus.VALID
+    assert action == "scunet"
+    assert tool_call_id == "call-expert-test"
+
+
+def test_parse_expert_response_rejects_invalid_openai_arguments_json() -> None:
+    tool_calls = _parsed_tool_call()
+    tool_calls[0]["function"]["arguments"] = "not-json"
+
+    status, _, action, _, _ = parse_expert_response(None, _registry(), tool_calls)
+
+    assert status == ExpertParseStatus.INVALID_JSON
+    assert action is None
 
 
 def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path) -> None:
@@ -294,7 +327,7 @@ def test_vlm_expert_hides_stop_before_minimum_tool_calls(tmp_path: Path) -> None
     assert request is not None
     action_enum = request["tools"][0]["function"]["parameters"]["properties"]["action"]["enum"]
     assert "stop" not in action_enum
-    assert "The stop action is not available yet" in request["messages"][0]["content"]
+    assert "Do not use action stop before it appears in the supplied tool schema" in request["messages"][0]["content"]
 
 
 def test_vlm_expert_first_turn_exactly_reuses_single_step_sft_prompts(tmp_path: Path) -> None:

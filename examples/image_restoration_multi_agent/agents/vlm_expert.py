@@ -1,4 +1,4 @@
-"""Strict Hermes restoration expert inference through an OpenAI-compatible VLM."""
+"""Strict Qwen3 restoration expert inference through an OpenAI-compatible VLM."""
 
 from __future__ import annotations
 
@@ -51,25 +51,61 @@ class _Tokenizer(Protocol):
     def decode(self, token_ids: list[int], *, skip_special_tokens: bool) -> str: ...
 
 
-def _tool_call_from_raw_hermes(
+def _tool_call_from_raw_qwen3(
     raw_response: str | None,
 ) -> tuple[ExpertParseStatus | None, dict[str, Any] | None, str | None, str | None]:
-    """Extract exactly one raw Hermes restoration call."""
+    """Extract exactly one native Qwen3 XML restoration call."""
 
     if raw_response is None or not raw_response.strip():
         return ExpertParseStatus.EMPTY_RESPONSE, None, None, "expert returned no tool call or assistant content"
-    matches = re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", raw_response, flags=re.DOTALL)
+    matches = list(re.finditer(r"<tool_call>\s*(.*?)\s*</tool_call>", raw_response, flags=re.DOTALL))
     if not matches:
-        return ExpertParseStatus.INVALID_TOOL_CALL, None, None, "no Hermes <tool_call> block found"
+        return ExpertParseStatus.INVALID_TOOL_CALL, None, None, "no Qwen3 <tool_call> block found"
     if len(matches) != 1:
         return ExpertParseStatus.MULTIPLE_TOOL_CALLS, None, None, "expert must contain exactly one tool call"
-    try:
-        payload: object = json.loads(matches[0])
-    except json.JSONDecodeError as error:
-        return ExpertParseStatus.INVALID_JSON, None, None, f"invalid Hermes tool-call JSON: {error}"
-    if not isinstance(payload, dict):
-        return ExpertParseStatus.INVALID_TOOL_CALL, None, None, "Hermes tool call must contain a JSON object"
-    return None, cast(dict[str, Any], payload), None, None
+    match = matches[0]
+    if raw_response[: match.start()].strip() or raw_response[match.end() :].strip():
+        return ExpertParseStatus.INVALID_TOOL_CALL, None, None, "content outside Qwen3 tool call is not allowed"
+
+    function_match = re.fullmatch(
+        r"\s*<function=\s*([^\s<>]+)\s*>(.*?)</function>\s*",
+        match.group(1),
+        flags=re.DOTALL,
+    )
+    if function_match is None:
+        return (
+            ExpertParseStatus.INVALID_TOOL_CALL,
+            None,
+            None,
+            "Qwen3 tool call must contain exactly one complete <function=...></function> block",
+        )
+
+    function_name = function_match.group(1).strip()
+    parameters_block = function_match.group(2)
+    parameter_pattern = re.compile(
+        r"<parameter=\s*([^\s<>]+)\s*>(.*?)</parameter>",
+        flags=re.DOTALL,
+    )
+    arguments: dict[str, Any] = {}
+    cursor = 0
+    for parameter_match in parameter_pattern.finditer(parameters_block):
+        if parameters_block[cursor : parameter_match.start()].strip():
+            return ExpertParseStatus.INVALID_TOOL_CALL, None, None, "malformed Qwen3 parameter block"
+        parameter_name = parameter_match.group(1).strip()
+        if parameter_name in arguments:
+            return (
+                ExpertParseStatus.INVALID_TOOL_CALL,
+                None,
+                None,
+                f"duplicate Qwen3 parameter: {parameter_name}",
+            )
+        arguments[parameter_name] = parameter_match.group(2).strip()
+        cursor = parameter_match.end()
+    if parameters_block[cursor:].strip():
+        return ExpertParseStatus.INVALID_TOOL_CALL, None, None, "malformed Qwen3 parameter block"
+
+    payload: dict[str, Any] = {"name": function_name, "arguments": arguments}
+    return None, payload, None, None
 
 
 def _tool_call_from_openai(
@@ -105,13 +141,13 @@ def parse_expert_response(
     tool_registry: ToolRegistry,
     tool_calls: object | None = None,
 ) -> tuple[ExpertParseStatus, dict[str, Any] | None, str | None, str | None, str | None]:
-    """Validate one parsed or raw Hermes restore_image tool call."""
+    """Validate one parsed or raw native Qwen3 restore_image tool call."""
 
     status, payload, tool_call_id, error = _tool_call_from_openai(tool_calls)
     if status is not None:
         return status, payload, None, tool_call_id, error
     if payload is None:
-        status, payload, tool_call_id, error = _tool_call_from_raw_hermes(raw_response)
+        status, payload, tool_call_id, error = _tool_call_from_raw_qwen3(raw_response)
         if status is not None:
             return status, payload, None, tool_call_id, error
     if payload is None:

@@ -20,7 +20,7 @@ import yaml
 from transformers import AutoTokenizer
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_CHAT_TEMPLATE = EXAMPLE_DIR / "grpo/templates/qwen35_hermes_nothink.jinja"
+DEFAULT_CHAT_TEMPLATE = EXAMPLE_DIR / "grpo/templates/qwen35_native_tool_nothink.jinja"
 if str(EXAMPLE_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_DIR))
 
@@ -235,9 +235,9 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "lora_alpha": int(training["lora_alpha"]),
                 "target_modules": str(training["lora_target_modules"]),
                 "lora_adapter_path": run["adapter_path"],
-                # Expert SFT uses a no-thinking Qwen3.5 prefix and embeds the
-                # Hermes protocol in the system prompt. Apply the same template
-                # to rollout generation and actor/ref retokenization.
+                # Expert SFT uses the model-native Qwen3.5 XML tool protocol.
+                # Apply the same template to rollout generation and actor/ref
+                # retokenization so token boundaries stay identical.
                 "custom_chat_template": chat_template,
                 "use_remove_padding": bool(training["use_remove_padding"]),
                 "enable_gradient_checkpointing": bool(training["enable_gradient_checkpointing"]),
@@ -273,11 +273,11 @@ def _verl_config(run: dict[str, Any], *, smoke: bool) -> dict[str, Any]:
                 "enable_prefix_caching": bool(training["enable_prefix_caching"]),
                 "enforce_eager": True if smoke else bool(training["enforce_eager"]),
                 "free_cache_engine": bool(training["free_cache_engine"]),
-                "multi_turn": {"format": "hermes"},
+                "multi_turn": {"format": "qwen3_coder"},
                 "engine_kwargs": {
                     "vllm": {
                         "enable_auto_tool_choice": True,
-                        "tool_call_parser": "hermes",
+                        "tool_call_parser": "qwen3_coder",
                         "chat_template": str(chat_template_path),
                         "max_model_len": int(training["max_model_len"]),
                         "mm_processor_cache_gb": 0,

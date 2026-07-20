@@ -186,7 +186,7 @@ def test_rollout_artifact_cleanup_keeps_recent_and_current_sample_dirs(tmp_path:
     assert current_dir.exists()
 
 
-def test_grpo_chat_template_uses_qwen35_hermes_nothink() -> None:
+def test_grpo_chat_template_uses_qwen35_native_tool_nothink() -> None:
     run = _load_run_config(EXAMPLE_DIR / "grpo/configs/fog.yaml")
     formal = _verl_config(run, smoke=False)
     template = formal["actor_rollout_ref"]["model"]["custom_chat_template"]
@@ -194,12 +194,28 @@ def test_grpo_chat_template_uses_qwen35_hermes_nothink() -> None:
     expected_generation_prompt = "add_generation_prompt"
     assert expected_generation_prompt in template
     assert "<think>\\n\\n</think>\\n\\n" in template
-    assert "enable_thinking is not defined or enable_thinking is false" in template
+    assert "enable_thinking is defined and enable_thinking is false" in template
     assert "<|vision_start|><|image_pad|><|vision_end|>" in template
+    assert "<function=example_function_name>" in template
+    assert "tool_call.arguments|items" in template
     assert formal["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"]["chat_template"] == str(
-        EXAMPLE_DIR / "grpo/templates/qwen35_hermes_nothink.jinja"
+        EXAMPLE_DIR / "grpo/templates/qwen35_native_tool_nothink.jinja"
     )
+    assert formal["actor_rollout_ref"]["rollout"]["multi_turn"] == {"format": "qwen3_coder"}
+    assert formal["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"]["tool_call_parser"] == "qwen3_coder"
     assert "chat_template_kwargs" not in formal["actor_rollout_ref"]["rollout"]["engine_kwargs"]["vllm"]
+
+
+def test_diagnosis_and_expert_serving_use_separate_tool_protocols() -> None:
+    diagnosis_script = (EXAMPLE_DIR / "serve_qwen35.sh").read_text(encoding="utf-8")
+    expert_script = (EXAMPLE_DIR / "serve_qwen35_expert.sh").read_text(encoding="utf-8")
+
+    assert 'PORT="${QWEN35_PORT:-8000}"' in diagnosis_script
+    assert "--tool-call-parser hermes" in diagnosis_script
+    assert "qwen35_hermes_nothink.jinja" in diagnosis_script
+    assert 'PORT="${QWEN35_EXPERT_PORT:-8001}"' in expert_script
+    assert "--tool-call-parser qwen3_coder" in expert_script
+    assert "qwen35_native_tool_nothink.jinja" in expert_script
 
 
 def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
@@ -209,6 +225,8 @@ def test_stage_h_uses_persistent_split_gpu_tool_runtime() -> None:
     assert config.workflow.invalid_action_penalty == 10.0
     assert config.workflow.tool_call_reward == pytest.approx(0.2)
     assert config.workflow.premature_stop_penalty == pytest.approx(0.0)
+    assert config.vlm.base_url == "http://127.0.0.1:8000/v1"
+    assert config.expert_vlm.base_url == "http://127.0.0.1:8001/v1"
     assert config.expert_vlm.max_tokens == 512
     assert config.expert_vlm.temperature == pytest.approx(1.0)
     assert config.runtime.evaluator.device == "cuda:0"
@@ -497,7 +515,7 @@ def test_smoke_override_retains_real_response_and_forces_valid_action() -> None:
         decision_source=ExpertDecisionSource.VLM,
         parse_status=ExpertParseStatus.INVALID_TOOL_CALL,
         validation_status=ValidationStatus.INVALID_TOOL_CALL,
-        raw_assistant_output="analysis without a Hermes call",
+        raw_assistant_output="analysis without a Qwen3 tool call",
         response_payload={"id": "response-1"},
         error="missing tool call",
     )

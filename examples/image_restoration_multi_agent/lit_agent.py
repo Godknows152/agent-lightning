@@ -7,7 +7,6 @@ from typing import Any
 
 from agents import ReplayExpertAgent, VLMDegradationDiagnosisAgent, VLMRestorationExpertAgent
 from config import ExpertVLMSettings, StageEExampleConfig, StageFExampleConfig, StageGExampleConfig
-from controller import ExpertAgent
 from factory import DeterministicControllerFactory, RealControllerFactory
 from schemas import (
     DEGRADATION_TO_EXPERT,
@@ -25,6 +24,7 @@ from schemas import (
     VLMRestorationTask,
     WorkflowResult,
 )
+from workflow_protocols import ExpertAgent
 
 import agentlightning as agl
 

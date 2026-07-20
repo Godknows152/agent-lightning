@@ -1,8 +1,6 @@
-"""Replay expert decisions through the same Hermes parser used by the VLM."""
+"""Replay expert decisions through the same Qwen3 parser used by the VLM."""
 
 from __future__ import annotations
-
-import json
 
 from schemas import (
     ExpertDecisionRecord,
@@ -18,7 +16,7 @@ from .vlm_expert import parse_expert_response
 
 
 class ReplayExpertAgent:
-    """Return preconfigured raw Hermes responses after strict parsing."""
+    """Return preconfigured raw Qwen3 tool calls after strict parsing."""
 
     def __init__(
         self,
@@ -43,22 +41,28 @@ class ReplayExpertAgent:
         *,
         resource_name: str | None = None,
     ) -> ReplayExpertAgent:
-        """Encode actions as raw Hermes calls that still pass through strict parsing."""
+        """Encode actions as native Qwen3 calls that pass through strict parsing."""
 
         return cls(
             expert_name,
-            [cls.hermes_response(action) for action in actions],
+            [cls.qwen3_response(action) for action in actions],
             tool_registry,
             resource_name=resource_name,
         )
 
     @staticmethod
-    def hermes_response(action: str) -> str:
-        payload = {
-            "name": RESTORE_FUNCTION_NAME,
-            "arguments": {"action": action},
-        }
-        return f"<tool_call>{json.dumps(payload, separators=(',', ':'))}</tool_call>"
+    def qwen3_response(action: str) -> str:
+        """Render one native Qwen3 XML tool call."""
+
+        return (
+            "<tool_call>\n"
+            f"<function={RESTORE_FUNCTION_NAME}>\n"
+            "<parameter=action>\n"
+            f"{action}\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
 
     def decide(self, state: RestorationTrajectoryState) -> ExpertDecisionRecord:
         """Parse the next replay response, falling back to a parsed stop call."""
@@ -67,7 +71,7 @@ class ReplayExpertAgent:
         raw_response = (
             self.responses[self.call_count]
             if self.call_count < len(self.responses)
-            else self.hermes_response(STOP_ACTION)
+            else self.qwen3_response(STOP_ACTION)
         )
         self.call_count += 1
         parse_status, parsed_payload, action, _, error = parse_expert_response(raw_response, self.tool_registry)

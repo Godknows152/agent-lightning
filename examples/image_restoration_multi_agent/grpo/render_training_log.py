@@ -16,8 +16,12 @@ ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 RAY_PREFIX_PATTERN = re.compile(r"^\((?P<actor>[^)]+)\)\s*")
 TASK_PROGRESS_PATTERN = re.compile(r"Completed\s+(?P<current>\d+)/(?P<total>\d+)\s+tasks")
 TRAINING_PROGRESS_PATTERN = re.compile(r"Training Progress:\s*.*?\|\s*(?P<current>\d+)/(?P<total>\d+)\s*\[")
-HERMES_PARSER_MARKER = "hermes_tool_parser.py"
-HERMES_ERROR_MARKER = "Error in extracting tool call from response."
+TOOL_PARSER_MARKERS = (
+    "qwen3_coder_tool_parser.py",
+    "qwen3coder_tool_parser.py",
+    "tool_parser.py",
+)
+TOOL_PARSER_ERROR_MARKER = "Error in extracting tool call from response"
 
 
 @dataclass(frozen=True)
@@ -30,7 +34,7 @@ class ProgressEvent:
 
 
 class LogLineParser:
-    """Normalize Ray output and collapse expected Hermes parser tracebacks."""
+    """Normalize Ray output and collapse expected Qwen3 parser tracebacks."""
 
     def parse(self, raw_line: str) -> tuple[ProgressEvent | None, str | None]:
         line = ANSI_PATTERN.sub("", raw_line).strip("\r\n")
@@ -59,9 +63,9 @@ class LogLineParser:
                 None,
             )
 
-        if HERMES_PARSER_MARKER in line:
-            if HERMES_ERROR_MARKER in line:
-                return None, "[WARN] Hermes tool call parse failed; response marked invalid_tool_call."
+        if any(marker in line for marker in TOOL_PARSER_MARKERS):
+            if TOOL_PARSER_ERROR_MARKER in line:
+                return None, "[WARN] Qwen3 tool call parse failed; response marked invalid_tool_call."
             return None, None
 
         prefix_match = RAY_PREFIX_PATTERN.match(line)

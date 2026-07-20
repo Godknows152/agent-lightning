@@ -2,7 +2,7 @@ expert_name: fog_expert
 stage_config: ../../config/stage_h.yaml
 model_path: ../../../../../Models/Qwen3.5-9B
 adapter_path: ../outputs/qwen3_5_fresh_fog_global_step_20_hf_adapter
-chat_template: ../templates/qwen35_hermes_nothink.jinja
+chat_template: ../templates/qwen35_native_tool_nothink.jinja
 train_data: ../data/fog_train.jsonl
 val_data: ../data/fog_val.jsonl
 output_dir: ../outputs/qwen3_5_fresh/fog_2gpu

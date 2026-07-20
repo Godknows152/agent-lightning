@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Protocol
+from typing import Any, Iterator, Mapping
 
 from config import WorkflowSettings
 from exceptions import EvaluationError, InvalidToolCallError, UnknownActionError
@@ -23,41 +23,12 @@ from schemas import (
     WorkflowResult,
 )
 from tool_registry import STOP_ACTION, ToolRegistry
+from workflow_logic import RestorationWorkflowLogic
+from workflow_protocols import DiagnosisAgent, Evaluator, ExpertAgent, RestorationWorker
 
 import agentlightning as agl
 
 logger = logging.getLogger(__name__)
-
-
-class DiagnosisAgent(Protocol):
-    """Protocol required from a degradation diagnosis agent."""
-
-    def diagnose(self, image_path: str) -> DiagnosisResult: ...
-
-
-class ExpertAgent(Protocol):
-    """Protocol required from one restoration expert."""
-
-    def decide(self, state: RestorationTrajectoryState) -> ExpertDecisionRecord: ...
-
-
-class RestorationWorker(Protocol):
-    """Protocol required from a restoration worker."""
-
-    def restore(self, action: str, input_path: str, output_dir: str, step_index: int) -> RestorationResult: ...
-
-
-class Evaluator(Protocol):
-    """Protocol required from an image quality evaluator."""
-
-    def evaluate(
-        self,
-        image_path: str,
-        *,
-        previous_score: float | None,
-        original_score: float | None,
-        best_score: float | None,
-    ) -> EvaluationResult: ...
 
 
 @contextmanager
@@ -94,6 +65,7 @@ class ImageRestorationController:
         self.experts = experts
         self.worker = worker
         self.evaluator = evaluator
+        self.logic = RestorationWorkflowLogic(settings, tool_registry)
 
     def run(
         self,
@@ -377,20 +349,7 @@ class ImageRestorationController:
             return result
 
     def _validate_decision(self, decision: ExpertDecisionRecord, state: RestorationTrajectoryState) -> str:
-        if decision.validation_status == ValidationStatus.UNKNOWN_ACTION:
-            raise UnknownActionError(decision.error or "expert selected an unknown action")
-        if decision.validation_status != ValidationStatus.VALID or decision.action is None:
-            raise InvalidToolCallError(decision.error or f"expert response is {decision.parse_status.value}")
-        if decision.expert_name != state.expert_name:
-            raise InvalidToolCallError(
-                f"expert switched from {state.expert_name.value} to {decision.expert_name.value}"
-            )
-        if decision.step_index != len(state.steps):
-            raise InvalidToolCallError(
-                f"decision step_index={decision.step_index} does not match expected {len(state.steps)}"
-            )
-        self.tool_registry.validate_action(decision.action)
-        return decision.action
+        return self.logic.validate_decision(decision, state)
 
     def _append_decision_failure(
         self,
@@ -398,21 +357,7 @@ class ImageRestorationController:
         decision: ExpertDecisionRecord,
         error: str,
     ) -> None:
-        state.steps.append(
-            RestorationStep(
-                step_index=decision.step_index,
-                expert_name=state.expert_name,
-                expert_decision=decision,
-                tool_name=None,
-                input_image=state.current_image,
-                output_image=None,
-                step_reward=-self.settings.invalid_action_penalty,
-                reward_components={"invalid_action_penalty": -self.settings.invalid_action_penalty},
-                success=False,
-                latency_seconds=0.0,
-                error=error,
-            )
-        )
+        self.logic.append_decision_failure(state, decision, error)
 
     @staticmethod
     def _emit_step_reward(step: RestorationStep, *, trace: bool) -> None:
@@ -433,28 +378,10 @@ class ImageRestorationController:
 
     @staticmethod
     def _terminate(state: RestorationTrajectoryState, reason: str) -> None:
-        state.terminated = True
-        state.termination_reason = reason
+        RestorationWorkflowLogic.terminate(state, reason)
 
     def _calculate_final_reward(self, state: RestorationTrajectoryState) -> float:
-        if state.termination_reason in {"invalid_tool_call", "invalid_action"}:
-            return -self.settings.invalid_action_penalty
-
-        if self.settings.reward_mode == "step_iqa_sum_v1":
-            trajectory_reward = sum(step.step_reward for step in state.steps)
-            if state.termination_reason in {"max_steps", "no_improvement_limit"}:
-                trajectory_reward -= self.settings.forced_termination_penalty
-            return trajectory_reward
-
-        quality_gain = state.best_evaluation.aggregate_score - state.original_evaluation.aggregate_score
-        failures = sum(not step.success for step in state.steps)
-        return (
-            quality_gain
-            + self.settings.tool_call_reward * state.tool_call_count
-            - self.settings.tool_call_cost * state.tool_call_count
-            - self.settings.invalid_action_penalty * state.invalid_action_count
-            - self.settings.failure_penalty * failures
-        )
+        return self.logic.calculate_final_reward(state)
 
     def _calculate_success_reward(
         self,
@@ -462,68 +389,17 @@ class ImageRestorationController:
         action: str,
         evaluation: EvaluationResult,
     ) -> tuple[float, dict[str, float]]:
-        if self.settings.reward_mode != "step_iqa_sum_v1":
-            return evaluation.delta_from_previous, {"delta_from_previous": evaluation.delta_from_previous}
-
-        quality_delta = (
-            self.settings.reward_alpha * evaluation.delta_from_previous
-            + (1.0 - self.settings.reward_alpha) * evaluation.delta_from_original
-        )
-        scaled_quality = self.settings.reward_scale * quality_delta
-        clipped_quality = min(
-            self.settings.step_reward_clip,
-            max(-self.settings.step_reward_clip, scaled_quality),
-        )
-        repeated_penalty = (
-            self.settings.repeated_action_penalty if any(step.tool_name == action for step in state.steps) else 0.0
-        )
-        step_reward = clipped_quality + self.settings.tool_call_reward - self.settings.tool_call_cost - repeated_penalty
-        return step_reward, {
-            "delta_from_previous": evaluation.delta_from_previous,
-            "delta_from_original": evaluation.delta_from_original,
-            "quality_delta": quality_delta,
-            "scaled_clipped_quality": clipped_quality,
-            "tool_call_reward": self.settings.tool_call_reward,
-            "tool_call_cost": -self.settings.tool_call_cost,
-            "repeated_action_penalty": -repeated_penalty,
-        }
+        return self.logic.calculate_success_reward(state, action, evaluation)
 
     def _calculate_failure_reward(
         self,
         state: RestorationTrajectoryState,
         action: str,
     ) -> tuple[float, dict[str, float]]:
-        if self.settings.reward_mode != "step_iqa_sum_v1":
-            return -self.settings.failure_penalty, {"failure_penalty": -self.settings.failure_penalty}
-        repeated_penalty = (
-            self.settings.repeated_action_penalty if any(step.tool_name == action for step in state.steps) else 0.0
-        )
-        reward = (
-            self.settings.tool_call_reward
-            - self.settings.failure_penalty
-            - self.settings.tool_call_cost
-            - repeated_penalty
-        )
-        return reward, {
-            "failure_penalty": -self.settings.failure_penalty,
-            "tool_call_reward": self.settings.tool_call_reward,
-            "tool_call_cost": -self.settings.tool_call_cost,
-            "repeated_action_penalty": -repeated_penalty,
-        }
+        return self.logic.calculate_failure_reward(state, action)
 
     def _calculate_stop_reward(
         self,
         state: RestorationTrajectoryState,
     ) -> tuple[float, dict[str, float]]:
-        if self.settings.reward_mode != "step_iqa_sum_v1":
-            return 0.0, {"stop_reward": 0.0}
-        best_gain = state.best_evaluation.aggregate_score - state.original_evaluation.aggregate_score
-        valid_stop = (
-            state.tool_call_count >= self.settings.stop_min_tool_calls and best_gain >= self.settings.stop_min_best_gain
-        )
-        stop_reward = self.settings.valid_stop_reward if valid_stop else -self.settings.premature_stop_penalty
-        return stop_reward, {
-            "best_gain_at_stop": best_gain,
-            "valid_stop": 1.0 if valid_stop else 0.0,
-            "stop_reward": stop_reward,
-        }
+        return self.logic.calculate_stop_reward(state)

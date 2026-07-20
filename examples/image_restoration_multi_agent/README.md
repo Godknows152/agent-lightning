@@ -6,6 +6,7 @@ This example implements stages A-H of the design in `分层多智能体图像修
 
 - One deterministic degradation diagnosis per trajectory.
 - Four parallel expert identities with one shared restoration tool registry.
+- A no-model LangGraph parent graph with four fixed-identity expert subgraphs and in-memory checkpoints.
 - Scripted expert actions using the canonical `restore_image(action)` protocol.
 - Copy-based mock components for CPU regression tests.
 - Real restoration workers invoked through the isolated `verl` environment.
@@ -16,7 +17,7 @@ This example implements stages A-H of the design in `分层多智能体图像修
 - Strict VLM parsing with raw-response and token-ID retention.
 - Independent `predicted_strict` and `oracle_observe` routing modes.
 - Diagnosis API, parsing, classification, confusion-matrix, and latency metrics.
-- Strict restoration-expert Hermes parsing with raw response, reasoning, token, latency, and error retention.
+- Strict restoration-expert Qwen3 native XML parsing with raw response, reasoning, token, latency, and error retention.
 - Independent `replay` and `vlm_strict` expert decision modes using the same parser and Controller path.
 - Replay-driven multi-turn tool execution for pre-training feasibility validation.
 - Four unique expert resource names with independent future policy paths and one shared tool schema.
@@ -46,7 +47,7 @@ Stage E serves `/home/LXJ/Python_Projects/Models/Qwen3.5-9B` with vLLM `0.19.1` 
 
 Stage H also requires the `swanlab` Python package in `agent-lightning`; the verified environment uses SwanLab `0.8.2`.
 
-The launch script enables `--enable-auto-tool-choice --tool-call-parser hermes` for both diagnosis and expert inference. Prompts explicitly embed their function schema inside `<tools>` tags, and the custom Qwen3.5 chat template ignores the OpenAI `tools` request field so the policy stays on the raw Hermes JSON protocol. Diagnosis uses `<tool_call>{"name":"diagnose_degradation","arguments":{"primary_type":"fog","visual_evidence":[...]}}</tool_call>`; experts use `<tool_call>{"name":"restore_image","arguments":{"action":"..."}}</tool_call>`. The controller derives `route_to` from `primary_type`.
+Diagnosis and expert inference deliberately use separate protocol endpoints. `serve_qwen35.sh` keeps the trained diagnosis model on port `8000` with `--tool-call-parser hermes`; its prompt embeds the diagnosis schema and expects `<tool_call>{"name":"diagnose_degradation","arguments":{"primary_type":"fog","visual_evidence":[...]}}</tool_call>`. `serve_qwen35_expert.sh` serves an expert on port `8001` with the model-native Qwen3.5 template and `--tool-call-parser qwen3_coder`. Expert requests pass the standard OpenAI `tools` field, and the model emits `<tool_call><function=restore_image><parameter=action>...</parameter></function></tool_call>`. The controller derives `route_to` from the diagnosis `primary_type` and performs strict secondary validation on both protocols.
 
 ## Smoke Test
 
@@ -58,6 +59,22 @@ conda run -n agent-lightning \
 ```
 
 The command prints the final reward, selected expert, best image, trajectory path, and recorded span names.
+
+## LangGraph No-Model Smoke Test
+
+Run the parallel LangGraph implementation without loading diagnosis, expert, restoration, or IQA model weights:
+
+```bash
+conda run -n langgraph \
+  python examples/image_restoration_multi_agent/langgraph_smoke_test.py
+```
+
+The graph uses `ScriptedDiagnosisAgent`, Qwen3-format `ReplayExpertAgent` decisions,
+`CopyRestorationWorker`, `ScriptedEvaluator`, and `InMemorySaver`. It executes one diagnosis,
+routes to exactly one of four expert subgraphs, loops through restoration and IQA feedback,
+returns the historical best image, writes `trajectory.json`, and exposes the final checkpoint.
+The existing `ImageRestorationController` remains available as the behavioral baseline and
+the training entrypoints are unchanged by this no-model graph path.
 
 ## Real Model Smoke Test
 
@@ -74,7 +91,7 @@ The command starts model subprocesses in `verl`. Override the isolated interpret
 
 ## Stage E VLM Smoke Test
 
-Start Qwen3.5 on one GPU:
+Start the Hermes diagnosis endpoint on one GPU:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 conda run --no-capture-output -n agent-lightning \
@@ -96,7 +113,7 @@ CUDA_VISIBLE_DEVICES=1 conda run --no-capture-output -n agent-lightning \
 
 ## Stage F Expert Smoke Test
 
-Keep the same vLLM service running. First validate the complete multi-turn execution path with replayed Hermes decisions and real restoration/IQA models:
+Keep the diagnosis service on port `8000` running. First validate the complete multi-turn execution path with replayed Qwen3 native decisions and real restoration/IQA models; Replay does not require an expert model server:
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 conda run --no-capture-output -n agent-lightning \
@@ -108,7 +125,14 @@ CUDA_VISIBLE_DEVICES=1 conda run --no-capture-output -n agent-lightning \
   --actions focalnet_dehaze stop
 ```
 
-Then validate the untrained model's real expert request and controlled failure path:
+To validate a real expert request, start the native Qwen3 expert endpoint in another terminal (or on another GPU):
+
+```bash
+CUDA_VISIBLE_DEVICES=1 conda run --no-capture-output -n agent-lightning \
+  bash examples/image_restoration_multi_agent/serve_qwen35_expert.sh
+```
+
+Then run the expert request and controlled failure path:
 
 ```bash
 conda run --no-capture-output -n agent-lightning \
@@ -120,7 +144,7 @@ conda run --no-capture-output -n agent-lightning \
   --actions stop
 ```
 
-Both paths use the same strict parser and Controller. Replay proves that valid Hermes decisions can execute the multi-turn tool/IQA loop; `vlm_strict` records the untrained model's actual response and stops before the Worker when the response is invalid.
+Both paths use the same strict Qwen3 parser and Controller. Replay proves that valid native XML decisions can execute the multi-turn tool/IQA loop; `vlm_strict` prefers vLLM's OpenAI-compatible `message.tool_calls`, retains the raw response, and stops before the Worker when secondary validation fails.
 
 ## Stage G Four-Expert Matrix
 
@@ -185,9 +209,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 \
   bash examples/image_restoration_multi_agent/grpo/run_expert_grpo.sh fog --smoke
 ```
 
-Smoke runs use the YAML `swanlab.smoke_mode` setting, which defaults to `offline`; formal runs use `swanlab.mode`, which defaults to `online`. Because the current SFT policy can still omit Hermes calls, smoke mode retains each real VLM response but overrides the environment action with `scunet -> stop`. This smoke-only override guarantees two turns so latest-image feedback, trajectory reward broadcasting, response masks, and actor updates are exercised. Formal training never enables the override.
+Smoke runs use the YAML `swanlab.smoke_mode` setting, which defaults to `offline`; formal runs use `swanlab.mode`, which defaults to `online`. Because the current SFT policy can still omit native Qwen3 tool calls, smoke mode retains each real VLM response but overrides the environment action with `scunet -> stop`. This smoke-only override guarantees two turns so latest-image feedback, trajectory reward broadcasting, response masks, and actor updates are exercised. Formal training never enables the override.
 
-The verified trajectory-transition smoke previously retained four VLM turns as four independent visual transitions from two rollouts. The current trajectory configuration instead forces Agent Lightning to merge each rollout into one PPO row, matching the original VERL restoration training semantics. A lightweight prompt-image trace annotation still preserves the current image path even when the provider omits large multimodal prompt payloads from telemetry. Because the live expert prompt is currently rebuilt per step from compact state text, non-prefix turns are appended as text observation tokens and masked out of the policy loss; duplicated vision placeholder spans from those appended prompts are stripped so the trajectory keeps one visual slot instead of accumulating intermediate images. The first trajectory-mode run should monitor `n_unmerged_rollouts`, `n_triplets`, `n_stripped_vision_tokens`, and image-token alignment errors, with the target of one triplet per sampled rollout. This proves the training path, not restoration policy quality; before relying on a long formal run, monitor Hermes validity, group reward standard deviation, merge ratio, KL, and gradient norms during the first batches.
+The verified trajectory-transition smoke previously retained four VLM turns as four independent visual transitions from two rollouts. The current trajectory configuration instead forces Agent Lightning to merge each rollout into one PPO row, matching the original VERL restoration training semantics. A lightweight prompt-image trace annotation still preserves the current image path even when the provider omits large multimodal prompt payloads from telemetry. Because the live expert prompt is currently rebuilt per step from compact state text, non-prefix turns are appended as text observation tokens and masked out of the policy loss; duplicated vision placeholder spans from those appended prompts are stripped so the trajectory keeps one visual slot instead of accumulating intermediate images. The first trajectory-mode run should monitor `n_unmerged_rollouts`, `n_triplets`, `n_stripped_vision_tokens`, and image-token alignment errors, with the target of one triplet per sampled rollout. This proves the training path, not restoration policy quality; before relying on a long formal run, monitor Qwen3 tool-call validity, group reward standard deviation, merge ratio, KL, and gradient norms during the first batches.
 
 ## Stage H Formal GRPO
 
@@ -223,7 +247,7 @@ batch as soon as their restoration and IQA feedback is ready. This preserves mul
 introducing a global turn barrier that would make every trajectory wait for the slowest tool call.
 The launcher renders training-step and per-batch rollout completion as two stable terminal progress bars. The
 saved GRPO log contains compact progress snapshots instead of repeated `Completed x/y tasks` lines, and
-expected malformed Hermes outputs are collapsed from a traceback into one `invalid_tool_call` warning line.
+expected malformed Qwen3 tool outputs are collapsed from a traceback into one `invalid_tool_call` warning line.
 
 Formal runs use SwanLab project `image-restoration-multi-agent` with experiment names `fog-expert-grpo`, `snow-expert-grpo`, `rain-expert-grpo`, and `low-light-expert-grpo`. Each expert YAML exposes `swanlab.enabled`, `project_name`, `experiment_name`, `mode`, `smoke_mode`, and `log_dir`. Supported modes are `online`, `local`, `offline`, and `disabled`; setting `enabled: false` also removes SwanLab from the VERL logger list. Authenticate with `swanlab login` or `SWANLAB_API_KEY` before starting an online run. Credentials are intentionally not stored in YAML.
 
@@ -244,12 +268,14 @@ Each expert YAML is the experiment-facing source of truth rather than a minimal 
 | `schemas.py` | Strict Pydantic task, decision, result, step, and trajectory contracts |
 | `config.py` | YAML configuration loading and cross-expert consistency validation |
 | `tool_registry.py` | Shared action validation and OpenAI-compatible tool schema generation |
+| `workflow_protocols.py` | Lightweight dependency interfaces shared by Controller and LangGraph |
+| `workflow_logic.py` | Shared action validation, termination, and reward semantics |
 | `exceptions.py` | Workflow-specific exception hierarchy |
 | `agents/scripted.py` | Deterministic diagnosis and expert implementations |
-| `agents/prompts.py` | Versioned diagnosis/expert prompts and Hermes tool schemas |
+| `agents/prompts.py` | Existing versioned diagnosis and expert policy prompts; wire format comes from chat templates |
 | `agents/vlm_diagnosis.py` | Single-call OpenAI-compatible VLM adapter and strict response parser |
-| `agents/vlm_expert.py` | Per-turn expert VLM adapter, message-history construction, and strict Hermes parser |
-| `agents/replay.py` | Replay decision source that passes predefined Hermes responses through the production parser |
+| `agents/vlm_expert.py` | Per-turn expert VLM adapter, message-history construction, and strict Qwen3 parser |
+| `agents/replay.py` | Replay decision source that passes predefined Qwen3 XML responses through the production parser |
 | `diagnosis_metrics.py` | Stage E API, parsing, classification, confusion-matrix, and latency metrics |
 | `workers/copy_worker.py` | Copy-based mock restoration worker |
 | `workers/subprocess_worker.py` | Validated, timeout-aware adapter for restoration processes in `verl` |
@@ -261,10 +287,14 @@ Each expert YAML is the experiment-facing source of truth rather than a minimal 
 | `tool_runtime/service_client.py` | Standard-library HTTP client used by restoration and IQA adapters |
 | `controller.py` | Single-diagnosis fixed-expert workflow state machine |
 | `factory.py` | Deterministic and real per-task component construction |
+| `graph/` | Serializable state, nodes, routers, four expert subgraphs, and parent workflow builder |
+| `langgraph_factory.py` | Fresh no-model LangGraph dependency construction per task |
+| `langgraph_smoke_test.py` | CPU-only checkpointed LangGraph smoke test |
 | `lit_agent.py` | Deterministic and real Agent Lightning `LitAgent` wrappers |
 | `smoke_test.py` | No-GPU traced end-to-end smoke test |
 | `real_smoke_test.py` | GPU traced smoke test across `agent-lightning` and `verl` |
-| `serve_qwen35.sh` | vLLM launch command for the local Qwen3.5 checkpoint |
+| `serve_qwen35.sh` | Hermes vLLM launch command for the trained diagnosis model on port `8000` |
+| `serve_qwen35_expert.sh` | Qwen3-native vLLM launch command for an expert model on port `8001` |
 | `stage_e_smoke_test.py` | Traced real-VLM smoke test for both routing modes |
 | `stage_f_smoke_test.py` | Traced replay/real-VLM expert smoke test with real restoration and IQA components |
 | `stage_g_smoke_test.py` | Four-category Replay or strict-VLM validation matrix with isolated outputs |
@@ -277,10 +307,10 @@ Each expert YAML is the experiment-facing source of truth rather than a minimal 
 | `grpo/run_expert_grpo.sh` | Shared internal smoke/formal launcher used by both GPU topologies |
 | `grpo/run_expert_grpo_4gpu.sh` | Serial four-expert launcher with TP=4 and fail-fast behavior |
 | `grpo/run_expert_grpo_2gpu.sh` | Serial four-expert launcher with TP=2 and fail-fast behavior |
-| `grpo/render_training_log.py` | Compact terminal progress bars and single-line Hermes error rendering |
+| `grpo/render_training_log.py` | Compact terminal progress bars and single-line tool-call error rendering |
 | `grpo/configs/` | Independent Fog, Snow, Rain, and Low-light GRPO configurations |
 | `grpo/configs_2gpu/` | Independent two-GPU configurations and output locations for all four experts |
-| `grpo/templates/qwen35_hermes_nothink.jinja` | Qwen3.5 chat template aligned with the expert SFT prefix |
+| `grpo/templates/qwen35_native_tool_nothink.jinja` | Model-native Qwen3.5 XML tool template with no-thinking support |
 | `tests/` | Protocol, controller, subprocess, IQA, failure-path, VLM parsing, and trace tests |
 
 ## Output Contract

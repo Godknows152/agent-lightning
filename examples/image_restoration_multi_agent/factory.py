@@ -6,10 +6,11 @@ from typing import Mapping
 
 from agents import ScriptedDiagnosisAgent, ScriptedExpertAgent
 from config import ExampleConfig, RealExampleConfig
-from controller import ExpertAgent, ImageRestorationController
+from controller import ImageRestorationController
 from evaluators import PyiqaSubprocessEvaluator, ScriptedEvaluator
 from schemas import DEGRADATION_TO_EXPERT, ExpertName, RealRestorationTask, RestorationTask
 from tool_registry import ToolRegistry
+from workflow_protocols import ExpertAgent
 from workers import CopyRestorationWorker, SubprocessRestorationWorker
 
 

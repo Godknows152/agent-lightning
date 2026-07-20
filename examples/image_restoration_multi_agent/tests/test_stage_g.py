@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 import pytest
 from agents import ScriptedDiagnosisAgent, VLMDegradationDiagnosisAgent
+from agents.prompts import EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION
 from config import StageGExampleConfig, load_stage_g_example_config
 from controller import ExpertAgent, ImageRestorationController
 from evaluators import ScriptedEvaluator
@@ -271,6 +272,9 @@ async def test_all_four_strict_vlm_interfaces_record_identity_and_reject_invalid
 
     assert len(expert_client.completions.requests) == 4
     for expert_name, request in zip(ExpertName, expert_client.completions.requests, strict=True):
-        assert expert_name.value in request["messages"][0]["content"]
+        system_prompt = request["messages"][0]["content"]
+        assert EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION in system_prompt
+        assert expert_name.value not in system_prompt
+        assert "<function=restore_image>" not in system_prompt
         assert request["model"] == config.expert_resources[expert_name].served_model_name
-        assert request["tools"] == [registry.build_tool_schema()]
+        assert request["tools"] == [registry.build_tool_schema(include_stop=False)]

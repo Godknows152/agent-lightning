@@ -25,20 +25,20 @@ def test_parser_extracts_task_and_training_progress() -> None:
     assert training_line is None
 
 
-def test_parser_compacts_hermes_traceback_to_one_line() -> None:
+def test_parser_compacts_qwen3_traceback_to_one_line() -> None:
     parser = LogLineParser()
     error_line = (
         "\x1b[36m(vLLMHttpServer pid=2)\x1b[0m ERROR "
-        "[hermes_tool_parser.py:148] Error in extracting tool call from response.\n"
+        "[qwen3_coder_tool_parser.py:148] Error in extracting tool call from response.\n"
     )
     traceback_line = (
         "\x1b[36m(vLLMHttpServer pid=2)\x1b[0m ERROR "
-        "[hermes_tool_parser.py:148] json.decoder.JSONDecodeError: Expecting value\n"
+        "[qwen3_coder_tool_parser.py:148] ValueError: incomplete function tag\n"
     )
 
     assert parser.parse(error_line) == (
         None,
-        "[WARN] Hermes tool call parse failed; response marked invalid_tool_call.",
+        "[WARN] Qwen3 tool call parse failed; response marked invalid_tool_call.",
     )
     assert parser.parse(traceback_line) == (None, None)
 
