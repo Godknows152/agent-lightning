@@ -51,6 +51,10 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     freeze_vision_tower: true  # 冻结视觉编码塔参数，只训练语言模型侧 LoRA
     optim:  # 配置 Actor 优化器
       lr: 3.0e-5  # 设置优化器学习率
+      lr_scheduler_type: cosine  # 使用带线性预热的余弦衰减学习率调度器
+      lr_warmup_steps_ratio: 0.03  # 使用总训练步数的前三个百分点进行线性预热
+      min_lr_ratio: 0.1  # 将训练末期的最低学习率限制为基础学习率的十分之一
+      num_cycles: 0.5  # 在整个训练过程中执行一次标准半余弦下降
     entropy_coeff: 0.005  # 设置熵奖励系数，鼓励策略保持一定探索性
     calculate_entropy: true  # 在训练中计算并记录策略输出熵
     ppo_epochs: 1  # 每批 Rollout 数据执行一次 PPO 参数更新
@@ -117,7 +121,7 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
   nnodes: 1  # 使用一个计算节点进行训练
   save_freq: 5  # 每隔五个训练步骤保存一次检查点
   test_freq: 10  # 每隔十个训练步骤执行一次验证
-  total_epochs: 3  # 对训练数据执行三个完整训练轮次
+  total_epochs: 1  # 对训练数据执行一个完整训练轮次
   total_training_steps: null  # 不固定总步骤数，由数据量和 total_epochs 推导
   max_actor_ckpt_to_keep: 10  # 最多保留十个常规 Actor 检查点
   keep_best_validation_ckpt: true  # 额外保留验证指标最优的 Actor 检查点

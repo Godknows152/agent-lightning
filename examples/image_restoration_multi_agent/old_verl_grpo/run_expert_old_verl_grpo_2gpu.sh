@@ -23,6 +23,7 @@ Environment overrides:
   OLD_VERL_CUDA_VISIBLE_DEVICES=0,1
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
+  OLD_VERL_CLEAR_PENALIZED_SAMPLES=1  # clear the resolved output's penalized_samples before training
   OLD_VERL_SHOW_KNOWN_WARNINGS=1  # show otherwise-suppressed third-party warning spam
   OLD_VERL_RESUME_MODE=auto|disable|resume_path
   OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N  # adds the "_续" suffix
@@ -502,6 +503,20 @@ if [[ -n "${OUTPUT_DIR_OVERRIDE}" ]]; then
 fi
 if [[ -n "${SWANLAB_LOG_DIR_OVERRIDE}" ]]; then
   mkdir -p "${SWANLAB_LOG_DIR_OVERRIDE}"
+fi
+
+if [[ "${OLD_VERL_CLEAR_PENALIZED_SAMPLES:-1}" == "1" ]]; then
+  OUTPUT_DIR_ABS="$(realpath -m -- "${OUTPUT_DIR_OVERRIDE}")"
+  PENALIZED_SAMPLES_DIR="$(realpath -m -- "${OUTPUT_DIR_ABS}/penalized_samples")"
+  if [[ -z "${OUTPUT_DIR_ABS}" || "${OUTPUT_DIR_ABS}" == "/" || \
+        "$(dirname -- "${PENALIZED_SAMPLES_DIR}")" != "${OUTPUT_DIR_ABS}" || \
+        "$(basename -- "${PENALIZED_SAMPLES_DIR}")" != "penalized_samples" ]]; then
+    echo "Refusing to clear an unsafe penalized-samples directory: '${PENALIZED_SAMPLES_DIR}'" >&2
+    exit 2
+  fi
+  rm -rf -- "${PENALIZED_SAMPLES_DIR}"
+  mkdir -p -- "${PENALIZED_SAMPLES_DIR}"
+  echo "Cleared penalized samples: ${PENALIZED_SAMPLES_DIR}"
 fi
 
 if [[ "${OLD_VERL_CLEAR_INTERMEDIATE_IMAGES:-1}" == "1" ]]; then
