@@ -24,9 +24,10 @@ Environment overrides:
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
   OLD_VERL_SHOW_KNOWN_WARNINGS=1  # show otherwise-suppressed third-party warning spam
-  OLD_VERL_OUTPUT_SUFFIX=0702  # optional trainer output/name override; YAML wins when unset
-  OLD_VERL_RUN_TAG=fog_0702   # optional trainer output override; YAML wins when unset
-  OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional trainer output override; YAML wins when unset
+  OLD_VERL_RESUME_MODE=auto|disable|resume_path
+  OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N  # adds the "_续" suffix
+  OLD_VERL_EXPERIMENT_NAME=custom-name  # optional; standard name is <expert>_MMDD[_续]
+  OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional checkpoint output override; YAML wins when unset
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
   RAY_BIN=/home/LXJ/anaconda3/envs/verl/bin/ray
 EOF
@@ -71,6 +72,7 @@ LOG_DIR="${OLD_VERL_DIR}/log"
 CONFIG_DIR="${OLD_VERL_DIR}/config"
 CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
+RUN_NAMING_RESOLVER="${OLD_VERL_DIR}/scripts/resolve_training_run_name.py"
 LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
 TOOL_REGISTRY_PATH="${OLD_VERL_TOOL_REGISTRY_PATH:-${EXAMPLE_DIR}/config/tools.yaml}"
 INTERMEDIATE_DIR="${OLD_VERL_INTERMEDIATE_DIR:-/home/LXJ/tmp/agent_lightning_old_verl_restoration}"
@@ -115,26 +117,53 @@ EXPERIMENT_NAME_OVERRIDE="${OLD_VERL_EXPERIMENT_NAME:-}"
 OUTPUT_DIR_OVERRIDE="${OLD_VERL_OUTPUT_DIR:-}"
 SWANLAB_LOG_DIR_OVERRIDE="${OLD_VERL_SWANLAB_LOG_DIR:-}"
 SWANLAB_MODE_OVERRIDE=""
+RESUME_MODE_OVERRIDE="${OLD_VERL_RESUME_MODE:-}"
+RESUME_FROM_PATH_OVERRIDE="${OLD_VERL_RESUME_FROM_PATH:-}"
+OUTPUT_DIR_WAS_EXPLICIT=0
+RESUME_MODE_WAS_EXPLICIT=0
+RESUME_PATH_WAS_EXPLICIT=0
 
-if [[ -z "${OUTPUT_DIR_OVERRIDE}" ]]; then
-  if [[ -n "${OLD_VERL_RUN_TAG:-}" ]]; then
-    OUTPUT_DIR_OVERRIDE="${OLD_VERL_DIR}/outputs/${OLD_VERL_RUN_TAG}"
-  elif [[ -n "${OLD_VERL_OUTPUT_SUFFIX:-}" ]]; then
-    OUTPUT_DIR_OVERRIDE="${OLD_VERL_DIR}/outputs/${EXPERT}_${OLD_VERL_OUTPUT_SUFFIX}"
-  fi
+if [[ -n "${OUTPUT_DIR_OVERRIDE}" ]]; then
+  OUTPUT_DIR_WAS_EXPLICIT=1
 fi
-if [[ -z "${EXPERIMENT_NAME_OVERRIDE}" && -n "${OLD_VERL_OUTPUT_SUFFIX:-}" ]]; then
-  EXPERIMENT_NAME_OVERRIDE="${EXPERT}_grpo_${OLD_VERL_OUTPUT_SUFFIX}"
+if [[ -n "${RESUME_MODE_OVERRIDE}" ]]; then
+  RESUME_MODE_WAS_EXPLICIT=1
 fi
-if [[ -z "${SWANLAB_LOG_DIR_OVERRIDE}" && -n "${OUTPUT_DIR_OVERRIDE}" ]]; then
-  SWANLAB_LOG_DIR_OVERRIDE="${OUTPUT_DIR_OVERRIDE}/swanlab"
+if [[ -n "${RESUME_FROM_PATH_OVERRIDE}" ]]; then
+  RESUME_PATH_WAS_EXPLICIT=1
 fi
+
+# Treat equivalent Hydra CLI settings as naming inputs so the derived output
+# directory and SwanLab log directory cannot drift from the effective config.
+for override in "$@"; do
+  case "${override}" in
+    trainer.experiment_name=*)
+      EXPERIMENT_NAME_OVERRIDE="${override#trainer.experiment_name=}"
+      ;;
+    trainer.default_local_dir=*)
+      OUTPUT_DIR_OVERRIDE="${override#trainer.default_local_dir=}"
+      OUTPUT_DIR_WAS_EXPLICIT=1
+      ;;
+    trainer.resume_mode=*)
+      RESUME_MODE_OVERRIDE="${override#trainer.resume_mode=}"
+      RESUME_MODE_WAS_EXPLICIT=1
+      ;;
+    trainer.resume_from_path=*)
+      RESUME_FROM_PATH_OVERRIDE="${override#trainer.resume_from_path=}"
+      RESUME_PATH_WAS_EXPLICIT=1
+      if [[ "${RESUME_FROM_PATH_OVERRIDE}" == "null" ]]; then
+        RESUME_FROM_PATH_OVERRIDE=""
+      fi
+      ;;
+  esac
+done
 
 if [[ "${SMOKE}" == "1" ]]; then
   RUN_KIND="smoke"
-  if [[ -n "${EXPERIMENT_NAME_OVERRIDE}" ]]; then
-    EXPERIMENT_NAME_OVERRIDE="${EXPERIMENT_NAME_OVERRIDE}-smoke"
-  fi
+  RESUME_MODE_OVERRIDE="disable"
+  RESUME_FROM_PATH_OVERRIDE=""
+  RESUME_MODE_WAS_EXPLICIT=1
+  RESUME_PATH_WAS_EXPLICIT=1
   TRAIN_LIMIT_ARGS=(--limit "${OLD_VERL_SMOKE_TRAIN_LIMIT:-2}")
   VAL_LIMIT_ARGS=(--limit "${OLD_VERL_SMOKE_VAL_LIMIT:-2}")
   SWANLAB_MODE_OVERRIDE="offline"
@@ -166,6 +195,74 @@ if [[ ! -x "${RAY_BIN}" ]]; then
   echo "Ray executable not found or not executable: ${RAY_BIN}" >&2
   exit 1
 fi
+
+IFS=$'\t' read -r \
+  CONFIG_RESUME_MODE \
+  CONFIG_RESUME_FROM_PATH \
+  CONFIG_OUTPUT_DIR \
+  CONFIG_SWANLAB_LOG_DIR \
+  < <(
+    "${PYTHON_BIN}" - "${CONFIG_DIR}" "${CONFIG_NAME}" <<'PY'
+import sys
+from pathlib import Path
+
+from hydra import compose, initialize_config_dir
+
+with initialize_config_dir(version_base=None, config_dir=str(Path(sys.argv[1]).resolve())):
+    config = compose(config_name=sys.argv[2])
+
+resume_from_path = config.trainer.resume_from_path
+fields = (
+    str(config.trainer.resume_mode),
+    str(resume_from_path) if resume_from_path is not None else "-",
+    str(config.trainer.default_local_dir),
+    str(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR),
+)
+print("\t".join(fields))
+PY
+  )
+if [[ "${RESUME_MODE_WAS_EXPLICIT}" != "1" ]]; then
+  RESUME_MODE_OVERRIDE="${CONFIG_RESUME_MODE}"
+fi
+if [[ "${RESUME_PATH_WAS_EXPLICIT}" != "1" && "${CONFIG_RESUME_FROM_PATH}" != "-" ]]; then
+  RESUME_FROM_PATH_OVERRIDE="${CONFIG_RESUME_FROM_PATH}"
+fi
+if [[ -z "${OUTPUT_DIR_OVERRIDE}" ]]; then
+  OUTPUT_DIR_OVERRIDE="${CONFIG_OUTPUT_DIR}"
+fi
+if [[ -z "${SWANLAB_LOG_DIR_OVERRIDE}" && "${OUTPUT_DIR_WAS_EXPLICIT}" != "1" ]]; then
+  SWANLAB_LOG_DIR_OVERRIDE="${CONFIG_SWANLAB_LOG_DIR}"
+fi
+
+RUN_NAMING_ARGS=(
+  --expert "${EXPERT}"
+  --output-root "${OLD_VERL_DIR}/outputs"
+  --resume-mode "${RESUME_MODE_OVERRIDE}"
+  --output-dir "${OUTPUT_DIR_OVERRIDE}"
+)
+if [[ -n "${RESUME_FROM_PATH_OVERRIDE}" ]]; then
+  RUN_NAMING_ARGS+=(--resume-from-path "${RESUME_FROM_PATH_OVERRIDE}")
+fi
+if [[ -n "${EXPERIMENT_NAME_OVERRIDE}" ]]; then
+  RUN_NAMING_ARGS+=(--experiment-name "${EXPERIMENT_NAME_OVERRIDE}")
+fi
+IFS=$'\t' read -r \
+  EXPERIMENT_NAME_OVERRIDE \
+  OUTPUT_DIR_OVERRIDE \
+  RESOLVED_SWANLAB_LOG_DIR \
+  RESUME_FROM_PATH_OVERRIDE \
+  < <(cd "${ROOT}" && "${PYTHON_BIN}" "${RUN_NAMING_RESOLVER}" "${RUN_NAMING_ARGS[@]}")
+
+if [[ "${RESUME_FROM_PATH_OVERRIDE}" == "-" ]]; then
+  RESUME_FROM_PATH_OVERRIDE=""
+fi
+if [[ "${SMOKE}" == "1" ]]; then
+  EXPERIMENT_NAME_OVERRIDE="${EXPERIMENT_NAME_OVERRIDE}_smoke"
+fi
+if [[ -z "${SWANLAB_LOG_DIR_OVERRIDE}" ]]; then
+  SWANLAB_LOG_DIR_OVERRIDE="${RESOLVED_SWANLAB_LOG_DIR}"
+fi
+
 if [[ ! -d "${MODEL_PATH_OVERRIDE}" ]]; then
   echo "Model path not found: ${MODEL_PATH_OVERRIDE}" >&2
   exit 1
@@ -184,20 +281,25 @@ if [[ ! -s "${ADAPTER_PATH_OVERRIDE}/adapter_model.safetensors" ]]; then
 fi
 
 CONFIG_OVERRIDES+=(
-  "actor_rollout_ref.model.path=${MODEL_PATH_OVERRIDE}"
-  "actor_rollout_ref.model.lora_adapter_path=${ADAPTER_PATH_OVERRIDE}"
+  "actor_rollout_ref.model.path='${MODEL_PATH_OVERRIDE}'"
+  "actor_rollout_ref.model.lora_adapter_path='${ADAPTER_PATH_OVERRIDE}'"
+  "trainer.experiment_name='${EXPERIMENT_NAME_OVERRIDE}'"
+  "trainer.default_local_dir='${OUTPUT_DIR_OVERRIDE}'"
+  "trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR='${SWANLAB_LOG_DIR_OVERRIDE}'"
 )
 if [[ -n "${PROJECT_NAME_OVERRIDE}" ]]; then
-  CONFIG_OVERRIDES+=("trainer.project_name=${PROJECT_NAME_OVERRIDE}")
+  CONFIG_OVERRIDES+=("trainer.project_name='${PROJECT_NAME_OVERRIDE}'")
 fi
-if [[ -n "${EXPERIMENT_NAME_OVERRIDE}" ]]; then
-  CONFIG_OVERRIDES+=("trainer.experiment_name=${EXPERIMENT_NAME_OVERRIDE}")
-fi
-if [[ -n "${OUTPUT_DIR_OVERRIDE}" ]]; then
-  CONFIG_OVERRIDES+=("trainer.default_local_dir=${OUTPUT_DIR_OVERRIDE}")
-fi
-if [[ -n "${SWANLAB_LOG_DIR_OVERRIDE}" ]]; then
-  CONFIG_OVERRIDES+=("trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=${SWANLAB_LOG_DIR_OVERRIDE}")
+if [[ -n "${RESUME_FROM_PATH_OVERRIDE}" ]]; then
+  CONFIG_OVERRIDES+=(
+    "trainer.resume_mode=resume_path"
+    "trainer.resume_from_path='${RESUME_FROM_PATH_OVERRIDE}'"
+  )
+else
+  CONFIG_OVERRIDES+=(
+    "trainer.resume_mode=${RESUME_MODE_OVERRIDE}"
+    "trainer.resume_from_path=null"
+  )
 fi
 if [[ -n "${OLD_VERL_SWANLAB_MODE:-}" ]]; then
   SWANLAB_MODE_OVERRIDE="${OLD_VERL_SWANLAB_MODE}"
@@ -304,6 +406,10 @@ if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
     "${CONFIG_NAME}" \
     "${MODEL_PATH_OVERRIDE}" \
     "${ADAPTER_PATH_OVERRIDE}" \
+    "${EXPERIMENT_NAME_OVERRIDE}" \
+    "${OUTPUT_DIR_OVERRIDE}" \
+    "${SWANLAB_LOG_DIR_OVERRIDE}" \
+    "${RESUME_FROM_PATH_OVERRIDE}" \
     "${CONFIG_OVERRIDES[@]}" \
     "${HYDRA_OVERRIDES[@]}" \
     "$@" <<'PY'
@@ -316,7 +422,11 @@ config_dir = str(Path(sys.argv[1]).resolve())
 config_name = sys.argv[2]
 expected_model = str(Path(sys.argv[3]).resolve())
 expected_adapter = str(Path(sys.argv[4]).resolve())
-overrides = sys.argv[5:]
+expected_experiment_name = sys.argv[5]
+expected_output_dir = str(Path(sys.argv[6]).resolve())
+expected_swanlab_log_dir = str(Path(sys.argv[7]).resolve())
+expected_resume_path = str(Path(sys.argv[8]).resolve()) if sys.argv[8] else None
+overrides = sys.argv[9:]
 
 with initialize_config_dir(version_base=None, config_dir=config_dir):
     config = compose(config_name=config_name, overrides=overrides)
@@ -328,6 +438,26 @@ if actual_model != expected_model:
     errors.append(f"composed base model mismatch: {actual_model} != {expected_model}")
 if actual_adapter != expected_adapter:
     errors.append(f"composed adapter mismatch: {actual_adapter} != {expected_adapter}")
+if config.trainer.experiment_name != expected_experiment_name:
+    errors.append(
+        f"composed experiment_name={config.trainer.experiment_name!r}, "
+        f"expected {expected_experiment_name!r}"
+    )
+actual_output_dir = str(Path(config.trainer.default_local_dir).resolve())
+if actual_output_dir != expected_output_dir:
+    errors.append(f"composed output directory mismatch: {actual_output_dir} != {expected_output_dir}")
+actual_swanlab_log_dir = str(
+    Path(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR).resolve()
+)
+if actual_swanlab_log_dir != expected_swanlab_log_dir:
+    errors.append(
+        f"composed SwanLab log directory mismatch: {actual_swanlab_log_dir} != {expected_swanlab_log_dir}"
+    )
+actual_resume_path = config.trainer.resume_from_path
+if actual_resume_path is not None:
+    actual_resume_path = str(Path(actual_resume_path).resolve())
+if actual_resume_path != expected_resume_path:
+    errors.append(f"composed resume path mismatch: {actual_resume_path!r} != {expected_resume_path!r}")
 if config.actor_rollout_ref.model.lora_rank != 16:
     errors.append(f"composed lora_rank={config.actor_rollout_ref.model.lora_rank!r}, expected 16")
 if config.actor_rollout_ref.model.lora_alpha != 32:
@@ -362,7 +492,7 @@ for name, (value, expected) in micro_batch_sizes.items():
 if errors:
     raise SystemExit("Invalid composed RL config:\n- " + "\n- ".join(errors))
 PY
-  echo "Preflight passed for ${EXPERT}: actor and frozen KL reference use ${ADAPTER_PATH_OVERRIDE}"
+  echo "Preflight passed for ${EXPERT}: experiment=${EXPERIMENT_NAME_OVERRIDE} output=${OUTPUT_DIR_OVERRIDE}"
   exit 0
 fi
 
@@ -395,14 +525,14 @@ echo "Running old-verl ${RUN_KIND} GRPO for ${EXPERT} on CUDA_VISIBLE_DEVICES=${
 echo "Model:   ${MODEL_PATH_OVERRIDE}"
 echo "Adapter: ${ADAPTER_PATH_OVERRIDE}"
 echo "Data:    ${TRAIN_PARQUET} / ${VAL_PARQUET}"
-echo "Output:  ${OUTPUT_DIR_OVERRIDE:-configured by YAML}"
+echo "Output:  ${OUTPUT_DIR_OVERRIDE}"
 echo "Config:  ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
-echo "Resume:  configured by ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
+echo "Resume:  ${RESUME_FROM_PATH_OVERRIDE:-fresh run}"
 printf 'SwanLab: project=%s experiment=%s mode=%s log_dir=%s\n' \
   "${PROJECT_NAME_OVERRIDE:-configured by YAML}" \
-  "${EXPERIMENT_NAME_OVERRIDE:-configured by YAML}" \
+  "${EXPERIMENT_NAME_OVERRIDE}" \
   "${SWANLAB_MODE_OVERRIDE:-configured by YAML}" \
-  "${SWANLAB_LOG_DIR_OVERRIDE:-configured by YAML}"
+  "${SWANLAB_LOG_DIR_OVERRIDE}"
 
 cd "${ROOT}"
 "${PYTHON_BIN}" -u -m verl.trainer.main_ppo \

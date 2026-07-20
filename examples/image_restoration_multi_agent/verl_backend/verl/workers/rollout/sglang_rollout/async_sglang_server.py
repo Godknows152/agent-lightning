@@ -25,12 +25,7 @@ import sglang.srt.entrypoints.engine
 import torch
 from packaging import version
 from ray.actor import ActorHandle
-from sglang.srt.entrypoints.http_server import (
-    ServerArgs,
-    _GlobalState,
-    app,
-    set_global_state,
-)
+from sglang.srt.entrypoints.http_server import ServerArgs, _GlobalState, app, set_global_state
 from sglang.srt.managers.io_struct import (
     ContinueGenerationReqInput,
     GenerateReqInput,
@@ -39,6 +34,7 @@ from sglang.srt.managers.io_struct import (
     ResumeMemoryOccupationReqInput,
 )
 from sglang.srt.managers.tokenizer_manager import ServerStatus
+
 from verl.utils.config import omega_conf_to_dataclass
 from verl.utils.device import get_visible_devices_keyword
 from verl.utils.net_utils import get_free_port, is_valid_ipv6_address
@@ -53,6 +49,9 @@ logger = logging.getLogger(__file__)
 logger.setLevel(logging.INFO)
 
 visible_devices_keyword = get_visible_devices_keyword()
+
+# Keep these request-level stop tokens explicit instead of inferring them from the model configuration.
+SGLANG_STOP_TOKEN_IDS = (248046, 248044)
 
 
 class SGLangHttpServer:
@@ -411,6 +410,7 @@ class SGLangHttpServer:
             processor=self.model_config.processor,
             disable_multimodal_special_token_generation=self.config.disable_multimodal_special_token_generation,
         )
+        sampling_params["stop_token_ids"] = list(SGLANG_STOP_TOKEN_IDS)
         sampling_params["max_new_tokens"] = max_new_tokens
         return_logprob = sampling_params.pop("logprobs", False)
 

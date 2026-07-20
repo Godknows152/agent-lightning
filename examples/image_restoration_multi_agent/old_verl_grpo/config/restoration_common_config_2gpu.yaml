@@ -106,7 +106,7 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
     - console  # 将训练指标打印到终端及主日志
     - swanlab  # 将训练指标记录到 SwanLab
   project_name: 4expert_grpo  # 设置实验跟踪平台中的项目名称
-  experiment_name: fog_0716  # 设置默认实验名称，各专家配置会覆盖
+  experiment_name: "fog_${now:%m%d}"  # 默认按“专家名_月日”生成，各专家配置会覆盖专家名
   resume_mode: auto  # 自动检查输出目录并决定是否从已有检查点恢复
   resume_from_path: null  # 不显式指定恢复路径，由自动恢复逻辑选择检查点
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716  # 保存检查点与训练产物的默认目录

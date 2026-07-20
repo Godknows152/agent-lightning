@@ -21,7 +21,7 @@ actor_rollout_ref:
     lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/snow
 
 trainer:
-  experiment_name: snow_from_sft_lora_0718
+  experiment_name: "snow_${now:%m%d}"
   resume_mode: auto
   resume_from_path: null
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/snow_from_sft_lora_0718
