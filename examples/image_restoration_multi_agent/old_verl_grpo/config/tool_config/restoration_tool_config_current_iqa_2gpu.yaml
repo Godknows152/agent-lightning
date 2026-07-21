@@ -26,7 +26,8 @@ tools:
       tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
       external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
       restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py
-      prompt_min_stop_tool_calls: 3
+      # Hide stop until five successful image-restoration actions have completed.
+      prompt_min_stop_tool_calls: 5
 
       use_iqa: true
       iqa_devices: [cuda:0, cuda:1]
@@ -36,7 +37,6 @@ tools:
       iqa_weight_map_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
 
       reward_mode: step_mixed_v1
-      suppress_tool_call_reward: false
       alpha: 0.9
       reward_scale: 4.0
       final_iqa_reward_scale: 4.0
@@ -46,7 +46,8 @@ tools:
       repeat_action_penalty: 0.75
       repeat_low_gain_penalty: 2.0
       repeat_low_gain_threshold: 0.12
-      stop_min_step: 3
+      # Execute earlier stop calls with stop_early_penalty; normal stop scoring starts at step five.
+      stop_min_step: 5
       stop_iqa_delta_threshold: 0.6
       stop_success_reward: 1.8
       stop_partial_reward: 0.6

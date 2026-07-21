@@ -876,9 +876,6 @@ class RestorationTool(BaseTool):
             raise ValueError(
                 f"Unsupported reward_mode={self.reward_mode!r}; " f"expected one of {sorted(SUPPORTED_REWARD_MODES)}"
             )
-        self.suppress_tool_call_reward = bool(
-            config.get("suppress_tool_call_reward", self.reward_mode == REWARD_MODE_FINAL_IQA_V2)
-        )
         self.alpha = float(config.get("alpha", 0.9))  # marginal-improvement weight
         self.beta = 1.0 - self.alpha  # identity-improvement weight
         self.reward_scale = float(config.get("reward_scale", 1.0))
@@ -967,7 +964,6 @@ class RestorationTool(BaseTool):
             f"worker_devices={self.worker_devices}, iqa_devices={self.iqa_devices}, "
             f"use_iqa={self.use_iqa}, normalize_iqa_scores={self.normalize_iqa_scores}, "
             f"reward_mode={self.reward_mode}, "
-            f"suppress_tool_call_reward={self.suppress_tool_call_reward}, "
             f"alpha={self.alpha}, reward_scale={self.reward_scale}, "
             f"final_iqa_reward_scale={self.final_iqa_reward_scale}, "
             f"final_iqa_regression_penalty_scale={self.final_iqa_regression_penalty_scale}, "
@@ -1769,8 +1765,6 @@ class RestorationTool(BaseTool):
             }
             if cache_key is not None:
                 metrics["tool_result_cache_key"] = cache_key
-            if self.suppress_tool_call_reward:
-                metrics["skip_tool_call_reward"] = True
             return response, reward, metrics
 
         except Exception as e:

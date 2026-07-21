@@ -890,13 +890,8 @@ async def evaluate_sample(
             )
 
             if not tool_calls:
-                no_tool_penalty = ToolAgentLoop.EARLY_STOP_PENALTY
+                no_tool_penalty = ToolAgentLoop.NO_TOOL_CALL_PENALTY
                 tool_rewards.append(float(no_tool_penalty))
-                if len(response_ids) > ToolAgentLoop.NO_TOOL_LENGTH_THRESHOLD:
-                    denom = max(1, config.response_length - ToolAgentLoop.NO_TOOL_LENGTH_THRESHOLD)
-                    ratio = (len(response_ids) - ToolAgentLoop.NO_TOOL_LENGTH_THRESHOLD) / denom
-                    ratio = max(0.0, min(1.0, float(ratio)))
-                    tool_rewards.append(float(-ToolAgentLoop.NO_TOOL_LENGTH_PENALTY_ALPHA * ratio))
                 termination_reason = "no_tool_call"
                 break
 
@@ -909,8 +904,7 @@ async def evaluate_sample(
                 tool_elapsed = time.perf_counter() - tool_start
 
                 tool_metrics = tool_metrics or {}
-                tool_call_bonus = 0.0 if tool_metrics.get("skip_tool_call_reward") else ToolAgentLoop.TOOL_CALL_REWARD
-                effective_reward = float(tool_reward + tool_call_bonus)
+                effective_reward = float(tool_reward)
                 tool_rewards.append(effective_reward)
 
                 action = tool_metrics.get("action")
@@ -933,7 +927,6 @@ async def evaluate_sample(
                     "requested_arguments": call.arguments,
                     "tool_elapsed_s": tool_elapsed,
                     "tool_reward": float(tool_reward),
-                    "tool_call_bonus": float(tool_call_bonus),
                     "effective_reward": effective_reward,
                     "tool_response_text": tool_response.text,
                     "named_iqa_scores": step_iqa_scores,

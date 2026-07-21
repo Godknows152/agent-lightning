@@ -79,8 +79,10 @@ class AgentData:
         self.turn_scores: list[float] = []
         self.tool_rewards: list[float] = []
         # IQA-only reward for successful image-restoration actions. This excludes
-        # the fixed tool-call bonus and all non-image reward shaping.
+        # all non-image reward shaping.
         self.pure_image_restoration_rewards: list[float] = []
+        # Reward or penalty returned by an executed stop action.
+        self.stop_rewards: list[float] = []
         self.user_turns = 0
         self.assistant_turns = 0
         self.total_tool_calls = 0
@@ -100,11 +102,8 @@ class AgentData:
 
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
-    EARLY_STOP_PENALTY = -10.0
-    MALFORMED_TOOL_CALL_PENALTY = -10.0
-    TOOL_CALL_REWARD = 2.0
-    NO_TOOL_LENGTH_THRESHOLD = 256
-    NO_TOOL_LENGTH_PENALTY_ALPHA = 3.0
+    NO_TOOL_CALL_PENALTY = -5.0
+    MALFORMED_TOOL_CALL_PENALTY = -5.0
     FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = -1.0
     TOOL_CALL_START_TOKEN = "<tool_call>"
     TOOL_CALL_END_TOKEN = "</tool_call>"
@@ -192,21 +191,29 @@ class ToolAgentLoop(AgentLoopBase):
             return
         agent_data.pure_image_restoration_rewards.append(value)
 
-    def _unproductive_response_length_penalty(self, response_len: int) -> float | None:
-        """Return the existing scaled length penalty for a long unproductive response."""
+    @staticmethod
+    def _finalize_restoration_reward_components(agent_data: AgentData) -> dict[str, float]:
+        """Partition the complete trajectory reward into three exhaustive components."""
 
-        if response_len <= self.NO_TOOL_LENGTH_THRESHOLD:
-            return None
-        denom = max(1, self.response_length - self.NO_TOOL_LENGTH_THRESHOLD)
-        length_ratio = (response_len - self.NO_TOOL_LENGTH_THRESHOLD) / denom
-        length_ratio = max(0.0, min(1.0, float(length_ratio)))
-        return -self.NO_TOOL_LENGTH_PENALTY_ALPHA * length_ratio
+        pure_image_reward = float(sum(agent_data.pure_image_restoration_rewards))
+        stop_reward = float(sum(agent_data.stop_rewards))
+        trajectory_reward = float(sum(agent_data.tool_rewards)) if agent_data.tool_rewards else 0.0
+        # This signed residual includes every non-IQA, non-stop contribution,
+        # including penalties, affinity shaping, and any reward clipping delta.
+        other_penalty = trajectory_reward - pure_image_reward - stop_reward
+        components = {
+            "pure_image_restoration_reward": pure_image_reward,
+            "stop_reward": stop_reward,
+            "other_penalty": other_penalty,
+        }
+        agent_data.extra_fields.update(components)
+        return components
 
     def _apply_no_tool_call_penalty(self, agent_data: AgentData, response_len: int, reason: str) -> None:
-        """Apply the heavy no-tool penalty, plus length penalty for long no-tool generations."""
+        """Apply one fixed penalty when a response contains no tool call."""
 
-        agent_data.tool_rewards.append(self.EARLY_STOP_PENALTY)
-        agent_data.extra_fields["no_tool_call_penalty"] = self.EARLY_STOP_PENALTY
+        agent_data.tool_rewards.append(self.NO_TOOL_CALL_PENALTY)
+        agent_data.extra_fields["no_tool_call_penalty"] = self.NO_TOOL_CALL_PENALTY
         agent_data.extra_fields["no_tool_call_penalty_applied"] = True
         agent_data.extra_fields["no_tool_call_penalty_reason"] = reason
         agent_data.extra_fields["no_tool_call_response_length"] = response_len
@@ -214,22 +221,10 @@ class ToolAgentLoop(AgentLoopBase):
         self._record_penalty(
             agent_data,
             reason="no_tool_call",
-            value=self.EARLY_STOP_PENALTY,
+            value=self.NO_TOOL_CALL_PENALTY,
             model_response=response_text,
             details={"trigger": reason, "response_length": response_len},
         )
-
-        no_tool_length_penalty = self._unproductive_response_length_penalty(response_len)
-        if no_tool_length_penalty is not None:
-            agent_data.tool_rewards.append(no_tool_length_penalty)
-            agent_data.extra_fields["no_tool_length_penalty"] = no_tool_length_penalty
-            self._record_penalty(
-                agent_data,
-                reason="unproductive_response_too_long",
-                value=no_tool_length_penalty,
-                model_response=response_text,
-                details={"context": "no_tool_call", "response_length": response_len},
-            )
 
     @staticmethod
     def _record_invalid_tool_call(
@@ -255,7 +250,6 @@ class ToolAgentLoop(AgentLoopBase):
         """Apply the heavy penalty to an attempted tool call whose XML could not be parsed."""
 
         agent_data.tool_rewards.append(self.MALFORMED_TOOL_CALL_PENALTY)
-        penalty_total = self.MALFORMED_TOOL_CALL_PENALTY
         response_text = self.tokenizer.decode(agent_data.response_ids)
         self._record_penalty(
             agent_data,
@@ -264,22 +258,10 @@ class ToolAgentLoop(AgentLoopBase):
             model_response=response_text,
             details={"response_length": response_len},
         )
-        invalid_tool_length_penalty = self._unproductive_response_length_penalty(response_len)
-        if invalid_tool_length_penalty is not None:
-            agent_data.tool_rewards.append(invalid_tool_length_penalty)
-            agent_data.extra_fields["invalid_tool_length_penalty"] = invalid_tool_length_penalty
-            penalty_total += invalid_tool_length_penalty
-            self._record_penalty(
-                agent_data,
-                reason="unproductive_response_too_long",
-                value=invalid_tool_length_penalty,
-                model_response=response_text,
-                details={"context": "malformed_tool_call_xml", "response_length": response_len},
-            )
         self._record_invalid_tool_call(
             agent_data,
             reason="malformed_tool_call_xml",
-            penalty=penalty_total,
+            penalty=self.MALFORMED_TOOL_CALL_PENALTY,
             response_len=response_len,
         )
 
@@ -471,7 +453,9 @@ class ToolAgentLoop(AgentLoopBase):
                 "ExpertName": ExpertName,
                 "registry": registry,
                 "registry_path": str(registry_path),
-                "min_stop_tool_calls": int(tool_config.get("prompt_min_stop_tool_calls", 3)),
+                "min_stop_tool_calls": int(
+                    tool_config.get("prompt_min_stop_tool_calls", tool_config.get("stop_min_step", 3))
+                ),
                 "build_initial_system": build_expert_single_step_sft_system_prompt,
                 "build_initial_user": build_expert_single_step_sft_user_prompt,
                 "build_state": build_expert_state_prompt,
@@ -531,6 +515,7 @@ class ToolAgentLoop(AgentLoopBase):
         expert_name = self._restoration_expert_name(agent_data)
         step_index = len(getattr(agent_data, "current_prompt_history", []))
         min_stop_tool_calls = int(prompt_config["min_stop_tool_calls"])
+        completed_restoration_actions = step_index
 
         if step_index == 0:
             include_stop = False
@@ -542,7 +527,7 @@ class ToolAgentLoop(AgentLoopBase):
                 {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
             ]
         else:
-            include_stop = agent_data.total_tool_calls >= min_stop_tool_calls
+            include_stop = completed_restoration_actions >= min_stop_tool_calls
             user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
             if include_stop:
                 user_prompt += (
@@ -550,7 +535,7 @@ class ToolAgentLoop(AgentLoopBase):
                     "to improve the historical best image."
                 )
             else:
-                remaining_tool_calls = max(0, min_stop_tool_calls - agent_data.total_tool_calls)
+                remaining_tool_calls = max(0, min_stop_tool_calls - completed_restoration_actions)
                 user_prompt += (
                     "\n\nThe stop action is not available yet. Continue with one non-stop restoration action; "
                     f"{remaining_tool_calls} more restoration tool call(s) are required before stop becomes available."
@@ -692,8 +677,6 @@ class ToolAgentLoop(AgentLoopBase):
                         response_len=response_len,
                         reason="trajectory_ended_without_tool_call",
                     )
-                no_tool_penalty_applied = bool(agent_data.extra_fields.get("no_tool_call_penalty_applied", False))
-
                 # Expose decomposed reward parts for easier diagnosis in logs.
                 # Trajectory-level duplicate penalty: penalize choosing the same
                 # tool multiple times across the whole trajectory (not just
@@ -722,16 +705,20 @@ class ToolAgentLoop(AgentLoopBase):
                         details={"repeated_action_counts": agent_data.extra_fields["trajectory_repeat_counts"]},
                     )
 
+                components = self._finalize_restoration_reward_components(agent_data)
+                pure_image_reward = components["pure_image_restoration_reward"]
+                stop_reward = components["stop_reward"]
+                other_penalty = components["other_penalty"]
+                trajectory_reward = float(sum(agent_data.tool_rewards)) if agent_data.tool_rewards else 0.0
                 agent_data.extra_fields["reward_components"] = {
-                    "tool_call_reward_per_step": self.TOOL_CALL_REWARD,
-                    "early_stop_penalty": self.EARLY_STOP_PENALTY if no_tool_penalty_applied else 0.0,
+                    "no_tool_call_penalty": float(agent_data.extra_fields.get("no_tool_call_penalty", 0.0)),
                     "invalid_tool_call_penalty": float(agent_data.extra_fields.get("invalid_tool_call_penalty", 0.0)),
-                    "no_tool_length_threshold": self.NO_TOOL_LENGTH_THRESHOLD,
-                    "no_tool_length_penalty_alpha": self.NO_TOOL_LENGTH_PENALTY_ALPHA,
                     "response_length": response_len,
                     "trajectory_repeat_penalty": trajectory_repeat_penalty,
-                    "pure_image_restoration_reward_sum": float(sum(agent_data.pure_image_restoration_rewards)),
-                    "tool_reward_sum": float(sum(agent_data.tool_rewards)) if agent_data.tool_rewards else 0.0,
+                    "pure_image_restoration_reward": pure_image_reward,
+                    "stop_reward": stop_reward,
+                    "other_penalty": other_penalty,
+                    "tool_reward_sum": trajectory_reward,
                 }
 
             # Finalize output
@@ -761,6 +748,7 @@ class ToolAgentLoop(AgentLoopBase):
                     "turn_scores": agent_data.turn_scores,
                     "tool_rewards": agent_data.tool_rewards,
                     "pure_image_restoration_rewards": agent_data.pure_image_restoration_rewards,
+                    "stop_rewards": agent_data.stop_rewards,
                 }
             )
             return output
@@ -953,13 +941,15 @@ class ToolAgentLoop(AgentLoopBase):
             if tool_reward is not None:
                 tool_metrics = tool_metrics or {}
                 self._record_pure_image_restoration_reward(agent_data, tool_metrics)
-                tool_call_reward = 0.0 if tool_metrics.get("skip_tool_call_reward") else self.TOOL_CALL_REWARD
-                agent_data.tool_rewards.append(tool_reward + tool_call_reward)
+                reward_value = float(tool_reward)
+                agent_data.tool_rewards.append(reward_value)
                 # Record action name for trajectory-level duplicate penalty
                 action_name = tool_metrics.get("action")
+                if getattr(agent_data, "data_source", "") == "restoration" and action_name == "stop":
+                    agent_data.stop_rewards.append(reward_value)
                 if action_name:
                     agent_data.action_history.append(action_name)
-                if use_current_restoration_prompt:
+                if use_current_restoration_prompt and not tool_metrics.get("error"):
                     self._append_current_history_feedback(agent_data, tool_call_name, tool_metrics)
 
         if returned_images_this_turn:

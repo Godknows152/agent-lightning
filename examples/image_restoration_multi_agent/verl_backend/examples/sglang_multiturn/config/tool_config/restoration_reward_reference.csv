@@ -6,7 +6,7 @@ reward_clip_range,"[-10,10]",奖励裁剪,"最终 reward 的裁剪范围","防�
 repeat_action_penalty,-0.75,重复惩罚,"连续重复同一工具时每次额外扣分","每多连续重复 1 次扣 0.75，属于中到强惩罚","连续重复同一动作时","YAML 配置"
 repeat_low_gain_penalty,-2.0,低增益重复惩罚,"当当前步增益已很小却仍重复同一工具时追加扣分","每多连续重复 1 次再扣 2.0，强力压制低增益重复调用","marginal 小且重复动作时","YAML 配置"
 repeat_low_gain_threshold,0.12,平台阈值,"判定当前步边际提升是否已进入平台期的阈值","约 0.12 个加权 z-score 单位；低于它说明继续重复同一工具的收益已偏小","每次非 stop 工具调用时","YAML 配置"
-stop_min_step,4,停止门槛,"在第 4 步之前调用 stop 会被视为过早停止","整数步数门槛；用于避免模型一开始就停","执行 stop 动作时","YAML 配置"
+stop_min_step,5,停止门槛,"完成 5 次修复之前调用 stop 会执行并受到提前停止惩罚","整数步数门槛；用于避免模型一开始就停","执行 stop 动作时","YAML 配置"
 stop_iqa_delta_threshold,0.6,停止门槛,"判定相对原图提升是否已足够好的阈值","约 0.6 个加权 z-score 单位；达到后 good_enough=true","执行 stop 动作时","YAML 配置"
 stop_success_reward,1.8,停止奖励,"同时满足 good_enough 和 plateau 时的停止奖励","中等正奖励；应低于一次强有效工具调用的典型收益","执行 stop 且两个条件都满足时","YAML 配置"
 stop_partial_reward,0.6,停止奖励,"只满足 good_enough 或 plateau 其中之一时的停止奖励","弱正奖励；鼓励边界情况下合理停止","执行 stop 且只满足一个条件时","YAML 配置"

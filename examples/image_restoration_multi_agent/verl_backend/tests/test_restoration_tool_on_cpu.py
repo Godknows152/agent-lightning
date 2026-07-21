@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from verl.tools.restoration_tool import RestorationTool
 from verl.tools.schemas import (
@@ -147,7 +149,6 @@ def test_final_iqa_v2_rewards_only_new_best_iqa_on_cpu():
         best_identity_delta=first_best["best_identity_delta"],
     )
 
-    assert tool.suppress_tool_call_reward is True
     assert first_best["best_improvement"] == pytest.approx(0.10)
     assert first_best["reward"] == pytest.approx(0.35)
     assert regression["best_improvement"] == pytest.approx(0.0)
@@ -178,6 +179,35 @@ def test_stop_reward_prefers_plateau_after_good_enough_progress_on_cpu():
     assert plateau_stop["plateau"] is True
     assert plateau_stop["good_enough"] is True
     assert premature_stop["reward"] == pytest.approx(-0.5)
+
+
+def test_stop_before_five_steps_executes_with_early_penalty_on_cpu():
+    tool = _build_tool(
+        stop_min_step=5,
+        stop_early_penalty=-1.2,
+        stop_iqa_delta_threshold=0.25,
+        stop_success_reward=1.8,
+        stop_partial_reward=0.6,
+        stop_continue_penalty=-0.4,
+    )
+    tool._instance_dict["test-instance"] = {
+        "step": 4,
+        "scores_history": [[1.0] * 5],
+        "identity_scores": [1.0] * 5,
+        "weights": [0.2] * 5,
+        "rewards_history": [0.1] * 4,
+        "best_identity_delta": 0.0,
+    }
+
+    response, reward, metrics = asyncio.run(tool.execute("test-instance", {"action": "stop"}))
+
+    assert reward == pytest.approx(-1.2)
+    assert metrics["action"] == "stop"
+    assert metrics["step"] == 4
+    assert "error" not in metrics
+    assert "Restoration stopped after 4 step(s)" in response.text
+    assert tool._instance_dict["test-instance"]["step"] == 4
+    assert tool._instance_dict["test-instance"]["rewards_history"][-1] == pytest.approx(-1.2)
 
 
 def test_feedback_calls_out_repeated_low_gain_pattern_on_cpu():

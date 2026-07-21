@@ -81,11 +81,10 @@ class TestRestorationPenaltyMetrics(unittest.TestCase):
         penalty_records = np.empty(4, dtype=object)
         penalty_records[:] = [
             [
-                {"reason": "no_tool_call", "value": -10.0},
-                {"reason": "unproductive_response_too_long", "value": -1.0},
+                {"reason": "no_tool_call", "value": -5.0},
             ],
             [
-                {"reason": "malformed_tool_call_xml", "value": -10.0},
+                {"reason": "malformed_tool_call_xml", "value": -5.0},
                 {"reason": "forged_user_or_assistant_role_after_tool_call", "value": -1.0},
             ],
             [
@@ -105,7 +104,6 @@ class TestRestorationPenaltyMetrics(unittest.TestCase):
         metrics = compute_restoration_penalty_metrics(batch)
 
         self.assertEqual(metrics["restoration_penalty/no_tool_call_count"], 1)
-        self.assertEqual(metrics["restoration_penalty/unproductive_response_too_long_count"], 1)
         self.assertEqual(metrics["restoration_penalty/malformed_tool_call_xml_count"], 1)
         self.assertEqual(metrics["restoration_penalty/invalid_restoration_action_count"], 1)
         self.assertEqual(metrics["restoration_penalty/unknown_tool_name_count"], 1)
@@ -114,28 +112,40 @@ class TestRestorationPenaltyMetrics(unittest.TestCase):
             1,
         )
         self.assertEqual(metrics["restoration_penalty/repeated_restoration_action_count"], 2)
-        self.assertEqual(len(metrics), 7)
+        self.assertEqual(len(metrics), 6)
 
 
 class TestRestorationRewardMetrics(unittest.TestCase):
-    """Tests for IQA-only restoration reward metrics."""
+    """Tests for the three exhaustive trajectory reward components."""
 
-    def test_aggregates_per_trajectory_pure_image_rewards(self):
-        pure_rewards = np.empty(4, dtype=object)
-        pure_rewards[:] = [[0.2, -0.1], [0.5], [], None]
+    def test_aggregates_three_reward_components_per_trajectory(self):
+        pure_rewards = np.array([1.0, 2.0, 0.0, None], dtype=object)
+        stop_rewards = np.array([-1.2, 0.0, 0.6, None], dtype=object)
+        other_penalties = np.array([-0.5, -5.0, 0.0, None], dtype=object)
         batch = DataProto(
             batch=TensorDict({}, batch_size=[4]),
-            non_tensor_batch={"pure_image_restoration_rewards": pure_rewards},
+            non_tensor_batch={
+                "pure_image_restoration_reward": pure_rewards,
+                "stop_reward": stop_rewards,
+                "other_penalty": other_penalties,
+            },
         )
 
         metrics = compute_restoration_reward_metrics(batch)
 
-        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_mean"], 0.2)
-        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_std"], 0.21602468994692867)
-        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_min"], 0.0)
-        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_max"], 0.5)
-        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_per_action_mean"], 0.2)
-        self.assertEqual(metrics["restoration_reward/image_restoration_action_count"], 3)
+        self.assertEqual(
+            set(metrics),
+            {
+                "restoration_reward/pure_image_reward_mean",
+                "restoration_reward/stop_reward_mean",
+                "restoration_reward/other_penalty_mean",
+            },
+        )
+        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_mean"], 1.0)
+        np.testing.assert_allclose(metrics["restoration_reward/stop_reward_mean"], -0.2)
+        np.testing.assert_allclose(metrics["restoration_reward/other_penalty_mean"], -11.0 / 6.0)
+        total_rewards = np.array([1.0 - 1.2 - 0.5, 2.0 - 5.0, 0.6])
+        np.testing.assert_allclose(sum(metrics.values()), total_rewards.mean())
 
     def test_returns_empty_without_recorded_field(self):
         batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})

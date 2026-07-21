@@ -269,7 +269,6 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
 
 RESTORATION_PENALTY_METRIC_NAMES = {
     "no_tool_call": "no_tool_call_count",
-    "unproductive_response_too_long": "unproductive_response_too_long_count",
     "malformed_tool_call_xml": "malformed_tool_call_xml_count",
     "invalid_restoration_action": "invalid_restoration_action_count",
     "unknown_tool_name": "unknown_tool_name_count",
@@ -330,44 +329,61 @@ def compute_restoration_penalty_metrics(batch: DataProto) -> dict[str, Any]:
 
 
 def compute_restoration_reward_metrics(batch: DataProto) -> dict[str, Any]:
-    """Aggregate per-trajectory IQA-only restoration rewards for experiment tracking."""
+    """Aggregate the three exhaustive trajectory reward components for tracking."""
 
-    values = batch.non_tensor_batch.get("pure_image_restoration_rewards")
-    if values is None or len(batch) == 0:
+    batch_size = len(batch)
+    if batch_size == 0:
         return {}
 
-    trajectory_rewards: list[float] = []
-    action_rewards: list[float] = []
-    for item in np.asarray(values, dtype=object):
-        if item is None:
+    field_names = ("pure_image_restoration_reward", "stop_reward", "other_penalty")
+    arrays: dict[str, np.ndarray | None] = {}
+    for field_name in field_names:
+        values = batch.non_tensor_batch.get(field_name)
+        if values is None:
+            arrays[field_name] = None
             continue
-        if not isinstance(item, (list, tuple, np.ndarray)):
-            logger.warning("Expected pure_image_restoration_rewards to be a sequence, got %r", type(item))
+        array = np.asarray(values, dtype=object)
+        if array.shape == ():
+            array = np.full(batch_size, array.item(), dtype=object)
+        if len(array) != batch_size:
+            logger.warning("Expected %s length %s, got %s; ignoring field", field_name, batch_size, len(array))
+            arrays[field_name] = None
             continue
-        valid_rewards = []
-        for reward in item:
+        arrays[field_name] = array
+
+    if all(array is None for array in arrays.values()):
+        return {}
+
+    components = {field_name: [] for field_name in field_names}
+    for index in range(batch_size):
+        sample_values: dict[str, float] = {}
+        has_component = False
+        for field_name, array in arrays.items():
+            item = None if array is None else array[index]
+            if item is None:
+                sample_values[field_name] = 0.0
+                continue
             try:
-                value = float(reward)
+                value = float(item)
             except (TypeError, ValueError):
+                sample_values[field_name] = 0.0
                 continue
             if np.isfinite(value):
-                valid_rewards.append(value)
-        trajectory_rewards.append(float(sum(valid_rewards)))
-        action_rewards.extend(valid_rewards)
+                sample_values[field_name] = value
+                has_component = True
+            else:
+                sample_values[field_name] = 0.0
+        if has_component:
+            for field_name in field_names:
+                components[field_name].append(sample_values[field_name])
 
-    if not trajectory_rewards:
+    if not components["pure_image_restoration_reward"]:
         return {}
 
-    trajectory_array = np.asarray(trajectory_rewards, dtype=np.float64)
     return {
-        "restoration_reward/pure_image_reward_mean": float(trajectory_array.mean()),
-        "restoration_reward/pure_image_reward_std": float(trajectory_array.std()),
-        "restoration_reward/pure_image_reward_min": float(trajectory_array.min()),
-        "restoration_reward/pure_image_reward_max": float(trajectory_array.max()),
-        "restoration_reward/pure_image_reward_per_action_mean": (
-            float(np.mean(action_rewards)) if action_rewards else 0.0
-        ),
-        "restoration_reward/image_restoration_action_count": len(action_rewards),
+        "restoration_reward/pure_image_reward_mean": float(np.mean(components["pure_image_restoration_reward"])),
+        "restoration_reward/stop_reward_mean": float(np.mean(components["stop_reward"])),
+        "restoration_reward/other_penalty_mean": float(np.mean(components["other_penalty"])),
     }
 
 
