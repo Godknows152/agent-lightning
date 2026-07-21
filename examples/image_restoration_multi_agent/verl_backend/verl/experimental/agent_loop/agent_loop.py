@@ -1149,6 +1149,7 @@ class AgentLoopWorker:
         default_extra_keys = {
             "turn_scores",
             "tool_rewards",
+            "pure_image_restoration_rewards",
             "penalty_records",
             "min_global_steps",
             "max_global_steps",

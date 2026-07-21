@@ -27,6 +27,7 @@ from verl.trainer.ppo.metric_utils import (
     calc_maj_val,
     compute_data_metrics,
     compute_restoration_penalty_metrics,
+    compute_restoration_reward_metrics,
     compute_throughout_metrics,
     compute_timing_metrics,
     process_validation_metrics,
@@ -114,6 +115,32 @@ class TestRestorationPenaltyMetrics(unittest.TestCase):
         )
         self.assertEqual(metrics["restoration_penalty/repeated_restoration_action_count"], 2)
         self.assertEqual(len(metrics), 7)
+
+
+class TestRestorationRewardMetrics(unittest.TestCase):
+    """Tests for IQA-only restoration reward metrics."""
+
+    def test_aggregates_per_trajectory_pure_image_rewards(self):
+        pure_rewards = np.empty(4, dtype=object)
+        pure_rewards[:] = [[0.2, -0.1], [0.5], [], None]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[4]),
+            non_tensor_batch={"pure_image_restoration_rewards": pure_rewards},
+        )
+
+        metrics = compute_restoration_reward_metrics(batch)
+
+        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_mean"], 0.2)
+        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_std"], 0.21602468994692867)
+        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_min"], 0.0)
+        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_max"], 0.5)
+        np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_per_action_mean"], 0.2)
+        self.assertEqual(metrics["restoration_reward/image_restoration_action_count"], 3)
+
+    def test_returns_empty_without_recorded_field(self):
+        batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
+
+        self.assertEqual(compute_restoration_reward_metrics(batch), {})
 
 
 class TestMetric(unittest.TestCase):

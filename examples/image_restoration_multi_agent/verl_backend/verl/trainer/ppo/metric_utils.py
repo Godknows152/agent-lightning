@@ -329,6 +329,48 @@ def compute_restoration_penalty_metrics(batch: DataProto) -> dict[str, Any]:
     return metrics
 
 
+def compute_restoration_reward_metrics(batch: DataProto) -> dict[str, Any]:
+    """Aggregate per-trajectory IQA-only restoration rewards for experiment tracking."""
+
+    values = batch.non_tensor_batch.get("pure_image_restoration_rewards")
+    if values is None or len(batch) == 0:
+        return {}
+
+    trajectory_rewards: list[float] = []
+    action_rewards: list[float] = []
+    for item in np.asarray(values, dtype=object):
+        if item is None:
+            continue
+        if not isinstance(item, (list, tuple, np.ndarray)):
+            logger.warning("Expected pure_image_restoration_rewards to be a sequence, got %r", type(item))
+            continue
+        valid_rewards = []
+        for reward in item:
+            try:
+                value = float(reward)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                valid_rewards.append(value)
+        trajectory_rewards.append(float(sum(valid_rewards)))
+        action_rewards.extend(valid_rewards)
+
+    if not trajectory_rewards:
+        return {}
+
+    trajectory_array = np.asarray(trajectory_rewards, dtype=np.float64)
+    return {
+        "restoration_reward/pure_image_reward_mean": float(trajectory_array.mean()),
+        "restoration_reward/pure_image_reward_std": float(trajectory_array.std()),
+        "restoration_reward/pure_image_reward_min": float(trajectory_array.min()),
+        "restoration_reward/pure_image_reward_max": float(trajectory_array.max()),
+        "restoration_reward/pure_image_reward_per_action_mean": (
+            float(np.mean(action_rewards)) if action_rewards else 0.0
+        ),
+        "restoration_reward/image_restoration_action_count": len(action_rewards),
+    }
+
+
 def compute_timing_metrics(batch: DataProto, timing_raw: dict[str, float]) -> dict[str, Any]:
     """
     Computes timing metrics for different processing stages in PPO training.

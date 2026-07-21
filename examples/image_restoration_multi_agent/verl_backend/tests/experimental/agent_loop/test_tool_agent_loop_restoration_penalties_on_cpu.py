@@ -203,6 +203,27 @@ def test_plain_response_remains_no_tool() -> None:
     assert agent_data.extra_fields["penalty_records"][0]["reason"] == "no_tool_call"
 
 
+def test_records_only_iqa_base_reward_as_pure_image_restoration_reward() -> None:
+    agent_data = _agent_data()
+
+    ToolAgentLoop._record_pure_image_restoration_reward(
+        agent_data,
+        {
+            "action": "scunet",
+            "reward": 0.7,
+            "base_reward": 0.25,
+            "repeat_penalty": 0.1,
+            "affinity_bonus": 0.55,
+        },
+    )
+    ToolAgentLoop._record_pure_image_restoration_reward(
+        agent_data,
+        {"action": "stop", "reward": 1.8},
+    )
+
+    assert agent_data.pure_image_restoration_rewards == [0.25]
+
+
 class _InvalidActionTool:
     async def create(self, create_kwargs: dict) -> tuple[str, ToolResponse]:
         del create_kwargs

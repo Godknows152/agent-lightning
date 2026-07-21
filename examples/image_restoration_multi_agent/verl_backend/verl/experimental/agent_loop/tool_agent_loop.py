@@ -14,6 +14,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -77,6 +78,9 @@ class AgentData:
         self.response_logprobs: list[float] = []
         self.turn_scores: list[float] = []
         self.tool_rewards: list[float] = []
+        # IQA-only reward for successful image-restoration actions. This excludes
+        # the fixed tool-call bonus and all non-image reward shaping.
+        self.pure_image_restoration_rewards: list[float] = []
         self.user_turns = 0
         self.assistant_turns = 0
         self.total_tool_calls = 0
@@ -168,6 +172,25 @@ class ToolAgentLoop(AgentLoopBase):
         if details:
             record["details"] = details
         agent_data.extra_fields.setdefault("penalty_records", []).append(record)
+
+    @staticmethod
+    def _record_pure_image_restoration_reward(agent_data: AgentData, tool_metrics: dict[str, Any]) -> None:
+        """Record the IQA-only reward contribution of one restoration action."""
+
+        if getattr(agent_data, "data_source", "") != "restoration" or tool_metrics.get("action") == "stop":
+            return
+        base_reward = tool_metrics.get("base_reward")
+        if base_reward is None:
+            return
+        try:
+            value = float(base_reward)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring non-numeric restoration base_reward: %r", base_reward)
+            return
+        if not math.isfinite(value):
+            logger.warning("Ignoring non-finite restoration base_reward: %r", base_reward)
+            return
+        agent_data.pure_image_restoration_rewards.append(value)
 
     def _unproductive_response_length_penalty(self, response_len: int) -> float | None:
         """Return the existing scaled length penalty for a long unproductive response."""
@@ -707,6 +730,7 @@ class ToolAgentLoop(AgentLoopBase):
                     "no_tool_length_penalty_alpha": self.NO_TOOL_LENGTH_PENALTY_ALPHA,
                     "response_length": response_len,
                     "trajectory_repeat_penalty": trajectory_repeat_penalty,
+                    "pure_image_restoration_reward_sum": float(sum(agent_data.pure_image_restoration_rewards)),
                     "tool_reward_sum": float(sum(agent_data.tool_rewards)) if agent_data.tool_rewards else 0.0,
                 }
 
@@ -732,7 +756,13 @@ class ToolAgentLoop(AgentLoopBase):
                 routed_experts=agent_data.routed_experts,
                 extra_fields=agent_data.extra_fields,
             )
-            output.extra_fields.update({"turn_scores": agent_data.turn_scores, "tool_rewards": agent_data.tool_rewards})
+            output.extra_fields.update(
+                {
+                    "turn_scores": agent_data.turn_scores,
+                    "tool_rewards": agent_data.tool_rewards,
+                    "pure_image_restoration_rewards": agent_data.pure_image_restoration_rewards,
+                }
+            )
             return output
         finally:
             # Always depart from the round barrier, even if an exception occurred.
@@ -922,6 +952,7 @@ class ToolAgentLoop(AgentLoopBase):
 
             if tool_reward is not None:
                 tool_metrics = tool_metrics or {}
+                self._record_pure_image_restoration_reward(agent_data, tool_metrics)
                 tool_call_reward = 0.0 if tool_metrics.get("skip_tool_call_reward") else self.TOOL_CALL_REWARD
                 agent_data.tool_rewards.append(tool_reward + tool_call_reward)
                 # Record action name for trajectory-level duplicate penalty
