@@ -179,10 +179,7 @@ REPEAT_LOW_GAIN_PENALTY = 0.8
 REPEAT_LOW_GAIN_THRESHOLD = 0.05
 STOP_MIN_STEP = 3
 STOP_IQA_DELTA_THRESHOLD = 0.25
-STOP_SUCCESS_REWARD = 3.0
-STOP_PARTIAL_REWARD = 1.0
 STOP_EARLY_PENALTY = -1.0
-STOP_CONTINUE_PENALTY = -0.5
 STOP_RECENT_REWARD_WINDOW = 2
 STOP_RECENT_REWARD_THRESHOLD = 0.25
 REWARD_MODE_STEP_MIXED_V1 = "step_mixed_v1"
@@ -888,10 +885,7 @@ class RestorationTool(BaseTool):
         self.repeat_low_gain_threshold = float(config.get("repeat_low_gain_threshold", REPEAT_LOW_GAIN_THRESHOLD))
         self.stop_min_step = int(config.get("stop_min_step", STOP_MIN_STEP))
         self.stop_iqa_delta_threshold = float(config.get("stop_iqa_delta_threshold", STOP_IQA_DELTA_THRESHOLD))
-        self.stop_success_reward = float(config.get("stop_success_reward", STOP_SUCCESS_REWARD))
-        self.stop_partial_reward = float(config.get("stop_partial_reward", STOP_PARTIAL_REWARD))
         self.stop_early_penalty = float(config.get("stop_early_penalty", STOP_EARLY_PENALTY))
-        self.stop_continue_penalty = float(config.get("stop_continue_penalty", STOP_CONTINUE_PENALTY))
         self.stop_recent_reward_window = int(config.get("stop_recent_reward_window", STOP_RECENT_REWARD_WINDOW))
         self.stop_recent_reward_threshold = float(
             config.get("stop_recent_reward_threshold", STOP_RECENT_REWARD_THRESHOLD)
@@ -1314,19 +1308,15 @@ class RestorationTool(BaseTool):
         identity_delta: float,
         recent_rewards: list[float],
     ) -> dict[str, float | bool]:
-        """Reward stopping when quality is good enough or recent gains have plateaued."""
+        """Return a neutral eligible-stop reward or the configured early-stop penalty."""
         recent_reward_mean = float(sum(recent_rewards) / len(recent_rewards)) if recent_rewards else 0.0
         plateau = bool(recent_rewards) and recent_reward_mean <= self.stop_recent_reward_threshold
         good_enough = identity_delta >= self.stop_iqa_delta_threshold
 
         if step < self.stop_min_step:
             reward = self.stop_early_penalty
-        elif plateau and good_enough:
-            reward = self.stop_success_reward
-        elif plateau or good_enough:
-            reward = self.stop_partial_reward
         else:
-            reward = self.stop_continue_penalty
+            reward = 0.0
 
         return {
             "reward": float(torch.clamp(torch.tensor(reward), -10.0, 10.0).item()),

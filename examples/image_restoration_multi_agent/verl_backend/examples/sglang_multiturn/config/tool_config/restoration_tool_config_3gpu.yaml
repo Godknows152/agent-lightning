@@ -70,14 +70,11 @@ tools:
       repeat_low_gain_penalty: 2.0
       # ~0.1 means the weighted marginal gain is already close to a plateau.
       repeat_low_gain_threshold: 0.12
-      # Reward stopping once normalized quality is good enough or recent rewards plateau.
+      # Eligible stop calls are reward-neutral; earlier calls retain an early-stop penalty.
       stop_min_step: 4
       # ~0.6 means the weighted improvement over the original image is materially positive.
       stop_iqa_delta_threshold: 0.6
-      stop_success_reward: 1.8
-      stop_partial_reward: 0.6
       stop_early_penalty: -1.2
-      stop_continue_penalty: -0.4
       stop_recent_reward_window: 2
       stop_recent_reward_threshold: 0.2
     tool_schema:

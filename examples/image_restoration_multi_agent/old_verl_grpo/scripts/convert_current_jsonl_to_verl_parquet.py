@@ -19,11 +19,15 @@ EXAMPLE_ROOT = Path(__file__).resolve().parents[2]
 if str(EXAMPLE_ROOT) not in sys.path:
     sys.path.insert(0, str(EXAMPLE_ROOT))
 
-import datasets
-from agents.prompts import build_expert_single_step_sft_system_prompt, build_expert_single_step_sft_user_prompt
-from PIL import Image
-from schemas import ExpertName
-from tool_registry import ToolRegistry
+import datasets  # noqa: E402
+from agents.prompts import (  # noqa: E402
+    EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION,
+    build_expert_single_step_sft_system_prompt,
+    build_expert_single_step_sft_user_prompt,
+)
+from PIL import Image  # noqa: E402
+from schemas import ExpertName  # noqa: E402
+from tool_registry import ToolRegistry  # noqa: E402
 
 OLD_VERL_ROOT = EXAMPLE_ROOT / "old_verl_grpo"
 SUPPORTED_EXPERTS = ("fog", "low_light", "rain", "snow")
@@ -37,14 +41,18 @@ EXPERT_NAMES = {
 DEFAULT_TOOL_REGISTRY = EXAMPLE_ROOT / "config" / "tools.yaml"
 
 
-def create_initial_messages(expert: str, tool_registry: ToolRegistry) -> list[dict[str, str]]:
+def create_initial_messages(
+    expert: str, tool_registry: ToolRegistry
+) -> list[dict[str, str]]:
     """Build the first-turn expert messages with the current GRPO/SFT prompt."""
 
     expert_name = EXPERT_NAMES[expert]
     return [
         {
             "role": "system",
-            "content": build_expert_single_step_sft_system_prompt(expert_name, tool_registry),
+            "content": build_expert_single_step_sft_system_prompt(
+                expert_name, tool_registry
+            ),
         },
         {
             "role": "user",
@@ -53,7 +61,9 @@ def create_initial_messages(expert: str, tool_registry: ToolRegistry) -> list[di
     ]
 
 
-def load_image_as_bytes(image_path: str, *, placeholder_missing: bool = False) -> dict[str, bytes]:
+def load_image_as_bytes(
+    image_path: str, *, placeholder_missing: bool = False
+) -> dict[str, bytes]:
     """Load an image path as the verl parquet image-bytes structure."""
     path = Path(image_path)
     if not path.exists():
@@ -108,7 +118,11 @@ def convert_rows(
                 "data_source": data_source,
                 "agent_name": "tool_agent",
                 "prompt": copy.deepcopy(prompt),
-                "images": [load_image_as_bytes(image_path, placeholder_missing=placeholder_missing)],
+                "images": [
+                    load_image_as_bytes(
+                        image_path, placeholder_missing=placeholder_missing
+                    )
+                ],
                 "reward_model": {
                     "style": "rule",
                     "ground_truth": {
@@ -123,7 +137,7 @@ def convert_rows(
                     "expert_name": EXPERT_NAMES[expert].value,
                     "image_path": image_path,
                     "degradation_type": degradation_type,
-                    "prompt_version": "expert-single-step-sft-hermes-v1",
+                    "prompt_version": EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION,
                     "tool_registry_path": str(tool_registry_path),
                     "need_tools_kwargs": True,
                     "tools_kwargs": {
@@ -154,8 +168,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    source = args.source or (EXAMPLE_ROOT / "grpo" / "data" / f"{args.expert}_{args.split}.jsonl")
-    output = args.output or (OLD_VERL_ROOT / "data" / f"{args.expert}_{args.split}.parquet")
+    source = args.source or (
+        EXAMPLE_ROOT / "grpo" / "data" / f"{args.expert}_{args.split}.jsonl"
+    )
+    output = args.output or (
+        OLD_VERL_ROOT / "data" / f"{args.expert}_{args.split}.parquet"
+    )
     tool_registry_path = args.tool_registry.expanduser().resolve()
     tool_registry = ToolRegistry.from_yaml(tool_registry_path)
 

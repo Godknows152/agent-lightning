@@ -210,7 +210,7 @@ def test_plain_response_remains_no_tool() -> None:
         generated_budget_exhausted=False,
     )
 
-    assert loop.NO_TOOL_CALL_PENALTY == -5.0
+    assert loop.NO_TOOL_CALL_PENALTY == -10.0
     assert agent_data.tool_rewards == [loop.NO_TOOL_CALL_PENALTY]
     assert agent_data.extra_fields["no_tool_call_penalty_applied"] is True
     assert agent_data.extra_fields["no_tool_call_penalty_reason"] == "turn_without_tool_call"

@@ -10,7 +10,7 @@ from tool_registry import ToolRegistry
 DIAGNOSIS_PROMPT_VERSION = "diagnosis-hermes-v1"
 DIAGNOSIS_TOOL_NAME = "diagnose_degradation"
 EXPERT_PROMPT_VERSION = "expert-hermes-v1"
-EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION = "expert-single-step-sft-hermes-v1"
+EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION = "expert-single-step-sft-hermes-thinking-v3"
 
 DIAGNOSIS_TOOL_SCHEMA: dict[str, object] = {
     "type": "function",
@@ -47,7 +47,9 @@ def build_diagnosis_system_prompt() -> str:
     """Build the strict Hermes prompt used by the degradation diagnosis agent."""
 
     function_schema = DIAGNOSIS_TOOL_SCHEMA["function"]
-    serialized_schema = json.dumps(function_schema, ensure_ascii=False, separators=(",", ":"))
+    serialized_schema = json.dumps(
+        function_schema, ensure_ascii=False, separators=(",", ":")
+    )
     return f"""Prompt version: {DIAGNOSIS_PROMPT_VERSION}
 
 You are the degradation diagnosis agent. Inspect the input image and identify exactly one
@@ -91,7 +93,11 @@ def build_expert_system_prompt(
     if allow_stop:
         stop_rule = "Use action stop when further processing is unlikely to improve the historical best image."
     else:
-        threshold = min_stop_tool_calls if min_stop_tool_calls is not None else "the configured minimum"
+        threshold = (
+            min_stop_tool_calls
+            if min_stop_tool_calls is not None
+            else "the configured minimum"
+        )
         stop_rule = (
             "Do not use action stop before it appears in the supplied tool schema; "
             f"fewer than {threshold} restoration tool calls have been executed."
@@ -120,7 +126,9 @@ Rules:
 7. Do not diagnose again, change experts, or delegate the decision to another agent."""
 
 
-def build_expert_single_step_sft_system_prompt(expert_name: ExpertName, tool_registry: ToolRegistry) -> str:
+def build_expert_single_step_sft_system_prompt(
+    expert_name: ExpertName, tool_registry: ToolRegistry
+) -> str:
     """Build a concise initial-state prompt; tool schema is supplied through the chat template."""
 
     del expert_name, tool_registry
@@ -136,14 +144,13 @@ observed image content and the learned policy.
 Rules:
 1. Call restore_image exactly once.
 2. The action argument must be one enum value from the supplied tool schema.
-3. Do not output natural language before or after the tool call.
-4. Do not output stop in this initial single-step SFT task."""
+3. Do not output stop in this initial single-step SFT task."""
 
 
 def build_expert_single_step_sft_user_prompt() -> str:
     """Build the image-only initial-state instruction used by expert SFT."""
 
-    return "<image>\nSelect exactly one restoration action for this image using one tool call and no extra text."
+    return "<image>\nSelect exactly one restoration action for this image using one tool call."
 
 
 def build_expert_state_prompt(

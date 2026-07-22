@@ -158,14 +158,11 @@ def test_final_iqa_v2_rewards_only_new_best_iqa_on_cpu():
     assert new_best["reward"] == pytest.approx(0.15, abs=1e-6)
 
 
-def test_stop_reward_prefers_plateau_after_good_enough_progress_on_cpu():
+def test_stop_reward_is_neutral_after_minimum_step_on_cpu():
     tool = _build_tool(
         stop_min_step=3,
         stop_iqa_delta_threshold=0.25,
-        stop_success_reward=3.0,
-        stop_partial_reward=1.0,
         stop_early_penalty=-1.0,
-        stop_continue_penalty=-0.5,
         stop_recent_reward_window=2,
         stop_recent_reward_threshold=0.25,
     )
@@ -175,10 +172,10 @@ def test_stop_reward_prefers_plateau_after_good_enough_progress_on_cpu():
     premature_stop = tool._calculate_stop_reward(step=4, identity_delta=0.1, recent_rewards=[1.0, 0.8])
 
     assert early_stop["reward"] == pytest.approx(-1.0)
-    assert plateau_stop["reward"] == pytest.approx(3.0)
+    assert plateau_stop["reward"] == pytest.approx(0.0)
     assert plateau_stop["plateau"] is True
     assert plateau_stop["good_enough"] is True
-    assert premature_stop["reward"] == pytest.approx(-0.5)
+    assert premature_stop["reward"] == pytest.approx(0.0)
 
 
 def test_stop_before_five_steps_executes_with_early_penalty_on_cpu():
@@ -186,9 +183,6 @@ def test_stop_before_five_steps_executes_with_early_penalty_on_cpu():
         stop_min_step=5,
         stop_early_penalty=-1.2,
         stop_iqa_delta_threshold=0.25,
-        stop_success_reward=1.8,
-        stop_partial_reward=0.6,
-        stop_continue_penalty=-0.4,
     )
     tool._instance_dict["test-instance"] = {
         "step": 4,

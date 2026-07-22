@@ -329,13 +329,13 @@ def compute_restoration_penalty_metrics(batch: DataProto) -> dict[str, Any]:
 
 
 def compute_restoration_reward_metrics(batch: DataProto) -> dict[str, Any]:
-    """Aggregate the three exhaustive trajectory reward components for tracking."""
+    """Aggregate the restoration reward components selected for tracking."""
 
     batch_size = len(batch)
     if batch_size == 0:
         return {}
 
-    field_names = ("pure_image_restoration_reward", "stop_reward", "other_penalty")
+    field_names = ("pure_image_restoration_reward", "other_penalty")
     arrays: dict[str, np.ndarray | None] = {}
     for field_name in field_names:
         values = batch.non_tensor_batch.get(field_name)
@@ -382,7 +382,6 @@ def compute_restoration_reward_metrics(batch: DataProto) -> dict[str, Any]:
 
     return {
         "restoration_reward/pure_image_reward_mean": float(np.mean(components["pure_image_restoration_reward"])),
-        "restoration_reward/stop_reward_mean": float(np.mean(components["stop_reward"])),
         "restoration_reward/other_penalty_mean": float(np.mean(components["other_penalty"])),
     }
 

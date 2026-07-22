@@ -102,7 +102,7 @@ class AgentData:
 
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
-    NO_TOOL_CALL_PENALTY = -5.0
+    NO_TOOL_CALL_PENALTY = -10.0
     MALFORMED_TOOL_CALL_PENALTY = -5.0
     FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = -1.0
     TOOL_CALL_START_TOKEN = "<tool_call>"

@@ -81,7 +81,7 @@ class TestRestorationPenaltyMetrics(unittest.TestCase):
         penalty_records = np.empty(4, dtype=object)
         penalty_records[:] = [
             [
-                {"reason": "no_tool_call", "value": -5.0},
+                {"reason": "no_tool_call", "value": -10.0},
             ],
             [
                 {"reason": "malformed_tool_call_xml", "value": -5.0},
@@ -116,11 +116,11 @@ class TestRestorationPenaltyMetrics(unittest.TestCase):
 
 
 class TestRestorationRewardMetrics(unittest.TestCase):
-    """Tests for the three exhaustive trajectory reward components."""
+    """Tests for the reward components exposed to training loggers."""
 
-    def test_aggregates_three_reward_components_per_trajectory(self):
+    def test_omits_stop_reward_from_tracked_components(self):
         pure_rewards = np.array([1.0, 2.0, 0.0, None], dtype=object)
-        stop_rewards = np.array([-1.2, 0.0, 0.6, None], dtype=object)
+        stop_rewards = np.array([-1.2, 0.0, 0.0, None], dtype=object)
         other_penalties = np.array([-0.5, -5.0, 0.0, None], dtype=object)
         batch = DataProto(
             batch=TensorDict({}, batch_size=[4]),
@@ -137,15 +137,13 @@ class TestRestorationRewardMetrics(unittest.TestCase):
             set(metrics),
             {
                 "restoration_reward/pure_image_reward_mean",
-                "restoration_reward/stop_reward_mean",
                 "restoration_reward/other_penalty_mean",
             },
         )
         np.testing.assert_allclose(metrics["restoration_reward/pure_image_reward_mean"], 1.0)
-        np.testing.assert_allclose(metrics["restoration_reward/stop_reward_mean"], -0.2)
         np.testing.assert_allclose(metrics["restoration_reward/other_penalty_mean"], -11.0 / 6.0)
-        total_rewards = np.array([1.0 - 1.2 - 0.5, 2.0 - 5.0, 0.6])
-        np.testing.assert_allclose(sum(metrics.values()), total_rewards.mean())
+        tracked_rewards = np.array([1.0 - 0.5, 2.0 - 5.0, 0.0])
+        np.testing.assert_allclose(sum(metrics.values()), tracked_rewards.mean())
 
     def test_returns_empty_without_recorded_field(self):
         batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
