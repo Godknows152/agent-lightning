@@ -161,6 +161,7 @@ def build_expert_state_prompt(
 
     return (
         f"{history_feedback}\n\n"
+        "Do not reuse any restoration action already listed in the history.\n\n"
         "Select the next restoration action for the current image. Respond with exactly one "
         "<tool_call> block following the system instructions, with no extra text."
     )

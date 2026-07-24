@@ -296,6 +296,7 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
     assert base64.b64decode(image_url.split(",", 1)[1]) == b"latest-image"
     prompt_text = str(messages[-1])
     assert "Historical tool feedback: Step 0: selected action scunet; IQA aggregate_score=0.5000." in prompt_text
+    assert "Do not reuse any restoration action already listed in the history." in prompt_text
     assert "current_aggregate_score" not in prompt_text
     assert "raw_scores" not in prompt_text
     assert "step_reward" not in prompt_text

@@ -131,4 +131,6 @@ def test_state_prompt_contains_only_natural_language_tool_feedback_and_tool_call
     assert "Workflow state" not in prompt
     assert "action_and_evaluation_history_json" not in prompt
     assert "latest_iqa_feedback" not in prompt
+    assert "Do not reuse any restoration action already listed in the history." in prompt
+    assert prompt.count("Do not reuse any restoration action already listed in the history.") == 1
     assert "tool_call" in prompt.lower()

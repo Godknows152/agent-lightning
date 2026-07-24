@@ -42,7 +42,8 @@ tools:
       final_iqa_reward_scale: 4.0
       final_iqa_regression_penalty_scale: 1.0
       final_iqa_step_penalty: 0.05
-      affinity_bonus_scale: 0.2
+      # Disable degradation-action affinity shaping; rely on IQA and penalty rewards only.
+      affinity_bonus_scale: 0.0
       repeat_action_penalty: 0.75
       repeat_low_gain_penalty: 2.0
       repeat_low_gain_threshold: 0.12
