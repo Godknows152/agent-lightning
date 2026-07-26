@@ -62,6 +62,7 @@ from uuid import uuid4
 
 import torch
 import yaml
+
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
@@ -69,23 +70,32 @@ from .schemas import OpenAIFunctionToolSchema, ToolResponse
 
 logger = logging.getLogger(__name__)
 
-# Always capture INFO-level messages to a dedicated file so that detailed tool
-# execution info is available for debugging even when VERL_LOGGING_LEVEL=WARN.
-# INFO messages are NOT forwarded to the terminal / tee log.
-logger.propagate = False  # prevent INFO from leaking to the root console handler
+# Keep runtime diagnostics on the console according to VERL_LOGGING_LEVEL.
+logger.propagate = False
 _console_level = os.getenv("VERL_LOGGING_LEVEL", "WARN").upper()
-logger.setLevel(logging.INFO)  # logger must be at INFO so file handler receives INFO msgs
+logger.setLevel(logging.INFO)
 
 _console_handler = logging.StreamHandler()
 _console_handler.setLevel(getattr(logging, _console_level, logging.WARNING))
 _console_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
 logger.addHandler(_console_handler)
 
+# Write only completed trajectory summaries to restoration_tool_info.log. Each
+# message is one JSON object on one line, so concurrent trajectories do not
+# interleave their individual tool-call diagnostics.
 _log_dir = os.getenv("VERL_LOG_DIR", "/tmp")
-_file_handler = logging.FileHandler(os.path.join(_log_dir, "restoration_tool_info.log"), mode="a", encoding="utf-8")
-_file_handler.setLevel(logging.INFO)
-_file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-logger.addHandler(_file_handler)
+os.makedirs(_log_dir, exist_ok=True)
+trajectory_logger = logging.getLogger(f"{__name__}.trajectory")
+trajectory_logger.propagate = False
+trajectory_logger.setLevel(logging.INFO)
+_trajectory_file_handler = logging.FileHandler(
+    os.path.join(_log_dir, "restoration_tool_info.log"),
+    mode="a",
+    encoding="utf-8",
+)
+_trajectory_file_handler.setLevel(logging.INFO)
+_trajectory_file_handler.setFormatter(logging.Formatter("%(message)s"))
+trajectory_logger.addHandler(_trajectory_file_handler)
 
 # Add restoration_tools/agent_tools to sys.path for importing RestorationToolkit
 AGENT_TOOLS_PATH = Path(__file__).resolve().parent.parent.parent / "restoration_tools" / "agent_tools"
@@ -1153,6 +1163,12 @@ class RestorationTool(BaseTool):
             1 for previous_action in actions_history if self._repeat_type_key(previous_action) == repeat_type_key
         )
 
+    def _calculate_repeat_penalty(self, marginal: float, repeat_count: int) -> float:
+        """Penalize same-type repeats only when their marginal IQA gain is low."""
+        if repeat_count <= 0 or marginal > self.repeat_low_gain_threshold:
+            return 0.0
+        return (self.repeat_action_penalty + self.repeat_low_gain_penalty) * repeat_count
+
     def _calculate_reward(
         self,
         prev_scores: list[float],
@@ -1207,11 +1223,7 @@ class RestorationTool(BaseTool):
 
         repeat_tool_type_key = self._repeat_type_key(action)
         repeat_count = self._count_trajectory_type_repeats(actions_history, action)
-        repeat_penalty = 0.0
-        if repeat_count > 0:
-            repeat_penalty += self.repeat_action_penalty * repeat_count
-            if marginal <= self.repeat_low_gain_threshold:
-                repeat_penalty += self.repeat_low_gain_penalty * repeat_count
+        repeat_penalty = self._calculate_repeat_penalty(marginal, repeat_count)
 
         reward = float(torch.clamp(torch.tensor(base_reward - repeat_penalty + affinity_bonus), -10.0, 10.0).item())
         return {
@@ -1261,11 +1273,7 @@ class RestorationTool(BaseTool):
 
         repeat_tool_type_key = self._repeat_type_key(action)
         repeat_count = self._count_trajectory_type_repeats(actions_history, action)
-        repeat_penalty = 0.0
-        if repeat_count > 0:
-            repeat_penalty += self.repeat_action_penalty * repeat_count
-            if marginal <= self.repeat_low_gain_threshold:
-                repeat_penalty += self.repeat_low_gain_penalty * repeat_count
+        repeat_penalty = self._calculate_repeat_penalty(marginal, repeat_count)
 
         reward = float(
             torch.clamp(
@@ -1301,6 +1309,77 @@ class RestorationTool(BaseTool):
         iden_t = torch.tensor(identity_scores, dtype=torch.float32)
         w_t = torch.tensor(weights, dtype=torch.float32)
         return float(((curr_t - iden_t) * w_t).sum().item())
+
+    @staticmethod
+    def _weighted_aggregate_score(scores: list[float], weights: list[float]) -> float:
+        """Return the weighted aggregate IQA score used by the reward."""
+        return float(sum(float(score) * float(weight) for score, weight in zip(scores, weights, strict=False)))
+
+    @staticmethod
+    def _append_trajectory_call(instance: dict[str, Any], action: str, **details: Any) -> None:
+        """Append one structured tool call to an in-memory trajectory."""
+        calls = instance.setdefault("trajectory_calls", [])
+        calls.append(
+            {
+                "call_index": len(calls) + 1,
+                "action": action,
+                **details,
+            }
+        )
+
+    def _build_trajectory_summary(self, instance_id: str, instance: dict[str, Any]) -> dict[str, Any]:
+        """Build the single JSON-serializable record emitted for a trajectory."""
+        calls = list(instance.get("trajectory_calls", []))
+        scores_history = instance.get("scores_history", [])
+        initial_scores = list(instance.get("identity_scores", scores_history[0] if scores_history else []))
+        final_scores = list(scores_history[-1]) if scores_history else initial_scores
+        weights = list(instance.get("weights", []))
+        restoration_rewards = [
+            float(call.get("reward", 0.0))
+            for call in calls
+            if call.get("action") != "stop" and call.get("status", "success") == "success"
+        ]
+        stop_rewards = [float(call.get("reward", 0.0)) for call in calls if call.get("action") == "stop"]
+        call_rewards = [float(call.get("reward", 0.0)) for call in calls]
+        if not calls:
+            call_rewards = [float(value) for value in instance.get("rewards_history", [])]
+        action_path = [str(call.get("action", "")) for call in calls]
+        if not action_path:
+            action_path = [str(action) for action in instance.get("actions_history", [])]
+        finished_at = time.time()
+        started_at = float(instance.get("trajectory_started_at", finished_at))
+
+        return {
+            "event": "restoration_trajectory",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(finished_at)),
+            "trajectory_id": instance_id,
+            "degradation_type": instance.get("degradation_type"),
+            "original_image": instance.get("original_image"),
+            "final_image": instance.get("current_image"),
+            "reward_mode": self.reward_mode,
+            "termination_reason": "stop" if stop_rewards else "rollout_end_without_stop",
+            "action_path": action_path,
+            "restoration_step_count": int(instance.get("step", len(instance.get("actions_history", [])))),
+            "tool_call_count": len(calls),
+            "initial_iqa_scores": initial_scores,
+            "initial_aggregate_score": self._weighted_aggregate_score(initial_scores, weights),
+            "final_iqa_scores": final_scores,
+            "final_aggregate_score": self._weighted_aggregate_score(final_scores, weights),
+            "final_identity_delta": self._calculate_identity_delta(final_scores, initial_scores, weights),
+            "best_identity_delta": float(instance.get("best_identity_delta", 0.0)),
+            "restoration_reward_sum": float(sum(restoration_rewards)),
+            "stop_reward": float(sum(stop_rewards)),
+            "total_tool_reward": float(sum(call_rewards)),
+            "failed_tool_call_count": sum(1 for call in calls if call.get("status") == "error"),
+            "total_repeat_penalty": float(sum(float(call.get("repeat_penalty", 0.0)) for call in calls)),
+            "duration_seconds": max(0.0, finished_at - started_at),
+            "tool_calls": calls,
+        }
+
+    def _log_trajectory_summary(self, instance_id: str, instance: dict[str, Any]) -> None:
+        """Emit exactly one compact JSON line for a completed trajectory."""
+        summary = self._build_trajectory_summary(instance_id, instance)
+        trajectory_logger.info(json.dumps(summary, ensure_ascii=False, separators=(",", ":"), default=str))
 
     def _calculate_stop_reward(
         self,
@@ -1475,6 +1554,8 @@ class RestorationTool(BaseTool):
             "degradation_type": degradation_type,
             "step": 0,
             "output_dir": instance_output_dir,
+            "trajectory_started_at": time.time(),
+            "trajectory_calls": [],
         }
 
         logger.info(
@@ -1502,8 +1583,18 @@ class RestorationTool(BaseTool):
         action = parameters.get("action", "").lower().strip()
 
         allowed_actions = getattr(self, "allowed_actions", ALLOWED_ACTIONS)
+        instance = self._instance_dict.get(instance_id)
         if action not in allowed_actions:
             error_msg = f"Invalid action '{action}'. " f"Allowed: {', '.join(sorted(allowed_actions))}"
+            if instance is not None:
+                self._append_trajectory_call(
+                    instance,
+                    action,
+                    status="error",
+                    restoration_step=int(instance.get("step", 0)),
+                    reward=FAILURE_REWARD,
+                    error="invalid_action",
+                )
             logger.warning(error_msg)
             return (
                 ToolResponse(text=error_msg),
@@ -1511,7 +1602,6 @@ class RestorationTool(BaseTool):
                 {"error": "invalid_action", "skip_tool_call_reward": True},
             )
 
-        instance = self._instance_dict.get(instance_id)
         if instance is None:
             error_msg = f"Instance {instance_id} not found"
             logger.error(error_msg)
@@ -1531,6 +1621,18 @@ class RestorationTool(BaseTool):
             stop_info = self._calculate_stop_reward(step, identity_delta, recent_rewards)
             reward = float(stop_info["reward"])
             instance["rewards_history"].append(reward)
+            self._append_trajectory_call(
+                instance,
+                "stop",
+                status="stopped",
+                restoration_step=step,
+                reward=reward,
+                identity_delta=identity_delta,
+                best_identity_delta=float(instance.get("best_identity_delta", identity_delta)),
+                recent_reward_mean=float(stop_info["recent_reward_mean"]),
+                plateau=bool(stop_info["plateau"]),
+                good_enough=bool(stop_info["good_enough"]),
+            )
             logger.info(
                 f"Instance {instance_id}: stop action at step {step}, "
                 f"identity_delta={identity_delta:.4f}, recent_reward_mean={stop_info['recent_reward_mean']:.4f}, "
@@ -1644,6 +1746,14 @@ class RestorationTool(BaseTool):
             output_path = result.get("output_path")
             if not output_path or not os.path.exists(output_path):
                 error_msg = "Restoration failed: no output generated"
+                self._append_trajectory_call(
+                    instance,
+                    action,
+                    status="error",
+                    restoration_step=int(instance.get("step", 0)),
+                    reward=FAILURE_REWARD,
+                    error="restoration_failed",
+                )
                 logger.error(error_msg)
                 return (
                     ToolResponse(text=error_msg),
@@ -1755,10 +1865,42 @@ class RestorationTool(BaseTool):
             }
             if cache_key is not None:
                 metrics["tool_result_cache_key"] = cache_key
+            self._append_trajectory_call(
+                instance,
+                action,
+                status="success",
+                restoration_step=instance["step"],
+                reward=reward,
+                base_reward=float(reward_info["base_reward"]),
+                marginal_iqa_gain=float(reward_info["marginal"]),
+                aggregate_score=aggregate_score,
+                identity_delta=identity_delta,
+                best_identity_delta=float(reward_info["best_identity_delta"]),
+                best_improvement=float(reward_info["best_improvement"]),
+                regression_penalty=float(reward_info["regression_penalty"]),
+                step_penalty=float(reward_info["step_penalty"]),
+                repeat_penalty=float(reward_info["repeat_penalty"]),
+                affinity_bonus=float(reward_info["affinity_bonus"]),
+                repeat_tool_type_key=str(reward_info["repeat_tool_type_key"]),
+                same_type_action_count=int(reward_info["same_type_action_count"]),
+                iqa_scores=[float(score) for score in curr_scores],
+                cache_hit=cache_hit,
+                input_image=current_image,
+                output_image=output_path,
+            )
             return response, reward, metrics
 
         except Exception as e:
             error_msg = f"Restoration error during '{action}': {e}"
+            self._append_trajectory_call(
+                instance,
+                action,
+                status="error",
+                restoration_step=int(instance.get("step", 0)),
+                reward=FAILURE_REWARD,
+                error=type(e).__name__,
+                error_message=str(e),
+            )
             logger.exception(error_msg)
             return (
                 ToolResponse(text=error_msg),
@@ -1774,8 +1916,12 @@ class RestorationTool(BaseTool):
         return float(sum(instance.get("rewards_history", [])))
 
     async def release(self, instance_id: str, **kwargs) -> None:
-        if instance_id in self._instance_dict:
-            del self._instance_dict[instance_id]
+        instance = self._instance_dict.pop(instance_id, None)
+        if instance is not None:
+            try:
+                self._log_trajectory_summary(instance_id, instance)
+            except Exception:
+                logger.exception("Failed to write trajectory summary for restoration instance %s", instance_id)
             logger.info(f"Released restoration instance {instance_id}")
 
     def get_instance_state(self, instance_id: str) -> Optional[dict]:

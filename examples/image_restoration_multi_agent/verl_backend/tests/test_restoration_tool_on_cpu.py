@@ -1,6 +1,9 @@
 import asyncio
+import json
 
 import pytest
+
+from verl.tools import restoration_tool as restoration_tool_module
 from verl.tools.restoration_tool import RestorationTool
 from verl.tools.schemas import (
     OpenAIFunctionParametersSchema,
@@ -61,10 +64,33 @@ def test_repeat_penalty_discourages_low_gain_repeats_on_cpu():
     )
 
     assert fresh_reward["repeat_penalty"] == pytest.approx(0.0)
-    assert repeated_reward["repeat_penalty"] > 0.0
+    assert repeated_reward["repeat_penalty"] == pytest.approx(1.0)
     assert repeated_reward["reward"] < fresh_reward["reward"]
     assert repeated_reward["consecutive_action_count"] == pytest.approx(2.0)
     assert repeated_reward["same_type_action_count"] == pytest.approx(2.0)
+
+
+@pytest.mark.parametrize("reward_mode", ["step_mixed_v1", "final_iqa_v2"])
+def test_repeat_penalty_does_not_discourage_high_gain_same_type_actions_on_cpu(reward_mode):
+    tool = _build_tool(
+        reward_mode=reward_mode,
+        repeat_action_penalty=0.75,
+        repeat_low_gain_penalty=2.0,
+        repeat_low_gain_threshold=0.03,
+    )
+
+    reward = tool._calculate_reward(
+        prev_scores=[1.0, 1.0, 1.0, 1.0, 1.0],
+        curr_scores=[1.04, 1.04, 1.04, 1.04, 1.04],
+        identity_scores=[1.0, 1.0, 1.0, 1.0, 1.0],
+        weights=[0.2, 0.2, 0.2, 0.2, 0.2],
+        action="kanet",
+        actions_history=["ridcp"],
+    )
+
+    assert reward["marginal"] > tool.repeat_low_gain_threshold
+    assert reward["repeat_penalty"] == pytest.approx(0.0)
+    assert reward["same_type_action_count"] == pytest.approx(2.0)
 
 
 def test_repeat_penalty_groups_restoration_tool_types_on_cpu():
@@ -76,7 +102,7 @@ def test_repeat_penalty_groups_restoration_tool_types_on_cpu():
     )
     reward_kwargs = {
         "prev_scores": [1.0, 1.0, 1.0, 1.0, 1.0],
-        "curr_scores": [1.10, 1.10, 1.10, 1.10, 1.10],
+        "curr_scores": [1.02, 1.02, 1.02, 1.02, 1.02],
         "identity_scores": [1.0, 1.0, 1.0, 1.0, 1.0],
         "weights": [0.2, 0.2, 0.2, 0.2, 0.2],
     }
@@ -202,6 +228,103 @@ def test_stop_before_five_steps_executes_with_early_penalty_on_cpu():
     assert "Restoration stopped after 4 step(s)" in response.text
     assert tool._instance_dict["test-instance"]["step"] == 4
     assert tool._instance_dict["test-instance"]["rewards_history"][-1] == pytest.approx(-1.2)
+    assert tool._instance_dict["test-instance"]["trajectory_calls"][-1]["action"] == "stop"
+    assert tool._instance_dict["test-instance"]["trajectory_calls"][-1]["reward"] == pytest.approx(-1.2)
+
+
+def test_release_logs_one_complete_trajectory_json_record_on_cpu(monkeypatch):
+    tool = _build_tool(reward_mode="step_mixed_v1")
+    tool._instance_dict["trajectory-1"] = {
+        "original_image": "/images/input.png",
+        "current_image": "/images/final.png",
+        "actions_history": ["ridcp", "kanet"],
+        "scores_history": [[0.0] * 5, [0.1] * 5, [0.14] * 5],
+        "rewards_history": [0.4, 0.16, 0.0],
+        "identity_scores": [0.0] * 5,
+        "weights": [0.2] * 5,
+        "degradation_type": "fog",
+        "step": 2,
+        "best_identity_delta": 0.14,
+        "trajectory_started_at": 0.0,
+        "trajectory_calls": [
+            {
+                "call_index": 1,
+                "action": "ridcp",
+                "restoration_step": 1,
+                "reward": 0.4,
+                "marginal_iqa_gain": 0.1,
+                "aggregate_score": 0.1,
+                "repeat_penalty": 0.0,
+            },
+            {
+                "call_index": 2,
+                "action": "kanet",
+                "restoration_step": 2,
+                "reward": 0.16,
+                "marginal_iqa_gain": 0.04,
+                "aggregate_score": 0.14,
+                "repeat_penalty": 0.0,
+            },
+            {
+                "call_index": 3,
+                "action": "stop",
+                "restoration_step": 2,
+                "reward": 0.0,
+                "identity_delta": 0.14,
+            },
+        ],
+    }
+    log_messages = []
+    monkeypatch.setattr(restoration_tool_module.trajectory_logger, "info", log_messages.append)
+
+    asyncio.run(tool.release("trajectory-1"))
+
+    assert "trajectory-1" not in tool._instance_dict
+    assert len(log_messages) == 1
+    summary = json.loads(log_messages[0])
+    assert summary["event"] == "restoration_trajectory"
+    assert summary["trajectory_id"] == "trajectory-1"
+    assert summary["termination_reason"] == "stop"
+    assert summary["action_path"] == ["ridcp", "kanet", "stop"]
+    assert summary["restoration_step_count"] == 2
+    assert summary["tool_call_count"] == 3
+    assert summary["initial_aggregate_score"] == pytest.approx(0.0)
+    assert summary["final_aggregate_score"] == pytest.approx(0.14)
+    assert summary["restoration_reward_sum"] == pytest.approx(0.56)
+    assert summary["stop_reward"] == pytest.approx(0.0)
+    assert summary["total_tool_reward"] == pytest.approx(0.56)
+    assert summary["failed_tool_call_count"] == 0
+    assert [call["action"] for call in summary["tool_calls"]] == ["ridcp", "kanet", "stop"]
+
+
+def test_trajectory_summary_marks_rollout_end_without_stop_on_cpu():
+    tool = _build_tool()
+    summary = tool._build_trajectory_summary(
+        "trajectory-without-stop",
+        {
+            "original_image": "/images/input.png",
+            "current_image": "/images/final.png",
+            "actions_history": ["ridcp"],
+            "scores_history": [[0.0] * 5, [0.1] * 5],
+            "rewards_history": [0.4],
+            "identity_scores": [0.0] * 5,
+            "weights": [0.2] * 5,
+            "step": 1,
+            "best_identity_delta": 0.1,
+            "trajectory_calls": [
+                {
+                    "call_index": 1,
+                    "action": "ridcp",
+                    "status": "success",
+                    "reward": 0.4,
+                }
+            ],
+        },
+    )
+
+    assert summary["termination_reason"] == "rollout_end_without_stop"
+    assert summary["action_path"] == ["ridcp"]
+    assert summary["total_tool_reward"] == pytest.approx(0.4)
 
 
 def test_feedback_calls_out_repeated_low_gain_pattern_on_cpu():

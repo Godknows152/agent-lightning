@@ -46,7 +46,8 @@ tools:
       affinity_bonus_scale: 0.0
       repeat_action_penalty: 0.75
       repeat_low_gain_penalty: 2.0
-      repeat_low_gain_threshold: 0.12
+      # Penalize same-type repeats only when raw normalized IQA marginal gain is <= 0.03.
+      repeat_low_gain_threshold: 0.03
       # Eligible stop calls are reward-neutral; calls before step five retain an early-stop penalty.
       stop_min_step: 5
       stop_iqa_delta_threshold: 0.6
