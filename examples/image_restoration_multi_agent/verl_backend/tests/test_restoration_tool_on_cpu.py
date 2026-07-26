@@ -2,7 +2,6 @@ import asyncio
 import json
 
 import pytest
-
 from verl.tools import restoration_tool as restoration_tool_module
 from verl.tools.restoration_tool import RestorationTool
 from verl.tools.schemas import (
@@ -70,7 +69,7 @@ def test_repeat_penalty_discourages_low_gain_repeats_on_cpu():
     assert repeated_reward["same_type_action_count"] == pytest.approx(2.0)
 
 
-@pytest.mark.parametrize("reward_mode", ["step_mixed_v1", "final_iqa_v2"])
+@pytest.mark.parametrize("reward_mode", ["step_mixed_v1", "final_iqa_v2", "marginal_efficiency_v1"])
 def test_repeat_penalty_does_not_discourage_high_gain_same_type_actions_on_cpu(reward_mode):
     tool = _build_tool(
         reward_mode=reward_mode,
@@ -182,6 +181,75 @@ def test_final_iqa_v2_rewards_only_new_best_iqa_on_cpu():
     assert regression["reward"] == pytest.approx(-0.09)
     assert new_best["best_improvement"] == pytest.approx(0.05)
     assert new_best["reward"] == pytest.approx(0.15, abs=1e-6)
+
+
+def test_marginal_efficiency_reward_telescopes_and_ignores_original_image_term_on_cpu():
+    tool = _build_tool(
+        reward_mode="marginal_efficiency_v1",
+        reward_scale=4.0,
+        tool_call_cost=0.12,
+        repeat_action_penalty=0.0,
+        repeat_low_gain_penalty=0.0,
+    )
+    reward_kwargs = {
+        "weights": [0.2, 0.2, 0.2, 0.2, 0.2],
+        "action": "scunet",
+        "actions_history": [],
+    }
+
+    first = tool._calculate_reward(
+        prev_scores=[1.0] * 5,
+        curr_scores=[1.05] * 5,
+        identity_scores=[1.0] * 5,
+        **reward_kwargs,
+    )
+    same_marginal_different_identity = tool._calculate_reward(
+        prev_scores=[2.0] * 5,
+        curr_scores=[2.05] * 5,
+        identity_scores=[1.0] * 5,
+        **reward_kwargs,
+    )
+    second = tool._calculate_reward(
+        prev_scores=[1.05] * 5,
+        curr_scores=[1.03] * 5,
+        identity_scores=[1.0] * 5,
+        weights=reward_kwargs["weights"],
+        action="ridcp",
+        actions_history=["scunet"],
+    )
+
+    assert first["marginal"] == pytest.approx(0.05)
+    assert first["base_reward"] == pytest.approx(0.20)
+    assert first["tool_call_cost"] == pytest.approx(0.12)
+    assert first["reward"] == pytest.approx(0.08, abs=1e-6)
+    assert same_marginal_different_identity["identity"] == pytest.approx(1.05)
+    assert same_marginal_different_identity["reward"] == pytest.approx(first["reward"], abs=1e-6)
+    assert first["reward"] + second["reward"] == pytest.approx(4.0 * 0.03 - 2 * 0.12, abs=1e-6)
+
+
+def test_marginal_efficiency_stop_is_always_reward_neutral_on_cpu():
+    tool = _build_tool(
+        reward_mode="marginal_efficiency_v1",
+        stop_min_step=5,
+        stop_early_penalty=-1.2,
+    )
+    tool._instance_dict["test-instance"] = {
+        "step": 0,
+        "scores_history": [[1.0] * 5],
+        "identity_scores": [1.0] * 5,
+        "weights": [0.2] * 5,
+        "rewards_history": [],
+        "best_identity_delta": 0.0,
+    }
+
+    response, reward, metrics = asyncio.run(tool.execute("test-instance", {"action": "stop"}))
+
+    assert reward == pytest.approx(0.0)
+    assert metrics["reward_mode"] == "marginal_efficiency_v1"
+    assert metrics["step"] == 0
+    assert "Restoration stopped after 0 step(s)" in response.text
+    assert tool._instance_dict["test-instance"]["rewards_history"][-1] == pytest.approx(0.0)
+    assert tool._instance_dict["test-instance"]["trajectory_calls"][-1]["reward"] == pytest.approx(0.0)
 
 
 def test_stop_reward_is_neutral_after_minimum_step_on_cpu():

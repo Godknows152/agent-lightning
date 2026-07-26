@@ -62,7 +62,6 @@ from uuid import uuid4
 
 import torch
 import yaml
-
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
@@ -187,6 +186,7 @@ FAILURE_REWARD = -5.0
 REPEAT_ACTION_PENALTY = 0.2
 REPEAT_LOW_GAIN_PENALTY = 0.8
 REPEAT_LOW_GAIN_THRESHOLD = 0.05
+TOOL_CALL_COST = 0.12
 STOP_MIN_STEP = 3
 STOP_IQA_DELTA_THRESHOLD = 0.25
 STOP_EARLY_PENALTY = -1.0
@@ -194,7 +194,12 @@ STOP_RECENT_REWARD_WINDOW = 2
 STOP_RECENT_REWARD_THRESHOLD = 0.25
 REWARD_MODE_STEP_MIXED_V1 = "step_mixed_v1"
 REWARD_MODE_FINAL_IQA_V2 = "final_iqa_v2"
-SUPPORTED_REWARD_MODES = {REWARD_MODE_STEP_MIXED_V1, REWARD_MODE_FINAL_IQA_V2}
+REWARD_MODE_MARGINAL_EFFICIENCY_V1 = "marginal_efficiency_v1"
+SUPPORTED_REWARD_MODES = {
+    REWARD_MODE_STEP_MIXED_V1,
+    REWARD_MODE_FINAL_IQA_V2,
+    REWARD_MODE_MARGINAL_EFFICIENCY_V1,
+}
 
 # Module-level caches
 _toolkit_instance = None
@@ -886,6 +891,9 @@ class RestorationTool(BaseTool):
         self.alpha = float(config.get("alpha", 0.9))  # marginal-improvement weight
         self.beta = 1.0 - self.alpha  # identity-improvement weight
         self.reward_scale = float(config.get("reward_scale", 1.0))
+        self.tool_call_cost = float(config.get("tool_call_cost", TOOL_CALL_COST))
+        if self.tool_call_cost < 0.0:
+            raise ValueError(f"tool_call_cost must be non-negative, got {self.tool_call_cost}")
         self.final_iqa_reward_scale = float(config.get("final_iqa_reward_scale", self.reward_scale))
         self.final_iqa_regression_penalty_scale = float(config.get("final_iqa_regression_penalty_scale", 1.0))
         self.final_iqa_step_penalty = float(config.get("final_iqa_step_penalty", 0.0))
@@ -969,6 +977,7 @@ class RestorationTool(BaseTool):
             f"use_iqa={self.use_iqa}, normalize_iqa_scores={self.normalize_iqa_scores}, "
             f"reward_mode={self.reward_mode}, "
             f"alpha={self.alpha}, reward_scale={self.reward_scale}, "
+            f"tool_call_cost={self.tool_call_cost}, "
             f"final_iqa_reward_scale={self.final_iqa_reward_scale}, "
             f"final_iqa_regression_penalty_scale={self.final_iqa_regression_penalty_scale}, "
             f"final_iqa_step_penalty={self.final_iqa_step_penalty}, "
@@ -1196,6 +1205,16 @@ class RestorationTool(BaseTool):
                 actions_history=actions_history,
                 best_identity_delta=best_identity_delta,
             )
+        if self.reward_mode == REWARD_MODE_MARGINAL_EFFICIENCY_V1:
+            return self._calculate_marginal_efficiency_reward_v1(
+                prev_scores=prev_scores,
+                curr_scores=curr_scores,
+                identity_scores=identity_scores,
+                weights=weights,
+                action=action,
+                actions_history=actions_history,
+                best_identity_delta=best_identity_delta,
+            )
 
         prev_t = torch.tensor(prev_scores, dtype=torch.float32)
         curr_t = torch.tensor(curr_scores, dtype=torch.float32)
@@ -1240,6 +1259,61 @@ class RestorationTool(BaseTool):
             "best_improvement": float(max(0.0, identity - best_identity_delta)),
             "regression_penalty": 0.0,
             "step_penalty": 0.0,
+            "tool_call_cost": 0.0,
+        }
+
+    def _calculate_marginal_efficiency_reward_v1(
+        self,
+        prev_scores: list[float],
+        curr_scores: list[float],
+        identity_scores: list[float],
+        weights: list[float],
+        action: str,
+        actions_history: list[str],
+        best_identity_delta: float,
+    ) -> dict[str, Any]:
+        """Reward marginal IQA improvement while charging for each successful tool call.
+
+        Before clipping and repeat penalties, summing the reward over a trajectory yields
+        ``reward_scale * (final_score - initial_score) - tool_call_cost * tool_calls``.
+        The original-image IQA delta is retained only as a diagnostic and is not
+        included in the per-step base reward.
+        """
+        prev_t = torch.tensor(prev_scores, dtype=torch.float32)
+        curr_t = torch.tensor(curr_scores, dtype=torch.float32)
+        iden_t = torch.tensor(identity_scores, dtype=torch.float32)
+        w_t = torch.tensor(weights, dtype=torch.float32)
+
+        marginal = ((curr_t - prev_t) * w_t).sum().item()
+        identity = ((curr_t - iden_t) * w_t).sum().item()
+        base_reward = marginal * self.reward_scale
+
+        repeat_tool_type_key = self._repeat_type_key(action)
+        repeat_count = self._count_trajectory_type_repeats(actions_history, action)
+        repeat_penalty = self._calculate_repeat_penalty(marginal, repeat_count)
+
+        reward = float(
+            torch.clamp(
+                torch.tensor(base_reward - self.tool_call_cost - repeat_penalty),
+                -10.0,
+                10.0,
+            ).item()
+        )
+        return {
+            "reward": reward,
+            "base_reward": float(base_reward),
+            "marginal": float(marginal),
+            "identity": float(identity),
+            "repeat_penalty": float(repeat_penalty),
+            "affinity_bonus": 0.0,
+            "consecutive_action_count": float(repeat_count + 1),
+            "same_type_action_count": float(repeat_count + 1),
+            "repeat_tool_type_key": repeat_tool_type_key,
+            "best_identity_delta": float(max(best_identity_delta, identity)),
+            "best_improvement": float(max(0.0, identity - best_identity_delta)),
+            "regression_penalty": 0.0,
+            "step_penalty": float(self.tool_call_cost),
+            "tool_call_cost": float(self.tool_call_cost),
         }
 
     def _calculate_final_iqa_reward_v2(
@@ -1296,6 +1370,7 @@ class RestorationTool(BaseTool):
             "best_improvement": float(best_improvement),
             "regression_penalty": float(regression_penalty),
             "step_penalty": float(self.final_iqa_step_penalty),
+            "tool_call_cost": 0.0,
         }
 
     def _calculate_identity_delta(
@@ -1372,6 +1447,7 @@ class RestorationTool(BaseTool):
             "total_tool_reward": float(sum(call_rewards)),
             "failed_tool_call_count": sum(1 for call in calls if call.get("status") == "error"),
             "total_repeat_penalty": float(sum(float(call.get("repeat_penalty", 0.0)) for call in calls)),
+            "total_tool_call_cost": float(sum(float(call.get("tool_call_cost", 0.0)) for call in calls)),
             "duration_seconds": max(0.0, finished_at - started_at),
             "tool_calls": calls,
         }
@@ -1392,7 +1468,9 @@ class RestorationTool(BaseTool):
         plateau = bool(recent_rewards) and recent_reward_mean <= self.stop_recent_reward_threshold
         good_enough = identity_delta >= self.stop_iqa_delta_threshold
 
-        if step < self.stop_min_step:
+        if self.reward_mode == REWARD_MODE_MARGINAL_EFFICIENCY_V1:
+            reward = 0.0
+        elif step < self.stop_min_step:
             reward = self.stop_early_penalty
         else:
             reward = 0.0
@@ -1439,6 +1517,25 @@ class RestorationTool(BaseTool):
                 else " Reusing the same tool type without clear gains is discouraged."
             )
             return prefix + suffix
+
+        if self.reward_mode == REWARD_MODE_MARGINAL_EFFICIENCY_V1:
+            break_even_gain = self.tool_call_cost / self.reward_scale if self.reward_scale > 0.0 else float("inf")
+            lines = [
+                f"Step {step}: Applied '{action}'.",
+                f"Step reward: {reward:.4f}",
+                f"Weighted marginal improvement: {marginal:.4f}",
+                f"Tool-call cost: {self.tool_call_cost:.4f}",
+                f"Break-even marginal improvement: {break_even_gain:.4f}",
+                f"Current improvement over original image: {identity_delta:.4f}",
+                f"Action history: {history_str}",
+            ]
+            if same_type_action_count > 1:
+                lines.append(_repeat_feedback_line(final_iqa_mode=False))
+            if marginal > break_even_gain:
+                lines.append("This action's IQA gain exceeded its tool-call cost.")
+            else:
+                lines.append("This action's IQA gain did not cover its tool-call cost.")
+            return "\n".join(lines)
 
         if self.reward_mode == REWARD_MODE_FINAL_IQA_V2:
             best_identity_delta = identity_delta if best_identity_delta is None else best_identity_delta
@@ -1853,6 +1950,7 @@ class RestorationTool(BaseTool):
                 "best_improvement": reward_info["best_improvement"],
                 "regression_penalty": reward_info["regression_penalty"],
                 "step_penalty": reward_info["step_penalty"],
+                "tool_call_cost": reward_info["tool_call_cost"],
                 "repeat_penalty": reward_info["repeat_penalty"],
                 "affinity_bonus": reward_info["affinity_bonus"],
                 "consecutive_action_count": int(reward_info["consecutive_action_count"]),
@@ -1879,6 +1977,7 @@ class RestorationTool(BaseTool):
                 best_improvement=float(reward_info["best_improvement"]),
                 regression_penalty=float(reward_info["regression_penalty"]),
                 step_penalty=float(reward_info["step_penalty"]),
+                tool_call_cost=float(reward_info["tool_call_cost"]),
                 repeat_penalty=float(reward_info["repeat_penalty"]),
                 affinity_bonus=float(reward_info["affinity_bonus"]),
                 repeat_tool_type_key=str(reward_info["repeat_tool_type_key"]),
