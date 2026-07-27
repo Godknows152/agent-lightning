@@ -29,6 +29,7 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict
 from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
+
 from verl.experimental.agent_loop.prometheus_utils import update_prometheus_config
 from verl.experimental.agent_loop.utils import resolve_config_path
 from verl.experimental.teacher_loop import MultiTeacherModelManager
@@ -261,6 +262,12 @@ class AgentLoopMetrics(BaseModel):
     tool_calls: float = 0.0
     compute_score: float = 0.0
     num_preempted: int = -1  # -1 means not available
+    tool_action_mask_attempted_turns: int = 0
+    tool_action_mask_matched_turns: int = 0
+    tool_action_mask_matched_tokens: int = 0
+    tool_action_mask_roundtrip_failures: int = 0
+    tool_action_mask_invalid_schema_failures: int = 0
+    tool_action_mask_boundary_failures: int = 0
 
 
 class AgentLoopOutput(BaseModel):
@@ -272,6 +279,8 @@ class AgentLoopOutput(BaseModel):
     """Response token ids including LLM generated token, tool response token."""
     response_mask: list[int]
     """Response mask, 1 for LLM generated token, 0 for tool response token."""
+    tool_action_token_mask: Optional[list[int]] = None
+    """Mask for valid generated tool action value tokens."""
     response_logprobs: Optional[list[float]] = None
     """Log probabilities for the response tokens."""
     routed_experts: Optional[Any] = None
@@ -294,6 +303,10 @@ class AgentLoopOutput(BaseModel):
         output["prompts"] = torch.tensor(output.pop("prompt_ids"), dtype=torch.int64)
         output["responses"] = torch.tensor(output.pop("response_ids"), dtype=torch.int64)
         output["response_mask"] = torch.tensor(output.pop("response_mask"), dtype=torch.int64)
+        tool_action_token_mask = output.pop("tool_action_token_mask", None)
+        if tool_action_token_mask is None:
+            tool_action_token_mask = [0] * len(output["responses"])
+        output["tool_action_token_mask"] = torch.tensor(tool_action_token_mask, dtype=torch.int64)
 
         response_logprobs = output.pop("response_logprobs", None)
         if response_logprobs is not None:
@@ -336,6 +349,8 @@ class _InternalAgentLoopOutput(AgentLoopOutput):
     """Padded position ids."""
     response_mask: torch.Tensor
     """Padded response mask."""
+    tool_action_token_mask: Optional[torch.Tensor] = None
+    """Padded valid tool action token mask."""
     attention_mask: torch.Tensor
     """Padded attention mask."""
     response_logprobs: Optional[torch.Tensor] = None
@@ -653,6 +668,7 @@ class AgentLoopWorker:
             - responses: [bsz, response_length], output token ids include response tokens
               from LLM generation and observation tokens from tool_calls.
             - response_mask: [bsz, response_length], 1 for LLM generated tokens, 0 for observation/padding tokens.
+            - tool_action_token_mask: [bsz, response_length], 1 only for valid generated action value tokens.
             - input_ids: [bsz, prompt_length + response_length], whole sequence token ids, including prompt tokens
               and response tokens.
             - attention_mask: [bsz, prompt_length + response_length], 0 for padding tokens, 1 for other tokens.
@@ -661,6 +677,7 @@ class AgentLoopWorker:
             For multi-turn conversations:
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
+            action mask:   | 0, 0, 1, ..., 1, 0 | 0, 0, .., 0, 0 | 0, 1, 1, ..., 0, 0 | 0, 0, ..., 0|
         """
         config = self.rollout_config
 
@@ -791,9 +808,9 @@ class AgentLoopWorker:
             name="agent_loop",
             trace=trace,
         ):
-            assert (
-                agent_name in _agent_loop_registry
-            ), f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
+            assert agent_name in _agent_loop_registry, (
+                f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
+            )
 
             agent_loop_config = _agent_loop_registry[agent_name]
             agent_loop = hydra.utils.instantiate(
@@ -867,12 +884,31 @@ class AgentLoopWorker:
         if response_mask_output["input_ids"].dim() == 1:
             response_mask_output["input_ids"] = response_mask_output["input_ids"].unsqueeze(0)
 
+        tool_action_token_mask = output.tool_action_token_mask
+        if tool_action_token_mask is None:
+            tool_action_token_mask = [0] * len(output.response_ids)
+        if len(tool_action_token_mask) != len(output.response_ids):
+            raise ValueError(
+                "tool_action_token_mask and response_ids must have the same length, "
+                f"got {len(tool_action_token_mask)} and {len(output.response_ids)}"
+            )
+        tool_action_mask_output = self.tokenizer.pad(
+            {"input_ids": tool_action_token_mask},
+            padding="max_length",
+            max_length=self.rollout_config.response_length,
+            return_tensors="pt",
+            return_attention_mask=False,
+        )
+        if tool_action_mask_output["input_ids"].dim() == 1:
+            tool_action_mask_output["input_ids"] = tool_action_mask_output["input_ids"].unsqueeze(0)
+
         response_logprobs = None
         if output.response_logprobs is not None:
             pad_size = self.rollout_config.response_length - len(output.response_logprobs)
             response_logprobs = torch.tensor(output.response_logprobs + [0.0] * pad_size).unsqueeze(0)
 
         response_mask = response_mask_output["input_ids"] * response_output["attention_mask"]
+        tool_action_token_mask = tool_action_mask_output["input_ids"] * response_mask
         attention_mask = torch.cat([prompt_output["attention_mask"], response_output["attention_mask"]], dim=1)
         input_ids = torch.cat([prompt_output["input_ids"], response_output["input_ids"]], dim=1)
 
@@ -945,6 +981,7 @@ class AgentLoopWorker:
             input_ids=input_ids,
             position_ids=position_ids,
             response_mask=response_mask,
+            tool_action_token_mask=tool_action_token_mask,
             attention_mask=attention_mask,
             response_logprobs=response_logprobs,
             routed_experts=routed_experts,
@@ -1092,6 +1129,15 @@ class AgentLoopWorker:
         prompt_ids = torch.cat([input.prompt_ids for input in inputs], dim=0)
         response_ids = torch.cat([input.response_ids for input in inputs], dim=0)
         response_mask = torch.cat([input.response_mask for input in inputs], dim=0)
+        tool_action_token_mask = torch.cat(
+            [
+                input.tool_action_token_mask
+                if input.tool_action_token_mask is not None
+                else torch.zeros_like(input.response_mask)
+                for input in inputs
+            ],
+            dim=0,
+        )
         attention_mask = torch.cat([input.attention_mask for input in inputs], dim=0)
         input_ids = torch.cat([input.input_ids for input in inputs], dim=0)
         position_ids = torch.cat([input.position_ids for input in inputs], dim=0)
@@ -1108,6 +1154,7 @@ class AgentLoopWorker:
                 "prompts": prompt_ids,  # [bsz, prompt_length]
                 "responses": response_ids,  # [bsz, response_length]
                 "response_mask": response_mask,  # [bsz, response_length]
+                "tool_action_token_mask": tool_action_token_mask,  # [bsz, response_length]
                 "input_ids": input_ids,  # [bsz, prompt_length + response_length]
                 "attention_mask": attention_mask,  # [bsz, prompt_length + response_length]
                 # position_ids: [bsz, 3, prompt_length + response_length] or [bsz, prompt_length + response_length]
@@ -1149,6 +1196,7 @@ class AgentLoopWorker:
         default_extra_keys = {
             "turn_scores",
             "tool_rewards",
+            "action_history",
             "pure_image_restoration_rewards",
             "stop_rewards",
             "pure_image_restoration_reward",
@@ -1394,12 +1442,13 @@ class AgentLoopManager:
         output.meta_info = {"timing": timing, **outputs[0].meta_info}
         return output
 
-    def _performance_metrics(self, metrics: list[list[dict[str, str]]], output: DataProto) -> dict[str, float]:
+    def _performance_metrics(self, metrics: list[list[dict[str, Any]]], output: DataProto) -> dict[str, float]:
         timing = {}
-        t_generate_sequences = np.array([metric["generate_sequences"] for chunk in metrics for metric in chunk])
-        t_tool_calls = np.array([metric["tool_calls"] for chunk in metrics for metric in chunk])
-        t_compute_score = np.array([metric["compute_score"] for chunk in metrics for metric in chunk])
-        num_preempted = np.array([metric["num_preempted"] for chunk in metrics for metric in chunk])
+        flat_metrics = [metric for chunk in metrics for metric in chunk]
+        t_generate_sequences = np.array([metric["generate_sequences"] for metric in flat_metrics])
+        t_tool_calls = np.array([metric["tool_calls"] for metric in flat_metrics])
+        t_compute_score = np.array([metric["compute_score"] for metric in flat_metrics])
+        num_preempted = np.array([metric["num_preempted"] for metric in flat_metrics])
         timing["agent_loop/num_preempted/min"] = num_preempted.min()
         timing["agent_loop/num_preempted/max"] = num_preempted.max()
         timing["agent_loop/num_preempted/mean"] = num_preempted.mean()
@@ -1412,6 +1461,27 @@ class AgentLoopManager:
         timing["agent_loop/compute_score/min"] = t_compute_score.min()
         timing["agent_loop/compute_score/max"] = t_compute_score.max()
         timing["agent_loop/compute_score/mean"] = t_compute_score.mean()
+
+        mask_attempts = sum(int(metric.get("tool_action_mask_attempted_turns", 0)) for metric in flat_metrics)
+        mask_matches = sum(int(metric.get("tool_action_mask_matched_turns", 0)) for metric in flat_metrics)
+        mask_tokens = sum(int(metric.get("tool_action_mask_matched_tokens", 0)) for metric in flat_metrics)
+        trajectories_with_action = sum(
+            int(metric.get("tool_action_mask_matched_tokens", 0) > 0) for metric in flat_metrics
+        )
+        timing["tool_action_mask/attempted_turns"] = mask_attempts
+        timing["tool_action_mask/matched_turns"] = mask_matches
+        timing["tool_action_mask/match_rate"] = mask_matches / mask_attempts if mask_attempts else 0.0
+        timing["tool_action_mask/tokens_per_trajectory_mean"] = mask_tokens / len(flat_metrics)
+        timing["tool_action_mask/trajectories_with_action_rate"] = trajectories_with_action / len(flat_metrics)
+        for metric_name in (
+            "roundtrip_failures",
+            "invalid_schema_failures",
+            "boundary_failures",
+        ):
+            failure_count = sum(int(metric.get(f"tool_action_mask_{metric_name}", 0)) for metric in flat_metrics)
+            timing[f"tool_action_mask/{metric_name.removesuffix('_failures')}_failure_rate"] = (
+                failure_count / mask_attempts if mask_attempts else 0.0
+            )
 
         # batch sequence generation is bounded by the slowest sample
         slowest = np.argmax(t_generate_sequences + t_tool_calls + t_compute_score)

@@ -15,6 +15,7 @@
 
 import torch
 from tensordict import TensorDict
+
 from verl.trainer.diffusion.diffusion_algos import kl_penalty_image
 from verl.trainer.ppo.core_algos import agg_loss, compute_value_loss, get_policy_loss_fn, kl_penalty
 from verl.utils import tensordict_utils as tu
@@ -84,6 +85,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     # select fields and convert to padded tensor
     fields = ["response_mask", "old_log_probs", "advantages"]
+    tool_action_entropy_coeff = config.tool_action_entropy_coeff
+    if tool_action_entropy_coeff > 0:
+        if "tool_action_token_mask" not in data:
+            raise ValueError("tool_action_token_mask is required when tool_action_entropy_coeff is positive")
+        fields.append("tool_action_token_mask")
     if "rollout_is_weights" in data:
         fields.append("rollout_is_weights")
     if "ref_log_prob" in data:
@@ -127,6 +133,31 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         entropy_coeff = config.entropy_coeff
         policy_loss -= entropy_coeff * entropy_loss
         metrics["actor/entropy_loss"] = Metric(value=entropy_loss, aggregation=metric_aggregation)
+
+        if tool_action_entropy_coeff > 0:
+            tool_action_mask = data["tool_action_token_mask"].to(bool) & response_mask
+            tool_action_entropy = agg_loss(
+                loss_mat=entropy,
+                loss_mask=tool_action_mask,
+                loss_agg_mode="seq-mean-token-mean",
+                **config.global_batch_info,
+            )
+            tool_action_entropy_bonus = tool_action_entropy_coeff * tool_action_entropy
+            policy_loss -= tool_action_entropy_bonus
+            metrics["actor/tool_action_token_entropy"] = Metric(
+                value=tool_action_entropy,
+                aggregation=metric_aggregation,
+            )
+            metrics["actor/tool_action_entropy_bonus"] = Metric(
+                value=tool_action_entropy_bonus,
+                aggregation=metric_aggregation,
+            )
+            metrics["actor/tool_action_entropy_coeff"] = Metric(
+                value=tool_action_entropy_coeff,
+                aggregation=AggregationType.MEAN,
+            )
+    elif tool_action_entropy_coeff > 0:
+        raise ValueError("Model entropy is required when tool_action_entropy_coeff is positive")
 
     # add kl loss
     if config.use_kl_loss:

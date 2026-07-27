@@ -21,11 +21,13 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 from tensordict import TensorDict
+
 from verl import DataProto
 from verl.trainer.ppo.metric_utils import (
     bootstrap_metric,
     calc_maj_val,
     compute_data_metrics,
+    compute_restoration_action_entropy_metrics,
     compute_restoration_penalty_metrics,
     compute_restoration_reward_metrics,
     compute_throughout_metrics,
@@ -149,6 +151,57 @@ class TestRestorationRewardMetrics(unittest.TestCase):
         batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
 
         self.assertEqual(compute_restoration_reward_metrics(batch), {})
+
+
+class TestRestorationActionEntropyMetrics(unittest.TestCase):
+    """Tests for empirical action-path and pooled tool-choice entropy."""
+
+    def test_computes_batch_entropies_and_coverage_from_executed_actions(self):
+        action_histories = np.empty(5, dtype=object)
+        action_histories[:] = [
+            ["ridcp", "scunet", "stop"],
+            ["ridcp", "scunet", "stop"],
+            ["ridcp", "stop"],
+            [],
+            None,
+        ]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[5]),
+            non_tensor_batch={"action_history": action_histories},
+        )
+
+        metrics = compute_restoration_action_entropy_metrics(batch)
+
+        expected_path_entropy = -(2 / 3) * np.log(2 / 3) - (1 / 3) * np.log(1 / 3)
+        expected_choice_entropy = -2 * (3 / 8) * np.log(3 / 8) - (2 / 8) * np.log(2 / 8)
+        self.assertAlmostEqual(metrics["actor/action_path_entropy"], expected_path_entropy)
+        self.assertAlmostEqual(metrics["actor/tool_choice_entropy"], expected_choice_entropy)
+        self.assertEqual(metrics["actor/action_path_valid_trajectory_rate"], 3 / 5)
+        self.assertEqual(metrics["actor/action_path_unique_count"], 2)
+        self.assertEqual(metrics["actor/tool_choice_sample_count"], 8)
+        self.assertEqual(metrics["actor/tool_choice_unique_action_count"], 3)
+
+    def test_empty_histories_are_zero_without_nan(self):
+        action_histories = np.empty(2, dtype=object)
+        action_histories[:] = [[], None]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[2]),
+            non_tensor_batch={"action_history": action_histories},
+        )
+
+        metrics = compute_restoration_action_entropy_metrics(batch)
+
+        self.assertEqual(metrics["actor/action_path_entropy"], 0.0)
+        self.assertEqual(metrics["actor/tool_choice_entropy"], 0.0)
+        self.assertEqual(metrics["actor/action_path_valid_trajectory_rate"], 0.0)
+        self.assertEqual(metrics["actor/action_path_unique_count"], 0)
+        self.assertEqual(metrics["actor/tool_choice_sample_count"], 0)
+        self.assertEqual(metrics["actor/tool_choice_unique_action_count"], 0)
+
+    def test_returns_empty_when_action_history_is_unavailable(self):
+        batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
+
+        self.assertEqual(compute_restoration_action_entropy_metrics(batch), {})
 
 
 class TestMetric(unittest.TestCase):

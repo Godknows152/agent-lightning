@@ -214,6 +214,49 @@ class TestActorConfig(unittest.TestCase):
         )
         self.assertIsNotNone(config)  # Should not raise an exception
 
+    def test_tool_action_entropy_config_validation(self):
+        """Test targeted tool entropy defaults and validation."""
+        optim = OptimizerConfig(lr=0.1)
+        config = ActorConfig(
+            strategy="fsdp",
+            use_dynamic_bsz=True,
+            optim=optim,
+            rollout_n=1,
+        )
+        self.assertEqual(config.tool_action_entropy_coeff, 0.0)
+
+        with self.assertRaisesRegex(ValueError, "must be non-negative"):
+            ActorConfig(
+                strategy="fsdp",
+                use_dynamic_bsz=True,
+                tool_action_entropy_coeff=-0.1,
+                calculate_entropy=True,
+                optim=optim,
+                rollout_n=1,
+            )
+
+        with self.assertRaisesRegex(ValueError, "calculate_entropy must be true"):
+            ActorConfig(
+                strategy="fsdp",
+                use_dynamic_bsz=True,
+                tool_action_entropy_coeff=0.001,
+                calculate_entropy=False,
+                optim=optim,
+                rollout_n=1,
+            )
+
+        config = ActorConfig(
+            strategy="fsdp",
+            use_dynamic_bsz=True,
+            entropy_coeff=0.005,
+            tool_action_entropy_coeff=0.001,
+            calculate_entropy=True,
+            optim=optim,
+            rollout_n=1,
+        )
+        self.assertEqual(config.entropy_coeff, 0.005)
+        self.assertEqual(config.tool_action_entropy_coeff, 0.001)
+
     def test_fsdp_actor_config_validation_exceptions(self):
         """Test that FSDPActorConfig.validate() raises appropriate validation exceptions."""
         optim = OptimizerConfig(lr=0.1)

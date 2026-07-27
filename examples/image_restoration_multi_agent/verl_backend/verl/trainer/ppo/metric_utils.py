@@ -16,12 +16,13 @@ Metrics related to the PPO trainer.
 """
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import partial
 from typing import Any, Callable
 
 import numpy as np
 import torch
+
 import verl.utils.torch_functional as verl_F
 from verl import DataProto
 from verl.utils.import_utils import deprecated
@@ -383,6 +384,69 @@ def compute_restoration_reward_metrics(batch: DataProto) -> dict[str, Any]:
     return {
         "restoration_reward/pure_image_reward_mean": float(np.mean(components["pure_image_restoration_reward"])),
         "restoration_reward/other_penalty_mean": float(np.mean(components["other_penalty"])),
+    }
+
+
+def _normalize_action_histories(value: Any, length: int) -> list[tuple[str, ...]]:
+    """Normalize per-trajectory executed restoration actions into immutable paths."""
+
+    if value is None:
+        return [() for _ in range(length)]
+    array = np.asarray(value, dtype=object)
+    if array.shape == ():
+        array = np.full(length, array.item(), dtype=object)
+    if len(array) != length:
+        logger.warning("Expected action_history length %s, got %s; ignoring field", length, len(array))
+        return [() for _ in range(length)]
+
+    paths: list[tuple[str, ...]] = []
+    for item in array:
+        if not isinstance(item, (list, tuple, np.ndarray)):
+            paths.append(())
+            continue
+        paths.append(tuple(action.strip() for action in item if isinstance(action, str) and action.strip()))
+    return paths
+
+
+def _empirical_entropy(samples: list[Any]) -> float:
+    """Return natural-log empirical Shannon entropy, or zero for no samples."""
+
+    if not samples:
+        return 0.0
+    counts = Counter(samples)
+    probabilities = np.asarray(list(counts.values()), dtype=np.float64) / len(samples)
+    return float(-np.sum(probabilities * np.log(probabilities)))
+
+
+def compute_restoration_action_entropy_metrics(batch: DataProto) -> dict[str, Any]:
+    """Measure empirical restoration action-path and pooled action-choice diversity.
+
+    Empty trajectories are excluded from both entropy estimates. All successfully
+    parsed and executed actions, including ``stop``, participate in the metrics.
+    """
+
+    if "action_history" not in batch.non_tensor_batch:
+        return {}
+    batch_size = len(batch)
+    if batch_size == 0:
+        return {}
+
+    raw_action_histories = batch.non_tensor_batch["action_history"]
+    raw_array = np.asarray(raw_action_histories, dtype=object)
+    if raw_array.shape != () and all(item is None for item in raw_array):
+        return {}
+
+    action_paths = _normalize_action_histories(raw_action_histories, batch_size)
+    valid_paths = [path for path in action_paths if path]
+    action_choices = [action for path in valid_paths for action in path]
+
+    return {
+        "actor/action_path_entropy": _empirical_entropy(valid_paths),
+        "actor/tool_choice_entropy": _empirical_entropy(action_choices),
+        "actor/action_path_valid_trajectory_rate": len(valid_paths) / batch_size,
+        "actor/action_path_unique_count": len(set(valid_paths)),
+        "actor/tool_choice_sample_count": len(action_choices),
+        "actor/tool_choice_unique_action_count": len(set(action_choices)),
     }
 
 

@@ -21,6 +21,7 @@ import numpy as np
 import pytest
 import torch
 from omegaconf import OmegaConf
+
 from verl.experimental.agent_loop.agent_loop import (
     AgentLoopMetrics,
     AgentLoopOutput,
@@ -125,6 +126,7 @@ def _to_internal(
     output_prompt_ids: list[int],
     output_response_ids: list[int],
     output_response_mask: list[int],
+    output_tool_action_token_mask: list[int] | None = None,
     metrics: AgentLoopMetrics,
     extra_fields: dict[str, Any],
     num_turns: int,
@@ -134,6 +136,11 @@ def _to_internal(
     prompt_ids = _pad_1d(output_prompt_ids, length=prompt_len, pad_id=0)
     response_ids = _pad_1d(output_response_ids, length=response_len, pad_id=0)
     response_mask = _pad_1d(output_response_mask, length=response_len, pad_id=0)
+    tool_action_token_mask = (
+        _pad_1d(output_tool_action_token_mask, length=response_len, pad_id=0)
+        if output_tool_action_token_mask is not None
+        else None
+    )
 
     seq_len = prompt_len + response_len
     attention_mask = _pad_1d([1] * len(output_prompt_ids), length=prompt_len, pad_id=0) + _pad_1d(
@@ -151,6 +158,7 @@ def _to_internal(
         prompt_ids=t(prompt_ids),
         response_ids=t(response_ids),
         response_mask=t(response_mask),
+        tool_action_token_mask=t(tool_action_token_mask) if tool_action_token_mask is not None else None,
         attention_mask=t(attention_mask),
         input_ids=t(input_ids),
         position_ids=t(position_ids),
@@ -236,19 +244,22 @@ async def test_agent_loop_extra_fields_schema_stable_for_training_concat_on_cpu(
     stable_keys = (
         "turn_scores",
         "tool_rewards",
+        "action_history",
         "min_global_steps",
         "max_global_steps",
         "extras",
     )
     for key in stable_keys:
         assert key in merged.non_tensor_batch, f"missing key in merged batch: {key}"
-        assert merged.non_tensor_batch[key].shape == (
-            1,
-        ), f"invalid shape for {key}: {merged.non_tensor_batch[key].shape}"
+        assert merged.non_tensor_batch[key].shape == (1,), (
+            f"invalid shape for {key}: {merged.non_tensor_batch[key].shape}"
+        )
 
     # And the list-typed fields are actually lists (not missing / scalar).
     assert merged.non_tensor_batch["turn_scores"][0] == []
     assert merged.non_tensor_batch["tool_rewards"][0] == []
+    assert torch.count_nonzero(merged.batch["tool_action_token_mask"]) == 0
+    assert torch.all(merged.batch["tool_action_token_mask"] <= merged.batch["response_mask"])
 
 
 @pytest.mark.asyncio
@@ -274,6 +285,7 @@ async def test_agent_loop_postprocess_accepts_read_only_routed_experts_on_cpu():
         prompt_ids=[101, 102],
         response_ids=[11, 12],
         response_mask=[1, 1],
+        tool_action_token_mask=[0, 1],
         routed_experts=routed_experts,
         metrics=AgentLoopMetrics(),
         extra_fields={},
@@ -298,3 +310,6 @@ async def test_agent_loop_postprocess_accepts_read_only_routed_experts_on_cpu():
     torch.testing.assert_close(internal.routed_experts[:, 2:6], expected)
     assert torch.count_nonzero(internal.routed_experts[:, :2]) == 0
     assert torch.count_nonzero(internal.routed_experts[:, 6:]) == 0
+    assert internal.tool_action_token_mask is not None
+    torch.testing.assert_close(internal.tool_action_token_mask, torch.tensor([[0, 1, 0, 0]]))
+    assert torch.all(internal.tool_action_token_mask <= internal.response_mask)

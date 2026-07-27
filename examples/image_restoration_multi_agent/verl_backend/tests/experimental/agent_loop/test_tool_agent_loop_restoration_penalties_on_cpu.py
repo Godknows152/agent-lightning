@@ -388,6 +388,7 @@ def test_successful_tool_reward_has_no_fixed_call_bonus() -> None:
     assert agent_data.tool_rewards == [0.25]
     assert agent_data.pure_image_restoration_rewards == [0.25]
     assert agent_data.stop_rewards == []
+    assert agent_data.action_history == ["scunet"]
 
 
 def test_executed_stop_reward_is_recorded_separately() -> None:
@@ -405,3 +406,4 @@ def test_executed_stop_reward_is_recorded_separately() -> None:
     assert agent_data.tool_rewards == [-1.2]
     assert agent_data.pure_image_restoration_rewards == []
     assert agent_data.stop_rewards == [-1.2]
+    assert agent_data.action_history == ["stop"]

@@ -18,6 +18,7 @@ import math
 import os
 import re
 import sys
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,126 @@ class AgentState(Enum):
     TERMINATED = "terminated"
 
 
+@dataclass(frozen=True)
+class ToolActionMaskResult:
+    """Result of aligning one parsed restoration action to generated token IDs."""
+
+    mask: list[int]
+    matched: bool
+    action: str | None = None
+    failure_reason: str | None = None
+
+
+_ACTION_PARAMETER_PATTERN = re.compile(r"<parameter=action>(?P<raw_value>.*?)</parameter>", re.DOTALL)
+
+
+def _tool_action_mask_failure(response_ids: list[int], reason: str) -> ToolActionMaskResult:
+    """Return a fail-closed mask for an action-token alignment failure."""
+
+    return ToolActionMaskResult(mask=[0] * len(response_ids), matched=False, failure_reason=reason)
+
+
+def build_tool_action_token_mask(
+    response_ids: list[int],
+    tokenizer: Any,
+    parsed_tool_calls: list[FunctionCall],
+    allowed_actions: set[str],
+) -> ToolActionMaskResult:
+    """Align a valid Qwen3 ``restore_image`` action value to its generated tokens.
+
+    The alignment is deliberately strict. It validates the parsed call, finds the
+    structured ``<parameter=action>`` value span, and requires a lossless
+    decode/encode round trip with tokenizer offsets. Any ambiguity returns an
+    all-zero mask instead of falling back to a fuzzy action-name search.
+    """
+
+    if len(parsed_tool_calls) == 0:
+        return _tool_action_mask_failure(response_ids, "no_parsed_tool_call")
+    if len(parsed_tool_calls) != 1:
+        return _tool_action_mask_failure(response_ids, "multiple_tool_calls")
+
+    tool_call = parsed_tool_calls[0]
+    if tool_call.name != "restore_image":
+        return _tool_action_mask_failure(response_ids, "unexpected_function_name")
+
+    try:
+        arguments = json.loads(tool_call.arguments)
+    except (json.JSONDecodeError, TypeError):
+        return _tool_action_mask_failure(response_ids, "invalid_tool_arguments")
+    if not isinstance(arguments, dict) or set(arguments) != {"action"}:
+        return _tool_action_mask_failure(response_ids, "missing_or_extra_action_arguments")
+
+    parsed_action = arguments.get("action")
+    if not isinstance(parsed_action, str) or not parsed_action:
+        return _tool_action_mask_failure(response_ids, "missing_action_argument")
+    if parsed_action not in allowed_actions:
+        return _tool_action_mask_failure(response_ids, "action_not_in_active_schema")
+
+    if not getattr(tokenizer, "is_fast", False):
+        return _tool_action_mask_failure(response_ids, "tokenizer_not_fast")
+
+    text = tokenizer.decode(response_ids, skip_special_tokens=False)
+    matches = list(_ACTION_PARAMETER_PATTERN.finditer(text))
+    if len(matches) == 0:
+        return _tool_action_mask_failure(response_ids, "missing_action_xml_span")
+    if len(matches) != 1:
+        return _tool_action_mask_failure(response_ids, "multiple_action_xml_spans")
+
+    match = matches[0]
+    raw_value = match.group("raw_value")
+    action = raw_value.strip()
+    if action != parsed_action:
+        return _tool_action_mask_failure(response_ids, "parsed_action_text_mismatch")
+
+    leading_whitespace = len(raw_value) - len(raw_value.lstrip())
+    trailing_whitespace = len(raw_value) - len(raw_value.rstrip())
+    action_start = match.start("raw_value") + leading_whitespace
+    action_end = match.end("raw_value") - trailing_whitespace
+    if action_start >= action_end:
+        return _tool_action_mask_failure(response_ids, "empty_action_xml_span")
+
+    try:
+        encoding = tokenizer(
+            text,
+            add_special_tokens=False,
+            return_offsets_mapping=True,
+        )
+        encoded_ids = list(encoding["input_ids"])
+        offsets = list(encoding["offset_mapping"])
+    except (KeyError, TypeError, ValueError, NotImplementedError):
+        return _tool_action_mask_failure(response_ids, "offset_mapping_unavailable")
+
+    if encoded_ids != response_ids:
+        return _tool_action_mask_failure(response_ids, "token_id_roundtrip_mismatch")
+    if len(offsets) != len(response_ids):
+        return _tool_action_mask_failure(response_ids, "offset_length_mismatch")
+
+    selected_indices: list[int] = []
+    for index, raw_offset in enumerate(offsets):
+        if not isinstance(raw_offset, (list, tuple)) or len(raw_offset) != 2:
+            return _tool_action_mask_failure(response_ids, "invalid_token_offset")
+        token_start, token_end = int(raw_offset[0]), int(raw_offset[1])
+        overlaps_action = token_start < action_end and token_end > action_start
+        contained_in_action = action_start <= token_start and token_end <= action_end
+        if overlaps_action and not contained_in_action:
+            return _tool_action_mask_failure(response_ids, "token_crosses_action_boundary")
+        if contained_in_action and token_end > token_start:
+            selected_indices.append(index)
+
+    if not selected_indices:
+        return _tool_action_mask_failure(response_ids, "empty_action_token_span")
+    first_index, last_index = selected_indices[0], selected_indices[-1]
+    if selected_indices != list(range(first_index, last_index + 1)):
+        return _tool_action_mask_failure(response_ids, "non_contiguous_action_tokens")
+    if tokenizer.decode(response_ids[first_index : last_index + 1], skip_special_tokens=False) != action:
+        return _tool_action_mask_failure(response_ids, "decoded_action_token_mismatch")
+
+    mask = [0] * len(response_ids)
+    for index in selected_indices:
+        mask[index] = 1
+    return ToolActionMaskResult(mask=mask, matched=True, action=action)
+
+
 class AgentData:
     """Encapsulates all state variables for the agent loop. AgentData is passed to tool calling in case that
     tool may need to access full history state. User can store any tool session data in `extra_fields`."""
@@ -75,6 +196,7 @@ class AgentData:
         self.prompt_ids: list[int] = []
         self.response_ids: list[int] = []
         self.response_mask: list[int] = []
+        self.tool_action_token_mask: list[int] = []
         self.response_logprobs: list[float] = []
         self.turn_scores: list[float] = []
         self.tool_rewards: list[float] = []
@@ -142,6 +264,68 @@ class ToolAgentLoop(AgentLoopBase):
     def _generated_response_length(agent_data: AgentData) -> int:
         """Return the number of model tokens eligible for policy loss."""
         return sum(agent_data.response_mask)
+
+    @staticmethod
+    def _allowed_actions_from_tool_schemas(tool_schemas: list[Any]) -> set[str]:
+        """Return the active ``restore_image.action`` enum values."""
+
+        allowed_actions: set[str] = set()
+        for raw_schema in tool_schemas:
+            schema = raw_schema.model_dump() if hasattr(raw_schema, "model_dump") else raw_schema
+            if not isinstance(schema, dict):
+                continue
+            function = schema.get("function")
+            if not isinstance(function, dict) or function.get("name") != "restore_image":
+                continue
+            parameters = function.get("parameters")
+            properties = parameters.get("properties") if isinstance(parameters, dict) else None
+            action_schema = properties.get("action") if isinstance(properties, dict) else None
+            action_enum = action_schema.get("enum") if isinstance(action_schema, dict) else None
+            if isinstance(action_enum, list):
+                allowed_actions.update(action for action in action_enum if isinstance(action, str) and action)
+        return allowed_actions
+
+    @staticmethod
+    def _record_tool_action_mask_result(agent_data: AgentData, result: ToolActionMaskResult) -> None:
+        """Record compact action-mask alignment diagnostics for one assistant turn."""
+
+        diagnostics = agent_data.extra_fields.setdefault(
+            "tool_action_mask_diagnostics",
+            {
+                "attempted_turns": 0,
+                "matched_turns": 0,
+                "matched_tokens": 0,
+                "failure_counts": {},
+            },
+        )
+        diagnostics["attempted_turns"] += 1
+        agent_data.metrics["tool_action_mask_attempted_turns"] = (
+            agent_data.metrics.get("tool_action_mask_attempted_turns", 0) + 1
+        )
+        if result.matched:
+            diagnostics["matched_turns"] += 1
+            matched_tokens = sum(result.mask)
+            diagnostics["matched_tokens"] += matched_tokens
+            agent_data.metrics["tool_action_mask_matched_turns"] = (
+                agent_data.metrics.get("tool_action_mask_matched_turns", 0) + 1
+            )
+            agent_data.metrics["tool_action_mask_matched_tokens"] = (
+                agent_data.metrics.get("tool_action_mask_matched_tokens", 0) + matched_tokens
+            )
+            return
+
+        failure_reason = result.failure_reason or "unknown"
+        failure_counts = diagnostics["failure_counts"]
+        failure_counts[failure_reason] = failure_counts.get(failure_reason, 0) + 1
+        if failure_reason == "token_id_roundtrip_mismatch":
+            metric_name = "tool_action_mask_roundtrip_failures"
+        elif failure_reason == "action_not_in_active_schema":
+            metric_name = "tool_action_mask_invalid_schema_failures"
+        elif failure_reason in {"token_crosses_action_boundary", "decoded_action_token_mismatch"}:
+            metric_name = "tool_action_mask_boundary_failures"
+        else:
+            return
+        agent_data.metrics[metric_name] = agent_data.metrics.get(metric_name, 0) + 1
 
     @staticmethod
     def _record_penalty(
@@ -734,6 +918,7 @@ class ToolAgentLoop(AgentLoopBase):
                 prompt_ids=prompt_ids,
                 response_ids=response_ids[: self.response_length],
                 response_mask=agent_data.response_mask[: self.response_length],
+                tool_action_token_mask=agent_data.tool_action_token_mask[: self.response_length],
                 multi_modal_data=multi_modal_data,
                 response_logprobs=(
                     agent_data.response_logprobs[: self.response_length] if agent_data.response_logprobs else None
@@ -747,6 +932,7 @@ class ToolAgentLoop(AgentLoopBase):
                 {
                     "turn_scores": agent_data.turn_scores,
                     "tool_rewards": agent_data.tool_rewards,
+                    "action_history": list(agent_data.action_history),
                     "pure_image_restoration_rewards": agent_data.pure_image_restoration_rewards,
                     "stop_rewards": agent_data.stop_rewards,
                 }
@@ -825,6 +1011,8 @@ class ToolAgentLoop(AgentLoopBase):
         agent_data.response_ids = response_ids
         agent_data.prompt_ids += agent_data.response_ids
         agent_data.response_mask += [1] * len(agent_data.response_ids)
+        tool_action_mask_start = len(agent_data.tool_action_token_mask)
+        agent_data.tool_action_token_mask += [0] * len(agent_data.response_ids)
         if response_logprobs:
             agent_data.response_logprobs += response_logprobs
 
@@ -842,6 +1030,25 @@ class ToolAgentLoop(AgentLoopBase):
         active_tools = getattr(agent_data, "_active_tools", self.tools)
         tools = [tool.tool_schema for tool in active_tools.values()]
         _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(agent_data.response_ids, tools)
+        if getattr(agent_data, "data_source", "") == "restoration":
+            active_tool_schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+            allowed_actions = self._allowed_actions_from_tool_schemas(active_tool_schemas)
+            if self.tool_parser_name == "qwen3_coder":
+                mask_result = build_tool_action_token_mask(
+                    agent_data.response_ids,
+                    self.tokenizer,
+                    agent_data.tool_calls,
+                    allowed_actions,
+                )
+            else:
+                mask_result = _tool_action_mask_failure(
+                    agent_data.response_ids,
+                    f"unsupported_tool_parser:{self.tool_parser_name}",
+                )
+            agent_data.tool_action_token_mask[
+                tool_action_mask_start : tool_action_mask_start + len(agent_data.response_ids)
+            ] = mask_result.mask
+            self._record_tool_action_mask_result(agent_data, mask_result)
 
         # Check soft termination conditions (max turns) AFTER tool call extraction.
         # This ensures the final assistant turn's tool call (e.g. "stop") is still
@@ -1043,6 +1250,7 @@ class ToolAgentLoop(AgentLoopBase):
 
         agent_data.prompt_ids += response_ids
         agent_data.response_mask += [0] * len(response_ids)
+        agent_data.tool_action_token_mask += [0] * len(response_ids)
         if agent_data.response_logprobs:
             agent_data.response_logprobs += [0.0] * len(response_ids)
         agent_data.user_turns += 1

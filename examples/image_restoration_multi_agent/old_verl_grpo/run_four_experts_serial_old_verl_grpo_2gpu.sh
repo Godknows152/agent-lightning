@@ -5,6 +5,29 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 LOG_ROOT="${SCRIPT_DIR}/log"
 EXPERTS=(fog low_light rain snow)
+TRAINING_VARIANT="${1:-v3}"
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+
+case "${TRAINING_VARIANT}" in
+  v1)
+    CONFIG_SUFFIX="_config_2gpu"
+    TOOL_CONFIG_PATH="${SCRIPT_DIR}/config/tool_config/restoration_tool_config_current_iqa_2gpu.yaml"
+    ;;
+  v2)
+    CONFIG_SUFFIX="_config_2gpu"
+    TOOL_CONFIG_PATH="${SCRIPT_DIR}/config/tool_config/restoration_tool_config_marginal_efficiency_2gpu.yaml"
+    ;;
+  v3)
+    CONFIG_SUFFIX="_v3_config_2gpu"
+    TOOL_CONFIG_PATH="${SCRIPT_DIR}/config/tool_config/restoration_tool_config_marginal_efficiency_2gpu.yaml"
+    ;;
+  *)
+    echo "Usage: $(basename "${BASH_SOURCE[0]}") <v1|v2|v3> [hydra overrides...]" >&2
+    exit 2
+    ;;
+esac
 
 export OLD_VERL_CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
 export OLD_VERL_CLEAR_PENALIZED_SAMPLES="${OLD_VERL_CLEAR_PENALIZED_SAMPLES:-1}"
@@ -18,19 +41,19 @@ if [[ -n "${OLD_VERL_ADAPTER_PATH:-}" ]]; then
 fi
 
 for expert in "${EXPERTS[@]}"; do
-  mkdir -p "${LOG_ROOT}/${expert}"
+  mkdir -p "${LOG_ROOT}/${expert}/${TRAINING_VARIANT}"
 done
 if [[ "${OLD_VERL_BACKGROUND_CHILD:-0}" != "1" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
   nohup env \
     OLD_VERL_BACKGROUND_CHILD=1 \
     OLD_VERL_LOG_TIMESTAMP="${TIMESTAMP}" \
-    bash "${SCRIPT_PATH}" "$@" \
+    bash "${SCRIPT_PATH}" "${TRAINING_VARIANT}" "$@" \
     >/dev/null 2>&1 </dev/null &
   BACKGROUND_PID=$!
-  echo "Started four-expert serial GRPO in background (PID ${BACKGROUND_PID})."
+  echo "Started four-expert serial ${TRAINING_VARIANT} GRPO in background (PID ${BACKGROUND_PID})."
   for expert in "${EXPERTS[@]}"; do
-    echo "${expert} log file: ${LOG_ROOT}/${expert}/${expert}_${TIMESTAMP}.log"
+    echo "${expert} log file: ${LOG_ROOT}/${expert}/${TRAINING_VARIANT}/${expert}_${TRAINING_VARIANT}_${TIMESTAMP}.log"
   done
   exit 0
 fi
@@ -39,17 +62,22 @@ TIMESTAMP="${OLD_VERL_LOG_TIMESTAMP:?OLD_VERL_LOG_TIMESTAMP is required for the 
 
 clear_intermediate_images=1
 for expert in "${EXPERTS[@]}"; do
-  EXPERT_LOG="${LOG_ROOT}/${expert}/${expert}_${TIMESTAMP}.log"
+  EXPERT_LOG="${LOG_ROOT}/${expert}/${TRAINING_VARIANT}/${expert}_${TRAINING_VARIANT}_${TIMESTAMP}.log"
   {
-    echo "===== old-verl GRPO start: ${expert} on GPU ${OLD_VERL_CUDA_VISIBLE_DEVICES} ====="
+    echo "===== old-verl ${TRAINING_VARIANT} GRPO start: ${expert} on GPU ${OLD_VERL_CUDA_VISIBLE_DEVICES} ====="
     echo "PID: $$"
     echo "Log file: ${EXPERT_LOG}"
     OLD_VERL_RUN_IN_FOREGROUND=1 \
       OLD_VERL_CLEAR_INTERMEDIATE_IMAGES="${clear_intermediate_images}" \
       OLD_VERL_CLEAR_PENALIZED_SAMPLES="${OLD_VERL_CLEAR_PENALIZED_SAMPLES}" \
-      OLD_VERL_CONFIG_NAME="${expert}_config_2gpu" \
-      "${SCRIPT_DIR}/run_expert_old_verl_grpo_2gpu.sh" "${expert}" "$@"
-    echo "===== old-verl GRPO done: ${expert} ====="
+      OLD_VERL_TRAINING_VARIANT="${TRAINING_VARIANT}" \
+      OLD_VERL_LOG_DIR="${LOG_ROOT}/${expert}/${TRAINING_VARIANT}" \
+      OLD_VERL_CONFIG_NAME="${expert}${CONFIG_SUFFIX}" \
+      OLD_VERL_EXPERIMENT_NAME="${expert}_${TRAINING_VARIANT}" \
+      OLD_VERL_OUTPUT_DIR="${SCRIPT_DIR}/outputs/${expert}_${TRAINING_VARIANT}" \
+      "${SCRIPT_DIR}/run_expert_old_verl_grpo_2gpu.sh" \
+        "${expert}" "$@" "actor_rollout_ref.rollout.multi_turn.tool_config_path=${TOOL_CONFIG_PATH}"
+    echo "===== old-verl ${TRAINING_VARIANT} GRPO done: ${expert} ====="
   } >>"${EXPERT_LOG}" 2>&1
   clear_intermediate_images=0
 done
