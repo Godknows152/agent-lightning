@@ -24,6 +24,7 @@ Environment overrides:
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
   OLD_VERL_CLEAR_PENALIZED_SAMPLES=1  # clear the resolved output's penalized_samples before training
+  OLD_VERL_CLEAR_TOOL_LOGS=1  # clear this expert's tool logs before training
   OLD_VERL_SHOW_KNOWN_WARNINGS=1  # show otherwise-suppressed third-party warning spam
   OLD_VERL_RESUME_MODE=auto|disable|resume_path
   OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N  # adds the "_续" suffix
@@ -69,7 +70,8 @@ ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
-LOG_DIR="${OLD_VERL_DIR}/log"
+LOG_ROOT="${OLD_VERL_DIR}/log"
+LOG_DIR="${LOG_ROOT}/${EXPERT}"
 CONFIG_DIR="${OLD_VERL_DIR}/config"
 CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
@@ -287,6 +289,7 @@ CONFIG_OVERRIDES+=(
   "trainer.experiment_name='${EXPERIMENT_NAME_OVERRIDE}'"
   "trainer.default_local_dir='${OUTPUT_DIR_OVERRIDE}'"
   "trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR='${SWANLAB_LOG_DIR_OVERRIDE}'"
+  "trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR='${LOG_DIR}'"
 )
 if [[ -n "${PROJECT_NAME_OVERRIDE}" ]]; then
   CONFIG_OVERRIDES+=("trainer.project_name='${PROJECT_NAME_OVERRIDE}'")
@@ -339,7 +342,7 @@ if [[ -n "${SWANLAB_MODE_OVERRIDE}" ]]; then
   export SWANLAB_MODE="${SWANLAB_MODE_OVERRIDE}"
 fi
 export VERL_LOGGING_LEVEL="${VERL_LOGGING_LEVEL:-WARN}"
-export VERL_LOG_DIR="${OLD_VERL_DIR}/log"
+export VERL_LOG_DIR="${LOG_DIR}"
 export LD_LIBRARY_PATH="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/torch/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH:-}"
 export LD_PRELOAD="/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12${LD_PRELOAD:+:${LD_PRELOAD}}"
 
@@ -410,6 +413,7 @@ if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
     "${EXPERIMENT_NAME_OVERRIDE}" \
     "${OUTPUT_DIR_OVERRIDE}" \
     "${SWANLAB_LOG_DIR_OVERRIDE}" \
+    "${LOG_DIR}" \
     "${RESUME_FROM_PATH_OVERRIDE}" \
     "${CONFIG_OVERRIDES[@]}" \
     "${HYDRA_OVERRIDES[@]}" \
@@ -426,8 +430,9 @@ expected_adapter = str(Path(sys.argv[4]).resolve())
 expected_experiment_name = sys.argv[5]
 expected_output_dir = str(Path(sys.argv[6]).resolve())
 expected_swanlab_log_dir = str(Path(sys.argv[7]).resolve())
-expected_resume_path = str(Path(sys.argv[8]).resolve()) if sys.argv[8] else None
-overrides = sys.argv[9:]
+expected_verl_log_dir = str(Path(sys.argv[8]).resolve())
+expected_resume_path = str(Path(sys.argv[9]).resolve()) if sys.argv[9] else None
+overrides = sys.argv[10:]
 
 with initialize_config_dir(version_base=None, config_dir=config_dir):
     config = compose(config_name=config_name, overrides=overrides)
@@ -454,6 +459,11 @@ if actual_swanlab_log_dir != expected_swanlab_log_dir:
     errors.append(
         f"composed SwanLab log directory mismatch: {actual_swanlab_log_dir} != {expected_swanlab_log_dir}"
     )
+actual_verl_log_dir = str(
+    Path(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR).resolve()
+)
+if actual_verl_log_dir != expected_verl_log_dir:
+    errors.append(f"composed VERL log directory mismatch: {actual_verl_log_dir} != {expected_verl_log_dir}")
 actual_resume_path = config.trainer.resume_from_path
 if actual_resume_path is not None:
     actual_resume_path = str(Path(actual_resume_path).resolve())
@@ -497,13 +507,26 @@ PY
   exit 0
 fi
 
-mkdir -p "${OLD_VERL_DIR}/data" "${OLD_VERL_DIR}/log"
+mkdir -p "${OLD_VERL_DIR}/data" "${LOG_DIR}"
 if [[ -n "${OUTPUT_DIR_OVERRIDE}" ]]; then
   mkdir -p "${OUTPUT_DIR_OVERRIDE}"
 fi
 if [[ -n "${SWANLAB_LOG_DIR_OVERRIDE}" ]]; then
   mkdir -p "${SWANLAB_LOG_DIR_OVERRIDE}"
 fi
+
+TOOL_INFO_LOG="${LOG_DIR}/restoration_tool_info.log"
+TOOL_DEBUG_LOG="${LOG_DIR}/restoration_tools.log"
+if [[ "${OLD_VERL_CLEAR_TOOL_LOGS:-1}" == "1" ]]; then
+  : > "${TOOL_INFO_LOG}"
+  : > "${TOOL_DEBUG_LOG}"
+  echo "Cleared ${EXPERT} tool logs:"
+else
+  touch "${TOOL_INFO_LOG}" "${TOOL_DEBUG_LOG}"
+  echo "Appending to ${EXPERT} tool logs:"
+fi
+echo "  ${TOOL_INFO_LOG}"
+echo "  ${TOOL_DEBUG_LOG}"
 
 if [[ "${OLD_VERL_CLEAR_PENALIZED_SAMPLES:-1}" == "1" ]]; then
   OUTPUT_DIR_ABS="$(realpath -m -- "${OUTPUT_DIR_OVERRIDE}")"
@@ -541,6 +564,7 @@ echo "Model:   ${MODEL_PATH_OVERRIDE}"
 echo "Adapter: ${ADAPTER_PATH_OVERRIDE}"
 echo "Data:    ${TRAIN_PARQUET} / ${VAL_PARQUET}"
 echo "Output:  ${OUTPUT_DIR_OVERRIDE}"
+echo "Logs:    ${LOG_DIR}"
 echo "Config:  ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
 echo "Resume:  ${RESUME_FROM_PATH_OVERRIDE:-fresh run}"
 printf 'SwanLab: project=%s experiment=%s mode=%s log_dir=%s\n' \

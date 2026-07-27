@@ -3,9 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
-LOG_DIR="${SCRIPT_DIR}/log"
 EXPERT="fog"
 REWARD_VARIANT="v1"
+LOG_DIR="${SCRIPT_DIR}/log/${EXPERT}"
 TOOL_CONFIG_PATH="${SCRIPT_DIR}/config/tool_config/restoration_tool_config_current_iqa_2gpu.yaml"
 export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-fog_config_2gpu}"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${REWARD_VARIANT}}"
@@ -37,14 +37,6 @@ echo "===== ${EXPERT} ${REWARD_VARIANT} run started at $(date) ====="
 echo "PID: $$"
 echo "Log file: ${MAIN_LOG}"
 echo "Tool config: ${TOOL_CONFIG_PATH}"
-
-TOOL_INFO_LOG="${LOG_DIR}/restoration_tool_info.log"
-TOOL_DEBUG_LOG="${LOG_DIR}/restoration_tools.log"
-: > "${TOOL_INFO_LOG}"
-: > "${TOOL_DEBUG_LOG}"
-echo "Cleared tool logs:"
-echo "  ${TOOL_INFO_LOG}"
-echo "  ${TOOL_DEBUG_LOG}"
 
 export OLD_VERL_RUN_IN_FOREGROUND=1
 exec "${SCRIPT_DIR}/run_expert_old_verl_grpo_2gpu.sh" \

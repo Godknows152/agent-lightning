@@ -30,3 +30,4 @@ trainer:
       runtime_env:
         env_vars:
           SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_from_sft_lora_0718/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/fog"
