@@ -329,7 +329,7 @@ IFS=$'\t' read -r \
   EFFECTIVE_TOOL_CONFIG \
   EFFECTIVE_REWARD_MODE \
   EFFECTIVE_ENTROPY_COEFF \
-  EFFECTIVE_TOOL_ACTION_ENTROPY_COEFF \
+  EFFECTIVE_TOOL_CHOICE_ENTROPY_COEFF \
   < <(
     "${PYTHON_BIN}" - \
       "${CONFIG_DIR}" \
@@ -360,7 +360,7 @@ print(
             str(tool_config_path),
             str(tool_config["tools"][0]["config"].get("reward_mode")),
             str(config.actor_rollout_ref.actor.entropy_coeff),
-            str(config.actor_rollout_ref.actor.tool_action_entropy_coeff),
+            str(config.actor_rollout_ref.actor.tool_choice_entropy_coeff),
         )
     )
 )
@@ -567,15 +567,22 @@ if training_variant:
         )
 
     entropy_coeff = float(config.actor_rollout_ref.actor.entropy_coeff)
-    tool_entropy_coeff = float(config.actor_rollout_ref.actor.tool_action_entropy_coeff)
+    tool_entropy_coeff = float(config.actor_rollout_ref.actor.tool_choice_entropy_coeff)
     if abs(entropy_coeff - 0.005) > 1e-12:
         errors.append(f"{training_variant} entropy_coeff={entropy_coeff!r}, expected 0.005")
-    expected_tool_entropy = 0.001 if training_variant == "v3" else 0.0
+    expected_tool_entropy = 0.05 if training_variant == "v3" else 0.0
     if abs(tool_entropy_coeff - expected_tool_entropy) > 1e-12:
         errors.append(
-            f"{training_variant} tool_action_entropy_coeff={tool_entropy_coeff!r}, "
+            f"{training_variant} tool_choice_entropy_coeff={tool_entropy_coeff!r}, "
             f"expected {expected_tool_entropy!r}"
         )
+    if tool_entropy_coeff > 0.0:
+        if config.actor_rollout_ref.model.use_remove_padding is not False:
+            errors.append("tool-choice entropy requires actor_rollout_ref.model.use_remove_padding=false")
+        if config.actor_rollout_ref.model.use_fused_kernels is not False:
+            errors.append("tool-choice entropy requires actor_rollout_ref.model.use_fused_kernels=false")
+        if int(config.actor_rollout_ref.actor.ulysses_sequence_parallel_size) != 1:
+            errors.append("tool-choice entropy requires actor_rollout_ref.actor.ulysses_sequence_parallel_size=1")
     if config.actor_rollout_ref.actor.calculate_entropy is not True:
         errors.append(f"{training_variant} calculate_entropy must be true")
 
@@ -623,7 +630,7 @@ PY
   echo "Variant: ${TRAINING_VARIANT:-unspecified}"
   echo "Config: ${CONFIG_NAME}"
   echo "Reward: ${EFFECTIVE_REWARD_MODE} (${EFFECTIVE_TOOL_CONFIG})"
-  echo "Entropy: response=${EFFECTIVE_ENTROPY_COEFF} tool_action=${EFFECTIVE_TOOL_ACTION_ENTROPY_COEFF}"
+  echo "Entropy: response=${EFFECTIVE_ENTROPY_COEFF} tool_choice=${EFFECTIVE_TOOL_CHOICE_ENTROPY_COEFF}"
   echo "Preflight passed for ${EXPERT}: experiment=${EXPERIMENT_NAME_OVERRIDE} output=${OUTPUT_DIR_OVERRIDE}"
   exit 0
 fi
@@ -689,7 +696,7 @@ echo "Output:  ${OUTPUT_DIR_OVERRIDE}"
 echo "Logs:    ${LOG_DIR}"
 echo "Config:  ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
 echo "Reward:  ${EFFECTIVE_REWARD_MODE} (${EFFECTIVE_TOOL_CONFIG})"
-echo "Entropy: response=${EFFECTIVE_ENTROPY_COEFF} tool_action=${EFFECTIVE_TOOL_ACTION_ENTROPY_COEFF}"
+echo "Entropy: response=${EFFECTIVE_ENTROPY_COEFF} tool_choice=${EFFECTIVE_TOOL_CHOICE_ENTROPY_COEFF}"
 echo "Resume:  ${RESUME_FROM_PATH_OVERRIDE:-fresh run}"
 printf 'SwanLab: project=%s experiment=%s mode=%s log_dir=%s\n' \
   "${PROJECT_NAME_OVERRIDE:-configured by YAML}" \

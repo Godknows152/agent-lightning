@@ -88,8 +88,8 @@ loss_scale_factor: null
 # Entropy regularization coefficient in PPO loss
 entropy_coeff: 0
 
-# Additional entropy coefficient applied only to valid tool action value tokens
-tool_action_entropy_coeff: 0
+# Entropy coefficient over legal restoration-tool choices
+tool_choice_entropy_coeff: 0
 
 # When true, the actor forward will request entropy from the model
 calculate_entropy: false

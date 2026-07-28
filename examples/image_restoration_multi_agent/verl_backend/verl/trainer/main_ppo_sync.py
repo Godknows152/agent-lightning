@@ -50,6 +50,7 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 from tensordict import NonTensorData, NonTensorStack, TensorDict
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
+
 from verl.checkpoint_engine import CheckpointEngineManager
 from verl.experimental.agent_loop import AgentLoopManager, AgentLoopOutput, AgentLoopWorker, get_trajectory_info
 from verl.experimental.reward_loop import RewardLoopManager
@@ -1405,6 +1406,7 @@ class PPOTrainer:
         calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
             self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
         )
+        calculate_tool_choice_entropy = self.config.actor_rollout_ref.actor.tool_choice_entropy_coeff > 0.0
         distillation_use_topk = (
             self.distillation_config.distillation_loss.loss_settings.use_topk
             if is_distillation_enabled(self.config.get("distillation"))
@@ -1412,6 +1414,7 @@ class PPOTrainer:
         )
         extra_info = {
             "calculate_entropy": calculate_entropy,
+            "calculate_tool_choice_entropy": calculate_tool_choice_entropy,
             "distillation_use_topk": distillation_use_topk,
             "global_batch_size": ppo_mini_batch_size,
             "mini_batch_size": ppo_mini_batch_size,

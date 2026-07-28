@@ -1,4 +1,4 @@
-# Old-verl v3 overlay: marginal-efficiency reward plus targeted tool action token entropy.
+# Old-verl v3 overlay: marginal-efficiency reward plus restricted tool-choice entropy.
 
 defaults:
   - restoration_common_config_2gpu
@@ -7,7 +7,7 @@ defaults:
 actor_rollout_ref:
   actor:
     entropy_coeff: 0.005
-    tool_action_entropy_coeff: 0.001
+    tool_choice_entropy_coeff: 0.05
     calculate_entropy: true
   rollout:
     multi_turn:

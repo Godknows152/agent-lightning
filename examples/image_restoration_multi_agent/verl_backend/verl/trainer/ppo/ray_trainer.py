@@ -1437,6 +1437,7 @@ class RayPPOTrainer:
         calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
             self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
         )
+        calculate_tool_choice_entropy = self.config.actor_rollout_ref.actor.tool_choice_entropy_coeff > 0.0
         distillation_use_topk = (
             self.distillation_config.distillation_loss.loss_settings.use_topk
             if is_distillation_enabled(self.config.get("distillation"))
@@ -1450,6 +1451,7 @@ class RayPPOTrainer:
         tu.assign_non_tensor(
             batch_td,
             calculate_entropy=calculate_entropy,
+            calculate_tool_choice_entropy=calculate_tool_choice_entropy,
             distillation_use_topk=distillation_use_topk,
             global_batch_size=ppo_mini_batch_size,
             mini_batch_size=ppo_mini_batch_size,

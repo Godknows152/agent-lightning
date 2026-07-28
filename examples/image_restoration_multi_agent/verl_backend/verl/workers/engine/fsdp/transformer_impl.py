@@ -24,12 +24,13 @@ from typing import Callable, ContextManager, Optional
 
 import torch
 import torch.distributed
-import verl.utils.torch_functional as verl_F
 from peft import LoraConfig, TaskType, get_peft_model
 from tensordict import TensorDict
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import FullStateDictConfig, ShardedStateDictConfig, StateDictType
 from torch.distributed.tensor import DTensor
+
+import verl.utils.torch_functional as verl_F
 from verl.models.transformers.monkey_patch import apply_monkey_patch
 from verl.trainer.config import CheckpointConfig
 from verl.utils import tensordict_utils as tu
@@ -69,6 +70,10 @@ from verl.utils.ulysses import (
     ulysses_pad_and_slice_inputs,
 )
 from verl.workers.config import FSDPEngineConfig, FSDPOptimizerConfig, HFModelConfig
+from verl.workers.utils.tool_choice_entropy import (
+    gather_tool_choice_candidate_logits,
+    restricted_tool_choice_entropy_from_candidates,
+)
 
 from ..base import BaseEngine, BaseEngineCtx, EngineRegistry
 from ..utils import enable_full_determinism, postprocess_batch_func, prepare_micro_batches
@@ -311,6 +316,7 @@ class FSDPEngine(BaseEngine):
         lora_adapter_path = getattr(self.model_config, "lora_adapter_path", None)
         if lora_adapter_path is not None:
             from peft import PeftModel
+
             from verl.utils.fs import copy_to_local
 
             print(f"Loading pre-trained LoRA adapter to from: {lora_adapter_path}")
@@ -365,6 +371,7 @@ class FSDPEngine(BaseEngine):
     def _build_fsdp_module(self, module):
         # TODO(ziheng): need to improve
         from torch.distributed.fsdp import CPUOffload, MixedPrecision
+
         from verl.utils.torch_dtypes import PrecisionType
 
         mixed_precision_config = self.engine_config.mixed_precision
@@ -911,6 +918,30 @@ class EngineTrainModeCtx(BaseEngineCtx):
 
 @EngineRegistry.register(model_type="language_model", backend=["fsdp", "fsdp2"], device=["cuda", "npu"])
 class FSDPEngineWithLMHead(FSDPEngine):
+    @staticmethod
+    def _compute_tool_choice_entropy(
+        logits: torch.Tensor,
+        micro_batch: TensorDict,
+    ) -> torch.Tensor:
+        """Gather legal branch logits and compute response-aligned tool entropy."""
+
+        candidate_ids = micro_batch["tool_choice_candidate_token_ids"]
+        leaf_counts = micro_batch["tool_choice_candidate_leaf_counts"]
+        prompt_width = micro_batch["prompts"].shape[1]
+        response_width = micro_batch["responses"].shape[1]
+        candidate_logits = gather_tool_choice_candidate_logits(
+            logits,
+            candidate_ids,
+            leaf_counts,
+            micro_batch["attention_mask"],
+            prompt_width,
+        )
+        entropy = restricted_tool_choice_entropy_from_candidates(candidate_logits, leaf_counts)
+        decision_mask = micro_batch["tool_decision_position_mask"].to(bool)
+        if entropy.shape != (logits.shape[0], response_width):
+            raise ValueError(f"Unexpected tool entropy shape: {entropy.shape}")
+        return entropy * decision_mask
+
     def prepare_model_inputs(self, micro_batch: TensorDict):
         use_remove_padding = tu.get_non_tensor_data(data=micro_batch, key="use_remove_padding", default=True)
         pad_mode = tu.get_non_tensor_data(data=micro_batch, key="pad_mode", default=DatasetPadMode.NO_PADDING)
@@ -1058,11 +1089,20 @@ class FSDPEngineWithLMHead(FSDPEngine):
         pad_mode = tu.get_non_tensor_data(data=micro_batch, key="pad_mode", default=DatasetPadMode.NO_PADDING)
         use_fused_kernels = tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False)
         calculate_entropy = tu.get_non_tensor_data(data=micro_batch, key="calculate_entropy", default=False)
+        calculate_tool_choice_entropy = tu.get_non_tensor_data(
+            data=micro_batch, key="calculate_tool_choice_entropy", default=False
+        )
         distillation_use_topk = tu.get_non_tensor_data(data=micro_batch, key="distillation_use_topk", default=False)
 
         model_output = {}
 
         input_ids = micro_batch["input_ids"]
+
+        if calculate_tool_choice_entropy and (use_remove_padding or use_fused_kernels or self.use_ulysses_sp):
+            raise NotImplementedError(
+                "Tool-choice entropy currently requires use_remove_padding=false, use_fused_kernels=false, "
+                "and ulysses_sequence_parallel_size=1"
+            )
 
         if use_remove_padding:
             input_ids_rmpad_rolled = output_args["input_ids_rmpad_rolled"]
@@ -1146,6 +1186,12 @@ class FSDPEngineWithLMHead(FSDPEngine):
                 temperature = output_args["temperature"]  # (bsz,)
                 temperature = temperature.unsqueeze(-1).unsqueeze(-1)
                 logits.div_(temperature.clamp(min=1e-8).to(logits.dtype))
+
+                if calculate_tool_choice_entropy:
+                    model_output["tool_choice_restricted_entropy"] = self._compute_tool_choice_entropy(
+                        logits,
+                        micro_batch,
+                    )
 
                 if calculate_entropy:
                     if not self.engine_config.entropy_checkpointing:
