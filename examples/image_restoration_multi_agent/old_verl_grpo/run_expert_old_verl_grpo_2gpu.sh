@@ -29,6 +29,7 @@ Environment overrides:
   OLD_VERL_RESUME_MODE=auto|disable|resume_path
   OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N  # adds the "_续" suffix
   OLD_VERL_EXPERIMENT_NAME=custom-name  # optional; standard name is <expert>_MMDD[_续]
+  OLD_VERL_LOG_DIR=/path/to/log-dir  # optional main/tool log directory override
   OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional checkpoint output override; YAML wins when unset
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
   RAY_BIN=/home/LXJ/anaconda3/envs/verl/bin/ray
@@ -71,7 +72,7 @@ EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
 LOG_ROOT="${OLD_VERL_DIR}/log"
-LOG_DIR="${LOG_ROOT}/${EXPERT}"
+LOG_DIR="${OLD_VERL_LOG_DIR:-${LOG_ROOT}/${EXPERT}}"
 CONFIG_DIR="${OLD_VERL_DIR}/config"
 CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
@@ -513,7 +514,12 @@ for name, (value, expected) in micro_batch_sizes.items():
 if errors:
     raise SystemExit("Invalid composed RL config:\n- " + "\n- ".join(errors))
 PY
-  echo "Preflight passed for ${EXPERT}: experiment=${EXPERIMENT_NAME_OVERRIDE} output=${OUTPUT_DIR_OVERRIDE}"
+  printf 'Preflight passed for %s: experiment=%s output=%s logs=%s swanlab=%s\n' \
+    "${EXPERT}" \
+    "${EXPERIMENT_NAME_OVERRIDE}" \
+    "${OUTPUT_DIR_OVERRIDE}" \
+    "${LOG_DIR}" \
+    "${SWANLAB_LOG_DIR_OVERRIDE}"
   exit 0
 fi
 

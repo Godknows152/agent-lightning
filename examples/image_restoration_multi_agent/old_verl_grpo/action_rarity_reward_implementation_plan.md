@@ -48,22 +48,42 @@ r_i_rarity = 0.02 * g_i * s_i
 | `actor/action_rarity_reward_max` | 当前 batch 最大稀有度奖励 |
 | `actor/action_rarity_reward_gate_ratio` | 有效轨迹中基础 advantage 为正的比例 |
 | `actor/action_rarity_valid_trajectory_rate` | 至少执行一次非停止修复的轨迹比例 |
+| `num_turns/{min,max,mean}` | 为兼容既有 SwanLab 图表而保留的名称；记录每条轨迹实际进入执行队列的工具调用次数 |
+| `tool_call_counts/{min,max,mean}` | 与 `num_turns/*` 相同的工具调用次数，使用语义明确的新名称 |
 
 ## 5. 启动方式
 
 ```bash
-bash examples/image_restoration_multi_agent/old_verl_grpo/fog_v3.sh --preflight
-bash examples/image_restoration_multi_agent/old_verl_grpo/fog_v3.sh
+bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v3.sh --preflight
+bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v3.sh
 ```
 
 可以通过环境变量覆盖最大奖励：
 
 ```bash
 OLD_VERL_ACTION_RARITY_REWARD_COEFF=0.01 \
-  bash examples/image_restoration_multi_agent/old_verl_grpo/fog_v3.sh
+  bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v3.sh
 ```
 
-## 6. 已知边界
+## 6. 日志与训练输出
+
+所有专家的 v1/v2/v3 入口按专家和版本隔离运行产物：
+
+```text
+log/<expert>/vN/
+  <expert>_vN_<timestamp>.log
+  restoration_tool_info.log
+  restoration_tools.log
+
+outputs/<expert>/vN/
+  global_step_*/
+  penalized_samples/
+  swanlab/
+```
+
+`VERL_LOG_DIR` 指向对应的 `log/<expert>/vN`，因此主训练日志和两类工具调用日志不会跨版本混写。checkpoint、惩罚样本导出和 SwanLab 本地记录统一位于对应的 `outputs/<expert>/vN`。
+
+## 7. 已知边界
 
 - 经验奖励只能强化 rollout 中实际采样到的稀有 action；完全坍缩且没有替代 action 样本时，它本身没有恢复信号。
 - 当前第一版按全局 batch 统计，不区分图像状态。正 advantage 门控用于抑制不合适的稀有 action，但它不是严格的状态条件熵。

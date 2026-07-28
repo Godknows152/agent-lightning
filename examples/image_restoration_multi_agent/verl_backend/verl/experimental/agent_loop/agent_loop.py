@@ -1160,10 +1160,15 @@ class AgentLoopWorker:
             "max_global_steps",
             "extras",
         }
-        all_keys = set(key for input_item in inputs for key in input_item.extra_fields) | default_extra_keys
+        default_extra_values = {"tool_call_counts": 0}
+        all_keys = (
+            set(key for input_item in inputs for key in input_item.extra_fields)
+            | default_extra_keys
+            | default_extra_values.keys()
+        )
         for key in all_keys:
             temp_arr = np.empty(len(inputs), dtype=object)
-            temp_arr[:] = [input.extra_fields.get(key) for input in inputs]
+            temp_arr[:] = [input.extra_fields.get(key, default_extra_values.get(key)) for input in inputs]
             extra_fields[key] = temp_arr
 
         non_tensor_batch.update(extra_fields)

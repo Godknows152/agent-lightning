@@ -530,6 +530,12 @@ class ToolAgentLoop(AgentLoopBase):
             ]
         else:
             include_stop = completed_restoration_actions >= min_stop_tool_calls
+            system_prompt = prompt_config["build_system"](
+                expert_name,
+                registry,
+                allow_stop=include_stop,
+                min_stop_tool_calls=min_stop_tool_calls,
+            )
             user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
             if include_stop:
                 user_prompt += (
@@ -544,6 +550,7 @@ class ToolAgentLoop(AgentLoopBase):
                 )
             include_image = False
             messages = [
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
             ]
 
@@ -752,6 +759,7 @@ class ToolAgentLoop(AgentLoopBase):
                     "pure_image_restoration_rewards": agent_data.pure_image_restoration_rewards,
                     "stop_rewards": agent_data.stop_rewards,
                     "action_history": agent_data.successful_action_history,
+                    "tool_call_counts": agent_data.total_tool_calls,
                 }
             )
             return output
@@ -995,7 +1003,7 @@ class ToolAgentLoop(AgentLoopBase):
             )
             response_ids = await self.apply_chat_template(
                 add_messages,
-                tools=None,
+                tools=schemas,
                 images=images,
                 videos=videos,
                 remove_system_prompt=False,

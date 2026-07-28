@@ -239,6 +239,7 @@ async def test_agent_loop_extra_fields_schema_stable_for_training_concat_on_cpu(
         "min_global_steps",
         "max_global_steps",
         "extras",
+        "tool_call_counts",
     )
     for key in stable_keys:
         assert key in merged.non_tensor_batch, f"missing key in merged batch: {key}"
@@ -249,6 +250,7 @@ async def test_agent_loop_extra_fields_schema_stable_for_training_concat_on_cpu(
     # And the list-typed fields are actually lists (not missing / scalar).
     assert merged.non_tensor_batch["turn_scores"][0] == []
     assert merged.non_tensor_batch["tool_rewards"][0] == []
+    assert merged.non_tensor_batch["tool_call_counts"][0] == 0
 
 
 @pytest.mark.asyncio

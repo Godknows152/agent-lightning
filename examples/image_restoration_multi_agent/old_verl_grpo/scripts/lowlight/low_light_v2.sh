@@ -6,11 +6,12 @@ OLD_VERL_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 EXPERT="low_light"
 REWARD_VARIANT="v2"
-LOG_DIR="${OLD_VERL_DIR}/log/${EXPERT}"
+export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${REWARD_VARIANT}}"
+LOG_DIR="${OLD_VERL_LOG_DIR}"
 TOOL_CONFIG_PATH="${OLD_VERL_DIR}/config/tool_config/restoration_tool_config_marginal_efficiency_2gpu.yaml"
 export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-low_light_config_2gpu}"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${REWARD_VARIANT}}"
-export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}_${REWARD_VARIANT}}"
+export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}/${REWARD_VARIANT}}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_2gpu.sh" --help

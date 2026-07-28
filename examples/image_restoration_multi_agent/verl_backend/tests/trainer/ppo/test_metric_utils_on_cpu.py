@@ -503,6 +503,7 @@ class TestComputeDataMetrics(unittest.TestCase):
             ),
             "values": torch.tensor([[0.9, 1.0], [1.1, 1.2]]),
         }
+        self.batch.non_tensor_batch = {}
 
     def test_compute_data_metrics_with_critic(self):
         """Test compute_data_metrics with critic enabled."""
@@ -534,6 +535,31 @@ class TestComputeDataMetrics(unittest.TestCase):
         self.assertIn("critic/score/mean", metrics)
         self.assertIn("critic/rewards/mean", metrics)
         self.assertIn("response_length/mean", metrics)
+
+    def test_num_turns_metrics_prefer_actual_tool_call_counts(self):
+        self.batch.non_tensor_batch = {
+            "__num_turns__": np.array([7, 11], dtype=np.int32),
+            "tool_call_counts": np.array([1, 3], dtype=object),
+        }
+
+        metrics = compute_data_metrics(self.batch, use_critic=False)
+
+        self.assertEqual(metrics["num_turns/min"], 1)
+        self.assertEqual(metrics["num_turns/max"], 3)
+        self.assertEqual(metrics["num_turns/mean"], 2.0)
+        self.assertEqual(metrics["tool_call_counts/min"], 1)
+        self.assertEqual(metrics["tool_call_counts/max"], 3)
+        self.assertEqual(metrics["tool_call_counts/mean"], 2.0)
+
+    def test_num_turns_metrics_fall_back_to_chat_turns(self):
+        self.batch.non_tensor_batch = {"__num_turns__": np.array([2, 6], dtype=np.int32)}
+
+        metrics = compute_data_metrics(self.batch, use_critic=False)
+
+        self.assertEqual(metrics["num_turns/min"], 2)
+        self.assertEqual(metrics["num_turns/max"], 6)
+        self.assertEqual(metrics["num_turns/mean"], 4.0)
+        self.assertNotIn("tool_call_counts/min", metrics)
 
 
 class TestComputeTimingMetrics(unittest.TestCase):
