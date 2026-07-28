@@ -7,10 +7,10 @@
 - 实际训练后端：`examples/image_restoration_multi_agent/verl_backend/`。
 - 目标协议：Qwen3 Coder XML 工具调用格式。
 - 目标函数：`restore_image`。
-- v3 工具选择熵系数：`tool_choice_entropy_coeff: 0.05`。
+- v3 工具选择熵系数：`tool_choice_entropy_coeff: 0.01`。
 - v1/v2 工具选择熵系数：`tool_choice_entropy_coeff: 0.0`。
 
-本版只增强模型在合法修复工具之间的探索性，不把自然语言、XML 标签、函数名或参数名的变化误当成工具探索。
+本版只增强模型在最多 16 个合法非停止修复 action 之间的探索性，不把 `stop`、自然语言、XML 标签、函数名或参数名的变化误当成修复工具探索。
 
 ## 2. 改造原因
 
@@ -18,17 +18,28 @@
 
 新方案将正则对象改为当前回合实际开放的工具选择树：
 
-1. 只读取 `restore_image.action` 的 active schema enum。
+1. 读取 `restore_image.action` 的 active runtime schema enum，并从熵候选中排除 `stop`。
 2. 在准确的 XML action span 内构建合法工具名称的 token trie。
 3. 只在 trie 的真实分叉位置对合法下一 token 做受限 softmax。
 4. 对一次工具调用的根分支熵和实际采样路径上的条件分支熵求和。
-5. 轨迹内按有效工具调用次数平均，再对 PPO batch 聚合。
+5. 轨迹内按成功对齐的非停止修复调用次数平均，再对 PPO batch 聚合。
 
 这样，增加自然语言变化不会提高工具熵奖励，单纯增加工具调用轮数也不会线性放大奖励。
 
+### 2.1 Prompt 与动态 Schema 一致性
+
+首轮继续使用与现有单步 SFT 数据完全一致的 initial system prompt、user prompt 和不含 `stop` 的 schema。首轮之后的新增决策片段改用多轮 `build_expert_system_prompt()`，根据已成功执行的修复 action 数量设置 `allow_stop`，不再把首轮禁止 `stop` 的 system prompt 当作后续回合指令。
+
+每次构造出的动态 schema 同时用于：
+
+- chat template 渲染，使模型实际看到当前可选 action；
+- 运行时 `_active_tool_schemas` 校验与工具熵候选提取。
+
+因此模型可见集合和运行时合法集合保持一致。动态 runtime schema 在达到停止阈值后最多包含 17 个 action，即 16 个修复 action 加 `stop`；工具熵候选始终最多只有 16 个非停止修复 action。
+
 ## 3. 真实 Tokenizer 约束
 
-Qwen3.5-9B tokenizer 下，17 个 action 只有 15 个唯一首 token，不能把每个工具简化成一个互不冲突的首 token 类别。
+Qwen3.5-9B tokenizer 下，16 个非停止修复 action 只有 14 个唯一首 token，不能把每个工具简化成一个互不冲突的首 token 类别。
 
 已确认的首 token 碰撞为：
 
@@ -41,7 +52,7 @@ Qwen3.5-9B tokenizer 下，17 个 action 只有 15 个唯一首 token，不能�
 
 - 多 token 工具名；
 - 首 token 碰撞；
-- 某些回合隐藏 `stop` 或其他 action；
+- runtime schema 是否开放 `stop`，以及熵候选固定排除 `stop`；
 - tokenizer 在不同前缀上下文中可能产生的切分变化。
 
 ## 4. 数学定义
@@ -66,7 +77,7 @@ H_call = sum(H_d for d in sampled trie branch positions)
 
 根分支熵加上采样路径上的条件分支熵，是完整工具分布链式熵的 Monte Carlo 估计。对于没有 token 前缀碰撞的工具，只包含根分支；对于两组碰撞工具，还包含对应的后续条件分支。
 
-设轨迹 `b` 有 `N_b` 次成功对齐的工具调用，则：
+设轨迹 `b` 有 `N_b` 次成功对齐的非停止修复调用，则：
 
 ```text
 H_trajectory(b) = sum(H_call) / N_b
@@ -75,13 +86,14 @@ H_trajectory(b) = sum(H_call) / N_b
 无有效工具决策的轨迹贡献 0。Actor loss 中增加：
 
 ```text
-L_actor = L_original - tool_choice_entropy_coeff * mean(H_trajectory)
+g_b = 1[sum_t(advantage[b,t] * response_mask[b,t]) > 0]
+L_actor = L_original - tool_choice_entropy_coeff * aggregate(g_b * H_trajectory(b))
 ```
 
 阶段 B 使用：
 
 ```yaml
-tool_choice_entropy_coeff: 0.05
+tool_choice_entropy_coeff: 0.01
 ```
 
 ## 5. 数据协议
@@ -90,12 +102,12 @@ Rollout 为每个 response 位置维护以下字段：
 
 | 字段 | 形状 | 含义 |
 |---|---|---|
-| `tool_choice_call_start_mask` | `[B, R]` | 每次成功对齐工具调用的第一个 trie 决策位置为 1 |
+| `tool_choice_call_start_mask` | `[B, R]` | 每次成功对齐的非停止修复调用的第一个 trie 决策位置为 1 |
 | `tool_decision_position_mask` | `[B, R]` | 所有真实 trie 分叉位置为 1 |
 | `tool_choice_candidate_token_ids` | `[B, R, 17]` | 每个分叉位置的合法下一 token ID，0 padding |
 | `tool_choice_candidate_leaf_counts` | `[B, R, 17]` | 每个候选分支覆盖的最终工具数，0 表示无效槽位 |
 
-候选宽度固定为 17，便于 TensorDict 拼接和微批次传输。实际候选数由 active schema 和当前 trie 节点决定。
+候选张量的物理宽度固定为 17，作为 TensorDict 拼接和微批次传输协议容量；这不表示熵包含 17 类。实际候选最多为 16 个非停止修复 action，并由 active schema 和当前 trie 节点决定。
 
 `tool_choice_call_start_mask` 是显式调用计数协议，不能根据候选数量反推。否则 active schema 仅有两个工具时，根决策可能被错误识别为不存在。
 
@@ -108,14 +120,14 @@ Rollout 为每个 response 位置维护以下字段：
 1. 当前 assistant turn 恰好解析出一个工具调用。
 2. 函数名为 `restore_image`。
 3. 参数只有 `action`，且值为非空字符串。
-4. action 属于当前回合 active schema enum。
+4. action 属于当前回合 active schema enum，且不是 `stop`。
 5. 响应中恰好有一个结构化 `<parameter=action>...</parameter>` span。
 6. XML 文本中的 action 与 parser 结果一致。
 7. fast tokenizer 提供的 offset mapping 能完整覆盖 action，且 token 不跨越边界。
 8. 原始 `response_ids` 与 decode/re-encode roundtrip 一致。
 9. 实际 action token 序列存在于动态候选 trie。
 
-自然语言中出现同名工具不会被标记；XML 不完整、多个调用、schema 隐藏、边界跨 token 或 tokenizer roundtrip 失败时，该回合不产生工具熵奖励，并记录诊断原因。
+当前 schema 开放的合法 `stop` 回合直接跳过工具熵协议：不写 `tool_choice_call_start_mask`、决策位置或候选，也不计入工具选择对齐失败。自然语言中出现同名工具不会被标记；XML 不完整、多个调用、schema 隐藏、边界跨 token 或 tokenizer roundtrip 失败时，该回合不产生工具熵奖励，并记录诊断原因。
 
 ## 7. Actor Forward
 
@@ -150,7 +162,7 @@ call_count = sum(tool_choice_call_start_mask)
 trajectory_entropy = sequence_entropy / max(call_count, 1)
 ```
 
-随后按全局 batch size 和 data-parallel size 使用现有 loss 聚合约定计算均值。
+随后计算每条轨迹的 response advantage 总和，只对总和严格大于 0 且存在有效非停止修复决策的轨迹保留熵奖励，再按全局 batch size 和 data-parallel size 使用现有 loss 聚合约定。该门控不会改变运行时采样或 `stop` 的执行与奖励，只决定工具熵 bonus 是否进入 actor loss。
 
 SwanLab/训练日志新增：
 
@@ -159,6 +171,7 @@ SwanLab/训练日志新增：
 | `actor/tool_choice_restricted_entropy` | 每轨迹按调用次数归一化后的工具受限熵 |
 | `actor/tool_choice_entropy_bonus` | 系数乘以工具受限熵后的 loss 奖励量 |
 | `actor/tool_choice_entropy_coeff` | 当前工具选择熵系数 |
+| `actor/tool_choice_entropy_gate_ratio` | 有效工具熵轨迹中通过正 advantage 硬门控的比例 |
 
 Rollout 对齐诊断使用 `tool_choice_decision/*` 指标，包括匹配率、每轨迹决策位置数以及 roundtrip、schema、边界失败率。
 
@@ -168,7 +181,7 @@ Rollout 对齐诊断使用 `tool_choice_decision/*` 指标，包括匹配率、�
 |---|---|---:|---:|---|
 | v1 | 原奖励 | `0.005` | `0.0` | 原奖励基线 |
 | v2 | 边际效率奖励 | `0.005` | `0.0` | 新奖励基线 |
-| v3 | 与 v2 相同 | `0.005` | `0.05` | 工具级探索实验 |
+| v3 | 与 v2 相同 | `0.005` | `0.01` | 带正 advantage 门控的工具级探索实验 |
 
 v2 与 v3 的 IQA 奖励及工具调用成本保持一致，主要实验变量是工具选择熵正则。
 
@@ -183,13 +196,13 @@ actor_rollout_ref:
 # restoration_common_config_v3_2gpu.yaml (v3)
 actor_rollout_ref:
   actor:
-    tool_choice_entropy_coeff: 0.05
+    tool_choice_entropy_coeff: 0.01
 ```
 
 公共启动器的 preflight 必须验证：
 
 - v1/v2 系数严格为 `0.0`；
-- v3 系数严格为 `0.05`；
+- v3 系数严格为 `0.01`；
 - v3 仍使用边际效率奖励；
 - 实验名、输出目录、主日志和工具日志包含正确的版本目录；
 - actor 运行参数满足阶段 B 的 forward 限制。
@@ -197,6 +210,9 @@ actor_rollout_ref:
 ## 10. 阶段 B 完成项
 
 - [x] 从 active schema 动态提取合法 action。
+- [x] 首轮保持单步 SFT prompt，后续回合切换到与动态停止状态一致的多轮 system prompt。
+- [x] 将同一份动态 schema 同时传给 chat template 和运行时校验。
+- [x] 从修复工具熵中排除 `stop`，合法停止回合不写 mask、候选或失败诊断。
 - [x] 在原始 XML 上下文中编码候选并构建 token trie。
 - [x] 支持两组真实首 token 碰撞及后续条件分支。
 - [x] 增加显式调用起点、决策位置、候选 token 和叶子数字段。
@@ -204,7 +220,8 @@ actor_rollout_ref:
 - [x] 修正 `left_right_2_no_padding` 与微批次局部右 padding 后的逐样本 causal logits 对齐。
 - [x] actor 仅 gather 合法候选 logits。
 - [x] 实现轨迹内按工具调用次数归一化的 PPO 熵奖励。
-- [x] 配置 v3 系数为 `0.05`，v1/v2 保持 `0.0`。
+- [x] 配置 v3 系数为 `0.01`，v1/v2 保持 `0.0`。
+- [x] 只对 response advantage 总和为正的有效轨迹应用工具熵，并记录 gate ratio。
 - [x] 删除旧的 action 文本 token 熵运行时分支、配置字段和指标。
 - [x] 增加真实 tokenizer 碰撞、均匀/塌缩分布、零 mask、双工具 schema、归一化和 backward 测试。
 
@@ -214,7 +231,7 @@ actor_rollout_ref:
 
 1. v1/v2 运行结果不依赖任何工具选择字段，系数为零时 loss 行为保持原样。
 2. v3 的工具熵只由合法工具分支 logits 决定，不受自然语言文本多样性直接影响。
-3. 17 个等概率工具的理论最大熵为 `log(17)`。
+3. 16 个等概率非停止修复 action 的理论最大熵为 `log(16)`。
 4. 单一工具概率占优时受限熵接近 0。
 5. 两次同尺度调用与一次调用得到相同量级的轨迹熵，不鼓励调用满轮数。
 6. active schema 只有两个工具时仍正确计为一次调用。
@@ -222,6 +239,8 @@ actor_rollout_ref:
 8. 工具熵 backward 后候选 logits 梯度存在且有限。
 9. 12 个专家版本启动脚本全部通过 `--preflight`。
 10. 活动代码、配置和测试中不存在旧 token 级实现的字段、指标或测试命名。
+11. 每个后续回合的模型可见 schema 与 `_active_tool_schemas` 完全一致，system prompt 的停止状态与 schema 一致。
+12. 合法 `stop` 回合正常执行和结束轨迹，但不贡献修复工具熵，也不降低工具选择对齐率。
 
 ## 12. 后续实验建议
 
@@ -233,4 +252,4 @@ actor_rollout_ref:
 - 平均工具调用次数是否因归一化设计保持稳定，而不是被熵奖励推高；
 - IQA 增益、无效调用率和最终轨迹奖励是否优于 v2。
 
-若 `0.05` 导致无效调用明显上升或 IQA 下降，可对比 `0.01`；若工具分布仍过快塌缩且 bonus 远小于 policy loss，可对比 `0.1`。调整时保持 v2 奖励和其余采样参数不变。
+当前 v3 固定使用 `0.01`，并保留现有正 advantage 门控。后续若比较其他系数，应只改变 `tool_choice_entropy_coeff`，保持 IQA 奖励、工具调用成本、KL、采样参数、数据和随机种子不变；本次修复直接基于当前 v3 提交状态完成，不要求回退到旧提交。

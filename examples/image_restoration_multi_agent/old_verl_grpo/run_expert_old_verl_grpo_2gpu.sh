@@ -570,7 +570,7 @@ if training_variant:
     tool_entropy_coeff = float(config.actor_rollout_ref.actor.tool_choice_entropy_coeff)
     if abs(entropy_coeff - 0.005) > 1e-12:
         errors.append(f"{training_variant} entropy_coeff={entropy_coeff!r}, expected 0.005")
-    expected_tool_entropy = 0.05 if training_variant == "v3" else 0.0
+    expected_tool_entropy = 0.01 if training_variant == "v3" else 0.0
     if abs(tool_entropy_coeff - expected_tool_entropy) > 1e-12:
         errors.append(
             f"{training_variant} tool_choice_entropy_coeff={tool_entropy_coeff!r}, "

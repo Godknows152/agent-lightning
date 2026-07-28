@@ -399,6 +399,54 @@ class ToolAgentLoop(AgentLoopBase):
         agent_data.metrics[metric_name] = agent_data.metrics.get(metric_name, 0) + 1
 
     @staticmethod
+    def _is_active_restoration_stop_call(parsed_tool_calls: list[FunctionCall], allowed_actions: set[str]) -> bool:
+        """Return whether the turn is one valid stop call exposed by the active schema."""
+
+        if "stop" not in allowed_actions or len(parsed_tool_calls) != 1:
+            return False
+        tool_call = parsed_tool_calls[0]
+        if tool_call.name != "restore_image":
+            return False
+        try:
+            arguments = json.loads(tool_call.arguments)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return isinstance(arguments, dict) and set(arguments) == {"action"} and arguments.get("action") == "stop"
+
+    def _record_restoration_tool_choice_decisions(self, agent_data: AgentData, tool_choice_start: int) -> None:
+        """Record restricted-entropy decisions for non-stop restoration actions."""
+
+        active_tool_schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+        allowed_actions = self._allowed_actions_from_tool_schemas(active_tool_schemas)
+        if self._is_active_restoration_stop_call(agent_data.tool_calls, allowed_actions):
+            return
+
+        entropy_actions = allowed_actions - {"stop"}
+        if self.tool_parser_name == "qwen3_coder":
+            decision_result = find_tool_choice_decisions(
+                agent_data.response_ids,
+                self.tokenizer,
+                agent_data.tool_calls,
+                entropy_actions,
+            )
+        else:
+            decision_result = _tool_choice_decision_failure(f"unsupported_tool_parser:{self.tool_parser_name}")
+        if decision_result.matched:
+            root_position = tool_choice_start + decision_result.decision_positions[0]
+            agent_data.tool_choice_call_start_mask[root_position] = 1
+            for position, token_ids, leaf_counts in zip(
+                decision_result.decision_positions,
+                decision_result.candidate_token_ids,
+                decision_result.candidate_leaf_counts,
+                strict=True,
+            ):
+                absolute_position = tool_choice_start + position
+                agent_data.tool_decision_position_mask[absolute_position] = 1
+                agent_data.tool_choice_candidate_token_ids[absolute_position] = list(token_ids)
+                agent_data.tool_choice_candidate_leaf_counts[absolute_position] = list(leaf_counts)
+        self._record_tool_choice_decision_result(agent_data, decision_result)
+
+    @staticmethod
     def _record_penalty(
         agent_data: AgentData,
         *,
@@ -783,6 +831,12 @@ class ToolAgentLoop(AgentLoopBase):
             ]
         else:
             include_stop = completed_restoration_actions >= min_stop_tool_calls
+            system_prompt = prompt_config["build_system"](
+                expert_name,
+                registry,
+                allow_stop=include_stop,
+                min_stop_tool_calls=min_stop_tool_calls,
+            )
             user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
             if include_stop:
                 user_prompt += (
@@ -797,6 +851,7 @@ class ToolAgentLoop(AgentLoopBase):
                 )
             include_image = False
             messages = [
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
             ]
 
@@ -992,9 +1047,7 @@ class ToolAgentLoop(AgentLoopBase):
                 tool_choice_call_start_mask=agent_data.tool_choice_call_start_mask[: self.response_length],
                 tool_decision_position_mask=agent_data.tool_decision_position_mask[: self.response_length],
                 tool_choice_candidate_token_ids=agent_data.tool_choice_candidate_token_ids[: self.response_length],
-                tool_choice_candidate_leaf_counts=agent_data.tool_choice_candidate_leaf_counts[
-                    : self.response_length
-                ],
+                tool_choice_candidate_leaf_counts=agent_data.tool_choice_candidate_leaf_counts[: self.response_length],
                 multi_modal_data=multi_modal_data,
                 response_logprobs=(
                     agent_data.response_logprobs[: self.response_length] if agent_data.response_logprobs else None
@@ -1110,31 +1163,7 @@ class ToolAgentLoop(AgentLoopBase):
         tools = [tool.tool_schema for tool in active_tools.values()]
         _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(agent_data.response_ids, tools)
         if getattr(agent_data, "data_source", "") == "restoration":
-            active_tool_schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
-            allowed_actions = self._allowed_actions_from_tool_schemas(active_tool_schemas)
-            if self.tool_parser_name == "qwen3_coder":
-                decision_result = find_tool_choice_decisions(
-                    agent_data.response_ids,
-                    self.tokenizer,
-                    agent_data.tool_calls,
-                    allowed_actions,
-                )
-            else:
-                decision_result = _tool_choice_decision_failure(f"unsupported_tool_parser:{self.tool_parser_name}")
-            if decision_result.matched:
-                root_position = tool_choice_start + decision_result.decision_positions[0]
-                agent_data.tool_choice_call_start_mask[root_position] = 1
-                for position, token_ids, leaf_counts in zip(
-                    decision_result.decision_positions,
-                    decision_result.candidate_token_ids,
-                    decision_result.candidate_leaf_counts,
-                    strict=True,
-                ):
-                    absolute_position = tool_choice_start + position
-                    agent_data.tool_decision_position_mask[absolute_position] = 1
-                    agent_data.tool_choice_candidate_token_ids[absolute_position] = list(token_ids)
-                    agent_data.tool_choice_candidate_leaf_counts[absolute_position] = list(leaf_counts)
-            self._record_tool_choice_decision_result(agent_data, decision_result)
+            self._record_restoration_tool_choice_decisions(agent_data, tool_choice_start)
 
         # Check soft termination conditions (max turns) AFTER tool call extraction.
         # This ensures the final assistant turn's tool call (e.g. "stop") is still
@@ -1283,7 +1312,7 @@ class ToolAgentLoop(AgentLoopBase):
             )
             response_ids = await self.apply_chat_template(
                 add_messages,
-                tools=None,
+                tools=schemas,
                 images=images,
                 videos=videos,
                 remove_system_prompt=False,

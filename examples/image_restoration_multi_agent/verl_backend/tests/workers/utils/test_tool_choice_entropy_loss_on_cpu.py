@@ -35,16 +35,19 @@ def _batch(
     decision_mask: torch.Tensor | None,
     call_start_mask: torch.Tensor | None,
     response_mask: torch.Tensor | None = None,
+    advantages: torch.Tensor | None = None,
 ) -> TensorDict:
     if response_mask is None:
         response_mask = torch.ones(2, 3, dtype=torch.long)
+    if advantages is None:
+        advantages = torch.zeros(2, 3)
     tensors = {
         "prompts": torch.tensor([[1], [1]]),
         "responses": torch.tensor([[2, 3, 4], [2, 3, 4]]),
         "attention_mask": torch.ones(2, 4, dtype=torch.long),
         "response_mask": response_mask,
         "old_log_probs": torch.zeros(2, 3),
-        "advantages": torch.zeros(2, 3),
+        "advantages": advantages,
     }
     if decision_mask is not None:
         tensors["tool_decision_position_mask"] = decision_mask
@@ -62,13 +65,13 @@ def _model_output(tool_entropies: torch.Tensor | None = None) -> dict[str, torch
     return output
 
 
-def test_uniform_17_tool_distribution_has_log_17_entropy_and_backward() -> None:
+def test_uniform_16_repair_action_distribution_has_log_16_entropy_and_backward() -> None:
     logits = torch.zeros(1, 1, 17, requires_grad=True)
-    leaf_counts = torch.ones(1, 1, 17, dtype=torch.long)
+    leaf_counts = torch.tensor([[[1] * 16 + [0]]])
 
     entropy = restricted_tool_choice_entropy_from_candidates(logits, leaf_counts)
 
-    assert entropy.item() == pytest.approx(math.log(17))
+    assert entropy.item() == pytest.approx(math.log(16))
     entropy.backward()
     assert logits.grad is not None
     assert torch.isfinite(logits.grad).all()
@@ -151,22 +154,29 @@ def test_zero_coefficient_preserves_baseline_without_tool_fields() -> None:
     assert "actor/tool_choice_restricted_entropy" not in metrics
 
 
-def test_coefficient_005_adds_expected_call_normalized_bonus() -> None:
+def test_coefficient_001_adds_expected_call_normalized_bonus() -> None:
     entropy = torch.tensor([[2.0, 1.0, 99.0], [4.0, 99.0, 99.0]], requires_grad=True)
     decision_mask = torch.tensor([[1, 1, 0], [1, 0, 0]])
     call_start_mask = torch.tensor([[1, 0, 0], [1, 0, 0]])
+    positive_advantages = torch.ones(2, 3)
 
     loss, metrics = ppo_loss(
-        _actor_config(0.05),
+        _actor_config(0.01),
         _model_output(entropy),
-        _batch(decision_mask, call_start_mask),
+        _batch(decision_mask, call_start_mask, advantages=positive_advantages),
+    )
+    baseline_loss, _ = ppo_loss(
+        _actor_config(0.0),
+        _model_output(),
+        _batch(None, None, advantages=positive_advantages),
     )
 
     # Per-trajectory values are 3 and 4, so the global mean is 3.5.
     assert metrics["actor/tool_choice_restricted_entropy"].aggregate() == pytest.approx(3.5)
-    assert metrics["actor/tool_choice_entropy_bonus"].aggregate() == pytest.approx(0.175)
-    assert metrics["actor/tool_choice_entropy_coeff"].aggregate() == pytest.approx(0.05)
-    assert loss.item() == pytest.approx(-0.175)
+    assert metrics["actor/tool_choice_entropy_bonus"].aggregate() == pytest.approx(0.035)
+    assert metrics["actor/tool_choice_entropy_coeff"].aggregate() == pytest.approx(0.01)
+    assert metrics["actor/tool_choice_entropy_gate_ratio"].aggregate() == pytest.approx(1.0)
+    assert loss.item() == pytest.approx(baseline_loss.item() - 0.035)
     loss.backward()
     assert entropy.grad is not None
     assert torch.isfinite(entropy.grad).all()
@@ -175,16 +185,25 @@ def test_coefficient_005_adds_expected_call_normalized_bonus() -> None:
 def test_two_calls_and_one_call_have_the_same_entropy_scale() -> None:
     one_call_entropy = torch.tensor([[2.0, 0.0, 0.0], [0.0, 0.0, 0.0]])
     two_call_entropy = torch.tensor([[2.0, 2.0, 0.0], [0.0, 0.0, 0.0]])
+    positive_advantages = torch.ones(2, 3)
 
     _, one_call_metrics = ppo_loss(
-        _actor_config(0.05),
+        _actor_config(0.01),
         _model_output(one_call_entropy),
-        _batch(torch.tensor([[1, 0, 0], [0, 0, 0]]), torch.tensor([[1, 0, 0], [0, 0, 0]])),
+        _batch(
+            torch.tensor([[1, 0, 0], [0, 0, 0]]),
+            torch.tensor([[1, 0, 0], [0, 0, 0]]),
+            advantages=positive_advantages,
+        ),
     )
     _, two_call_metrics = ppo_loss(
-        _actor_config(0.05),
+        _actor_config(0.01),
         _model_output(two_call_entropy),
-        _batch(torch.tensor([[1, 1, 0], [0, 0, 0]]), torch.tensor([[1, 1, 0], [0, 0, 0]])),
+        _batch(
+            torch.tensor([[1, 1, 0], [0, 0, 0]]),
+            torch.tensor([[1, 1, 0], [0, 0, 0]]),
+            advantages=positive_advantages,
+        ),
     )
 
     assert one_call_metrics["actor/tool_choice_restricted_entropy"].aggregate() == pytest.approx(1.0)
@@ -196,16 +215,16 @@ def test_two_tool_schema_and_zero_decision_batch_are_finite() -> None:
     decision_mask = torch.tensor([[1, 0, 0], [0, 0, 0]])
     call_start_mask = torch.tensor([[1, 0, 0], [0, 0, 0]])
     loss, metrics = ppo_loss(
-        _actor_config(0.05),
+        _actor_config(0.01),
         _model_output(entropy),
-        _batch(decision_mask, call_start_mask),
+        _batch(decision_mask, call_start_mask, advantages=torch.ones(2, 3)),
     )
     assert metrics["actor/tool_choice_restricted_entropy"].aggregate() == pytest.approx(math.log(2) / 2)
     assert torch.isfinite(loss)
 
     zero_entropy = torch.zeros(2, 3, requires_grad=True)
     zero_loss, zero_metrics = ppo_loss(
-        _actor_config(0.05),
+        _actor_config(0.01),
         _model_output(zero_entropy),
         _batch(torch.zeros(2, 3, dtype=torch.long), torch.zeros(2, 3, dtype=torch.long)),
     )
@@ -216,10 +235,31 @@ def test_two_tool_schema_and_zero_decision_batch_are_finite() -> None:
     assert torch.isfinite(zero_entropy.grad).all()
 
 
+def test_non_positive_advantage_disables_tool_choice_entropy_bonus() -> None:
+    entropy = torch.tensor([[2.0, 0.0, 0.0], [3.0, 0.0, 0.0]], requires_grad=True)
+    masks = torch.tensor([[1, 0, 0], [1, 0, 0]])
+
+    loss, metrics = ppo_loss(
+        _actor_config(0.01),
+        _model_output(entropy),
+        _batch(masks, masks, advantages=-torch.ones(2, 3)),
+    )
+    baseline_loss, _ = ppo_loss(
+        _actor_config(0.0),
+        _model_output(),
+        _batch(None, None, advantages=-torch.ones(2, 3)),
+    )
+
+    assert metrics["actor/tool_choice_restricted_entropy"].aggregate() == pytest.approx(0.0)
+    assert metrics["actor/tool_choice_entropy_bonus"].aggregate() == pytest.approx(0.0)
+    assert metrics["actor/tool_choice_entropy_gate_ratio"].aggregate() == pytest.approx(0.0)
+    assert loss.item() == pytest.approx(baseline_loss.item())
+
+
 def test_positive_coefficient_requires_tool_choice_fields_and_model_entropy() -> None:
     with pytest.raises(ValueError, match="tool_choice_call_start_mask"):
-        ppo_loss(_actor_config(0.05), _model_output(), _batch(None, None))
+        ppo_loss(_actor_config(0.01), _model_output(), _batch(None, None))
 
     masks = torch.ones(2, 3, dtype=torch.long)
     with pytest.raises(ValueError, match="tool_choice_restricted_entropy"):
-        ppo_loss(_actor_config(0.05), _model_output(), _batch(masks, masks))
+        ppo_loss(_actor_config(0.01), _model_output(), _batch(masks, masks))

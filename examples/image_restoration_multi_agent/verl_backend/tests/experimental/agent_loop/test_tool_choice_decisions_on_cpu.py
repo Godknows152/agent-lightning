@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from verl.experimental.agent_loop.tool_agent_loop import find_tool_choice_decisions
+from verl.experimental.agent_loop.tool_agent_loop import AgentData, ToolAgentLoop, find_tool_choice_decisions
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 
 
@@ -79,6 +79,30 @@ def _call(action: str, **extra_arguments: str) -> FunctionCall:
     return FunctionCall(name="restore_image", arguments=json.dumps({"action": action, **extra_arguments}))
 
 
+def _tool_schema(actions: list[str]) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "restore_image",
+            "parameters": {"properties": {"action": {"enum": actions}}},
+        },
+    }
+
+
+def _decision_agent_data(text: str, action: str, actions: list[str]) -> AgentData:
+    tokenizer = _CharacterTokenizer()
+    agent_data = AgentData([], [], [], {}, "test-request", {})
+    agent_data.response_ids = tokenizer.encode(text)
+    agent_data.response_mask = [1] * len(agent_data.response_ids)
+    agent_data.tool_choice_call_start_mask = [0] * len(agent_data.response_ids)
+    agent_data.tool_decision_position_mask = [0] * len(agent_data.response_ids)
+    agent_data.tool_choice_candidate_token_ids = [[] for _ in agent_data.response_ids]
+    agent_data.tool_choice_candidate_leaf_counts = [[] for _ in agent_data.response_ids]
+    agent_data.tool_calls = [_call(action)]
+    agent_data._active_tool_schemas = [_tool_schema(actions)]
+    return agent_data
+
+
 def test_regular_action_has_one_root_decision() -> None:
     tokenizer = _CharacterTokenizer()
     text = _response("scunet", reasoning="I considered scunet in prose first.\n")
@@ -125,6 +149,41 @@ def test_two_action_schema_still_has_a_valid_root_decision() -> None:
     assert result.matched is True
     assert len(result.decision_positions) == 1
     assert sum(result.candidate_leaf_counts[0]) == 2
+
+
+def test_runtime_stop_is_excluded_from_non_stop_entropy_candidates() -> None:
+    tokenizer = _CharacterTokenizer()
+    loop = ToolAgentLoop.__new__(ToolAgentLoop)
+    loop.tokenizer = tokenizer
+    loop.tool_parser_name = "qwen3_coder"
+    loop.tool_schemas = []
+    agent_data = _decision_agent_data(_response("scunet"), "scunet", ["scunet", "ridcp", "stop"])
+
+    loop._record_restoration_tool_choice_decisions(agent_data, tool_choice_start=0)
+
+    decision_positions = [index for index, value in enumerate(agent_data.tool_decision_position_mask) if value]
+    assert len(decision_positions) == 1
+    root_position = decision_positions[0]
+    assert sum(agent_data.tool_choice_candidate_leaf_counts[root_position]) == 2
+    assert agent_data.extra_fields["tool_choice_decision_diagnostics"]["matched_turns"] == 1
+
+
+def test_active_stop_call_does_not_enter_tool_choice_entropy_protocol() -> None:
+    tokenizer = _CharacterTokenizer()
+    loop = ToolAgentLoop.__new__(ToolAgentLoop)
+    loop.tokenizer = tokenizer
+    loop.tool_parser_name = "qwen3_coder"
+    loop.tool_schemas = []
+    agent_data = _decision_agent_data(_response("stop"), "stop", ["scunet", "ridcp", "stop"])
+
+    loop._record_restoration_tool_choice_decisions(agent_data, tool_choice_start=0)
+
+    assert not any(agent_data.tool_choice_call_start_mask)
+    assert not any(agent_data.tool_decision_position_mask)
+    assert not any(agent_data.tool_choice_candidate_token_ids)
+    assert not any(agent_data.tool_choice_candidate_leaf_counts)
+    assert "tool_choice_decision_diagnostics" not in agent_data.extra_fields
+    assert "tool_choice_decision_attempted_turns" not in agent_data.metrics
 
 
 @pytest.mark.parametrize(

@@ -63,6 +63,35 @@ class _PromptRegistry:
         return {"include_stop": include_stop}
 
 
+def _current_prompt_config(system_calls: list[dict] | None = None) -> dict:
+    def build_system(
+        expert: str,
+        registry: _PromptRegistry,
+        *,
+        allow_stop: bool,
+        min_stop_tool_calls: int,
+    ) -> str:
+        del registry
+        call = {
+            "expert": expert,
+            "allow_stop": allow_stop,
+            "min_stop_tool_calls": min_stop_tool_calls,
+        }
+        if system_calls is not None:
+            system_calls.append(call)
+        return f"multi-turn system allow_stop={allow_stop}"
+
+    return {
+        "ExpertName": _PromptExpertName,
+        "registry": _PromptRegistry(),
+        "min_stop_tool_calls": 5,
+        "build_initial_system": lambda expert, registry: "initial system forbids stop",
+        "build_initial_user": lambda: "initial user",
+        "build_state": lambda history_feedback: history_feedback,
+        "build_system": build_system,
+    }
+
+
 def _agent_data() -> AgentData:
     agent_data = AgentData(
         messages=[],
@@ -267,18 +296,30 @@ def test_reward_components_partition_the_complete_trajectory_reward() -> None:
     assert {key: agent_data.extra_fields[key] for key in components} == components
 
 
+def test_initial_restoration_prompt_keeps_single_step_sft_messages() -> None:
+    loop = _loop_with_text("")
+    loop.processor = None
+    system_calls: list[dict] = []
+    loop.current_restoration_prompt = _current_prompt_config(system_calls)
+    agent_data = _agent_data()
+    agent_data.sample_extra_info = {"expert_name": "low_light"}
+    agent_data.current_prompt_history = []
+
+    messages, schemas = loop._build_current_restoration_decision_prompt(agent_data)
+
+    assert messages == [
+        {"role": "system", "content": "initial system forbids stop"},
+        {"role": "user", "content": "initial user"},
+    ]
+    assert schemas == [{"include_stop": False}]
+    assert system_calls == []
+
+
 def test_stop_schema_counts_only_successful_restoration_actions() -> None:
     loop = _loop_with_text("")
     loop.processor = None
-    loop.current_restoration_prompt = {
-        "ExpertName": _PromptExpertName,
-        "registry": _PromptRegistry(),
-        "min_stop_tool_calls": 5,
-        "build_initial_system": lambda expert, registry: "initial system",
-        "build_initial_user": lambda: "initial user",
-        "build_state": lambda history_feedback: history_feedback,
-        "build_system": lambda expert, registry: "system",
-    }
+    system_calls: list[dict] = []
+    loop.current_restoration_prompt = _current_prompt_config(system_calls)
     agent_data = _agent_data()
     agent_data.sample_extra_info = {"expert_name": "low_light"}
     agent_data.current_prompt_history = ["history"] * 4
@@ -287,13 +328,27 @@ def test_stop_schema_counts_only_successful_restoration_actions() -> None:
     messages, schemas = loop._build_current_restoration_decision_prompt(agent_data)
 
     assert schemas == [{"include_stop": False}]
-    assert "1 more restoration tool call(s)" in messages[0]["content"]
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert messages[0]["content"] == "multi-turn system allow_stop=False"
+    assert "initial system forbids stop" not in messages[0]["content"]
+    assert "1 more restoration tool call(s)" in messages[1]["content"]
+    assert system_calls[-1] == {
+        "expert": "low_light",
+        "allow_stop": False,
+        "min_stop_tool_calls": 5,
+    }
 
     agent_data.current_prompt_history.append("history")
     messages, schemas = loop._build_current_restoration_decision_prompt(agent_data)
 
     assert schemas == [{"include_stop": True}]
-    assert "The stop action is now available" in messages[0]["content"]
+    assert messages[0]["content"] == "multi-turn system allow_stop=True"
+    assert "The stop action is now available" in messages[1]["content"]
+    assert system_calls[-1] == {
+        "expert": "low_light",
+        "allow_stop": True,
+        "min_stop_tool_calls": 5,
+    }
 
 
 class _InvalidActionTool:
@@ -389,6 +444,34 @@ def test_successful_tool_reward_has_no_fixed_call_bonus() -> None:
     assert agent_data.pure_image_restoration_rewards == [0.25]
     assert agent_data.stop_rewards == []
     assert agent_data.action_history == ["scunet"]
+
+
+def test_next_restoration_prompt_renders_the_active_tool_schema() -> None:
+    loop = _loop_with_text("")
+    loop.tools = {"restore_image": _SuccessfulRestorationTool()}
+    loop.current_restoration_prompt = _current_prompt_config()
+    loop.max_parallel_calls = 1
+    loop.processor = None
+    captured: dict = {}
+
+    async def apply_chat_template(messages: list[dict], **kwargs: object) -> list[int]:
+        captured["messages"] = messages
+        captured.update(kwargs)
+        return [7, 8]
+
+    loop.apply_chat_template = apply_chat_template
+    agent_data = _agent_data()
+    agent_data.sample_extra_info = {"expert_name": "fog"}
+    agent_data.current_prompt_history = []
+    agent_data.tool_calls = [FunctionCall(name="restore_image", arguments='{"action": "scunet"}')]
+
+    state = asyncio.run(loop._handle_processing_tools_state(agent_data))
+
+    assert state == AgentState.GENERATING
+    assert captured["tools"] == [{"include_stop": False}]
+    assert captured["messages"] == agent_data.messages
+    assert captured["remove_system_prompt"] is False
+    assert [message["role"] for message in captured["messages"]] == ["system", "user"]
 
 
 def test_executed_stop_reward_is_recorded_separately() -> None:
