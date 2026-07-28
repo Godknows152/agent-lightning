@@ -2,17 +2,18 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OLD_VERL_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
-EXPERT="fog"
-REWARD_VARIANT="v2"
-LOG_DIR="${SCRIPT_DIR}/log/${EXPERT}"
-TOOL_CONFIG_PATH="${SCRIPT_DIR}/config/tool_config/restoration_tool_config_marginal_efficiency_2gpu.yaml"
-export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-fog_config_2gpu}"
+EXPERT="low_light"
+REWARD_VARIANT="v1"
+LOG_DIR="${OLD_VERL_DIR}/log/${EXPERT}"
+TOOL_CONFIG_PATH="${OLD_VERL_DIR}/config/tool_config/restoration_tool_config_current_iqa_2gpu.yaml"
+export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-low_light_config_2gpu}"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${REWARD_VARIANT}}"
-export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${SCRIPT_DIR}/outputs/${EXPERT}_${REWARD_VARIANT}}"
+export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}_${REWARD_VARIANT}}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  exec "${SCRIPT_DIR}/run_expert_old_verl_grpo_2gpu.sh" --help
+  exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_2gpu.sh" --help
 fi
 
 mkdir -p "${LOG_DIR}"
@@ -39,7 +40,7 @@ echo "Log file: ${MAIN_LOG}"
 echo "Tool config: ${TOOL_CONFIG_PATH}"
 
 export OLD_VERL_RUN_IN_FOREGROUND=1
-exec "${SCRIPT_DIR}/run_expert_old_verl_grpo_2gpu.sh" \
+exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_2gpu.sh" \
   "${EXPERT}" \
   "$@" \
   "actor_rollout_ref.rollout.multi_turn.tool_config_path=${TOOL_CONFIG_PATH}"
