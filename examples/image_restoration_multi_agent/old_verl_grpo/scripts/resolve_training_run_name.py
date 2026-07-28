@@ -98,7 +98,9 @@ def resolve_run_naming(
             checkpoint = find_latest_checkpoint(fresh_output_dir)
 
     is_continuation = checkpoint is not None
-    resolved_name = experiment_name or f"{base_name}{'_续' if is_continuation else ''}"
+    resolved_name = experiment_name or base_name
+    if is_continuation and not resolved_name.endswith("_续"):
+        resolved_name = f"{resolved_name}_续"
     resolved_output_dir = explicit_output_dir or output_root / resolved_name
     return RunNaming(
         experiment_name=resolved_name,

@@ -107,3 +107,55 @@ def test_checkpoint_output_directory_is_independent_from_swanlab_name(tmp_path: 
     assert naming.output_dir == configured_output.resolve()
     assert naming.swanlab_log_dir == configured_output.resolve() / "swanlab"
     assert naming.resume_from_path == checkpoint.resolve()
+
+
+def test_explicit_experiment_name_gets_continuation_suffix(tmp_path: Path) -> None:
+    module = _load_module()
+    configured_output = tmp_path / "fog" / "v3"
+    checkpoint = configured_output / "global_step_20"
+    checkpoint.mkdir(parents=True)
+
+    naming = module.resolve_run_naming(
+        expert="fog",
+        output_root=tmp_path,
+        output_dir=configured_output,
+        experiment_name="fog_v3",
+    )
+
+    assert naming.experiment_name == "fog_v3_续"
+    assert naming.output_dir == configured_output.resolve()
+    assert naming.resume_from_path == checkpoint.resolve()
+
+
+def test_fresh_explicit_experiment_name_keeps_its_original_name(tmp_path: Path) -> None:
+    module = _load_module()
+    configured_output = tmp_path / "rain" / "v1"
+
+    naming = module.resolve_run_naming(
+        expert="rain",
+        output_root=tmp_path,
+        output_dir=configured_output,
+        experiment_name="rain_v1",
+    )
+
+    assert naming.experiment_name == "rain_v1"
+    assert naming.output_dir == configured_output.resolve()
+    assert naming.resume_from_path is None
+
+
+def test_existing_continuation_suffix_is_not_duplicated(tmp_path: Path) -> None:
+    module = _load_module()
+    configured_output = tmp_path / "snow" / "v2"
+    checkpoint = configured_output / "global_step_8"
+    checkpoint.mkdir(parents=True)
+
+    naming = module.resolve_run_naming(
+        expert="snow",
+        output_root=tmp_path,
+        output_dir=configured_output,
+        experiment_name="snow_v2_续",
+    )
+
+    assert naming.experiment_name == "snow_v2_续"
+    assert naming.output_dir == configured_output.resolve()
+    assert naming.resume_from_path == checkpoint.resolve()
