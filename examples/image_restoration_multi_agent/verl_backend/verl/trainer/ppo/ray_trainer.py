@@ -76,6 +76,46 @@ from verl.workers.config import DistillationConfig, EngineConfig
 from verl.workers.utils.padding import left_right_2_no_padding, no_padding_2_padding
 
 
+def _select_validation_turn_counts(non_tensor_batch: dict[str, Any]) -> tuple[np.ndarray | None, bool]:
+    """Select validation counts while preserving compatibility with non-agent rollouts."""
+    tool_call_counts = non_tensor_batch.get("tool_call_counts")
+    if tool_call_counts is not None:
+        return np.asarray(tool_call_counts, dtype=np.int64), True
+
+    chat_turn_counts = non_tensor_batch.get("__num_turns__")
+    if chat_turn_counts is not None:
+        return np.asarray(chat_turn_counts, dtype=np.int64), False
+
+    return None, False
+
+
+def _compute_validation_turn_metrics(
+    sample_turns: list[np.ndarray], *, sample_turns_are_tool_calls: bool
+) -> dict[str, Any]:
+    """Summarize validation turn counts under stable and explicit metric names."""
+    if not sample_turns:
+        return {}
+
+    turn_counts = np.concatenate(sample_turns)
+    if turn_counts.size == 0:
+        return {}
+
+    metrics = {
+        "val-aux/num_turns/min": turn_counts.min(),
+        "val-aux/num_turns/max": turn_counts.max(),
+        "val-aux/num_turns/mean": turn_counts.mean(),
+    }
+    if sample_turns_are_tool_calls:
+        metrics.update(
+            {
+                "val-aux/tool_call_counts/min": turn_counts.min(),
+                "val-aux/tool_call_counts/max": turn_counts.max(),
+                "val-aux/tool_call_counts/mean": turn_counts.mean(),
+            }
+        )
+    return metrics
+
+
 def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, kl_penalty="kl"):
     """Apply KL penalty to the token-level rewards.
 
@@ -663,6 +703,7 @@ class RayPPOTrainer:
         sample_gts = []
         sample_scores = []
         sample_turns = []
+        sample_turns_are_tool_calls = True
         sample_uids = []
 
         for test_data in self.val_dataloader:
@@ -744,9 +785,10 @@ class RayPPOTrainer:
                 else:
                     reward_extra_infos_dict[key].extend(values if isinstance(values, list) else [values])
 
-            # collect num_turns of each prompt
-            if "__num_turns__" in test_batch.non_tensor_batch:
-                sample_turns.append(test_batch.non_tensor_batch["__num_turns__"])
+            turn_counts, are_tool_call_counts = _select_validation_turn_counts(test_batch.non_tensor_batch)
+            if turn_counts is not None:
+                sample_turns.append(turn_counts)
+                sample_turns_are_tool_calls = sample_turns_are_tool_calls and are_tool_call_counts
 
             data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
 
@@ -773,12 +815,27 @@ class RayPPOTrainer:
                 "data_sources": data_source_lst,
                 "sample_uids": sample_uids,
                 "sample_turns": sample_turns,
+                "sample_turns_are_tool_calls": sample_turns_are_tool_calls,
                 "reward_extra_infos_dict": reward_extra_infos_dict,
             }
         data_sources = np.concatenate(data_source_lst, axis=0)
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources,
+            sample_uids,
+            reward_extra_infos_dict,
+            sample_turns,
+            sample_turns_are_tool_calls=sample_turns_are_tool_calls,
+        )
 
-    def _val_metrics_update(self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns):
+    def _val_metrics_update(
+        self,
+        data_sources,
+        sample_uids,
+        reward_extra_infos_dict,
+        sample_turns,
+        *,
+        sample_turns_are_tool_calls=False,
+    ):
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_uids, reward_extra_infos_dict)
         metric_dict = {}
         for data_source, var2metric2val in data_src2var2metric2val.items():
@@ -797,11 +854,12 @@ class RayPPOTrainer:
                     pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
                     metric_dict[pfx] = metric_val
 
-        if len(sample_turns) > 0:
-            sample_turns = np.concatenate(sample_turns)
-            metric_dict["val-aux/num_turns/min"] = sample_turns.min()
-            metric_dict["val-aux/num_turns/max"] = sample_turns.max()
-            metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
+        metric_dict.update(
+            _compute_validation_turn_metrics(
+                sample_turns,
+                sample_turns_are_tool_calls=sample_turns_are_tool_calls,
+            )
+        )
 
         return metric_dict
 
@@ -809,9 +867,21 @@ class RayPPOTrainer:
         if result_a is None and result_b is None:
             return {}
         if result_a is None:
-            result_a = {"data_sources": [], "sample_uids": [], "sample_turns": [], "reward_extra_infos_dict": {}}
+            result_a = {
+                "data_sources": [],
+                "sample_uids": [],
+                "sample_turns": [],
+                "sample_turns_are_tool_calls": True,
+                "reward_extra_infos_dict": {},
+            }
         if result_b is None:
-            result_b = {"data_sources": [], "sample_uids": [], "sample_turns": [], "reward_extra_infos_dict": {}}
+            result_b = {
+                "data_sources": [],
+                "sample_uids": [],
+                "sample_turns": [],
+                "sample_turns_are_tool_calls": True,
+                "reward_extra_infos_dict": {},
+            }
 
         if not result_a.get("data_sources") and not result_b.get("data_sources"):
             return {}
@@ -819,6 +889,9 @@ class RayPPOTrainer:
         data_sources = np.concatenate(result_a["data_sources"] + result_b["data_sources"], axis=0)
         sample_uids = result_a["sample_uids"] + result_b["sample_uids"]
         sample_turns = result_a["sample_turns"] + result_b["sample_turns"]
+        sample_turns_are_tool_calls = result_a.get("sample_turns_are_tool_calls", False) and result_b.get(
+            "sample_turns_are_tool_calls", False
+        )
 
         reward_extra_infos_dict = {}
         all_keys = set(result_a["reward_extra_infos_dict"].keys()) | set(result_b["reward_extra_infos_dict"].keys())
@@ -827,7 +900,13 @@ class RayPPOTrainer:
             list_b = result_b["reward_extra_infos_dict"].get(key, [])
             reward_extra_infos_dict[key] = list_a + list_b
 
-        return self._val_metrics_update(data_sources, sample_uids, reward_extra_infos_dict, sample_turns)
+        return self._val_metrics_update(
+            data_sources,
+            sample_uids,
+            reward_extra_infos_dict,
+            sample_turns,
+            sample_turns_are_tool_calls=sample_turns_are_tool_calls,
+        )
 
     def init_workers(self):
         """Initialize distributed training workers using Ray backend.

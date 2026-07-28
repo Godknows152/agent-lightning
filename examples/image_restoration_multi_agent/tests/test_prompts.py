@@ -85,6 +85,8 @@ def test_single_step_prompt_does_not_constrain_reasoning_text() -> None:
     user_prompt = build_expert_single_step_sft_user_prompt()
 
     assert EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION in prompt
+    assert "Do not output stop on the first assistant turn" in prompt
+    assert "On later turns, follow the current" in prompt
     assert "<think>" not in prompt
     assert "natural language" not in prompt
     assert "no other text" not in prompt

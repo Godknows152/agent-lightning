@@ -29,7 +29,7 @@ tools:
       tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
       external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
       restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py
-      # Allow stop after one successful restoration call.
+      # Mark stop available in user-state prompts after one successful restoration call.
       prompt_min_stop_tool_calls: 1
 
       use_iqa: true

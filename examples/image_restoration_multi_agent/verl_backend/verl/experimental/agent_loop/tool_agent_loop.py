@@ -427,7 +427,6 @@ class ToolAgentLoop(AgentLoopBase):
                 build_expert_single_step_sft_system_prompt,
                 build_expert_single_step_sft_user_prompt,
                 build_expert_state_prompt,
-                build_expert_system_prompt,
             )
             from schemas import ExpertName  # type: ignore[import]
             from tool_registry import ToolRegistry  # type: ignore[import]
@@ -461,7 +460,6 @@ class ToolAgentLoop(AgentLoopBase):
                 "build_initial_system": build_expert_single_step_sft_system_prompt,
                 "build_initial_user": build_expert_single_step_sft_user_prompt,
                 "build_state": build_expert_state_prompt,
-                "build_system": build_expert_system_prompt,
             }
         except Exception as exc:
             logger.warning("Current restoration prompt compatibility disabled: %s", exc)
@@ -518,9 +516,9 @@ class ToolAgentLoop(AgentLoopBase):
         step_index = len(getattr(agent_data, "current_prompt_history", []))
         min_stop_tool_calls = int(prompt_config["min_stop_tool_calls"])
         completed_restoration_actions = step_index
+        is_initial_turn = agent_data.assistant_turns == 0
 
-        if step_index == 0:
-            include_stop = False
+        if is_initial_turn:
             system_prompt = prompt_config["build_initial_system"](expert_name, registry)
             user_prompt = prompt_config["build_initial_user"]()
             include_image = True
@@ -529,15 +527,9 @@ class ToolAgentLoop(AgentLoopBase):
                 {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
             ]
         else:
-            include_stop = completed_restoration_actions >= min_stop_tool_calls
-            system_prompt = prompt_config["build_system"](
-                expert_name,
-                registry,
-                allow_stop=include_stop,
-                min_stop_tool_calls=min_stop_tool_calls,
-            )
+            stop_available = completed_restoration_actions >= min_stop_tool_calls
             user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
-            if include_stop:
+            if stop_available:
                 user_prompt += (
                     "\n\nThe stop action is now available. Use action stop only when further processing is unlikely "
                     "to improve the historical best image."
@@ -550,11 +542,13 @@ class ToolAgentLoop(AgentLoopBase):
                 )
             include_image = False
             messages = [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
             ]
 
-        tool_schemas = [registry.build_tool_schema(include_stop=include_stop)]
+        # The complete schema is serialized with the one initial system prompt.
+        # Later turns append only user-state messages and reuse this schema from
+        # the existing token context instead of injecting another system block.
+        tool_schemas = [registry.build_tool_schema(include_stop=True)]
         return messages, tool_schemas
 
     @staticmethod
@@ -1003,10 +997,10 @@ class ToolAgentLoop(AgentLoopBase):
             )
             response_ids = await self.apply_chat_template(
                 add_messages,
-                tools=schemas,
+                tools=None,
                 images=images,
                 videos=videos,
-                remove_system_prompt=False,
+                remove_system_prompt=True,
             )
         else:
             agent_data.messages.extend(add_messages)

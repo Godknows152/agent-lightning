@@ -9,7 +9,7 @@ data:  # 配置训练与验证数据及序列长度限制
     - examples/image_restoration_multi_agent/old_verl_grpo/data/fog_train.parquet  # 默认雾图像专家的训练数据
   val_files:  # 指定验证数据文件列表，各专家配置会覆盖此默认路径
     - examples/image_restoration_multi_agent/old_verl_grpo/data/fog_val.parquet  # 默认雾图像专家的验证数据
-  val_max_samples: 32  # 限制验证样本数
+  val_max_samples: 64  # 限制验证样本数
   val_batch_size: 32
   train_batch_size: 16  # 每个训练步骤采样的原始提示数量
   max_prompt_length: 2048  # 分词后原始提示文本允许的最大 Token 数
@@ -53,7 +53,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     optim:  # 配置 Actor 优化器
       lr: 3.0e-5  # 设置优化器学习率
       lr_scheduler_type: cosine  # 使用带线性预热的余弦衰减学习率调度器
-      lr_warmup_steps_ratio: 0.03  # 使用总训练步数的前三个百分点进行线性预热
+      lr_warmup_steps_ratio: 0.05  # 使用总训练步数的前三个百分点进行线性预热
       min_lr_ratio: 0.1  # 将训练末期的最低学习率限制为基础学习率的十分之一
       num_cycles: 0.5  # 在整个训练过程中执行一次标准半余弦下降
     entropy_coeff: 0.005  # 设置熵奖励系数，鼓励策略保持一定探索性
@@ -120,13 +120,13 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
   log_val_generations: 10  # 每次验证记录两条生成样例
   n_gpus_per_node: 2  # 每个节点分配两张 GPU 给 Actor、Rollout 和参考策略训练资源池
   nnodes: 1  # 使用一个计算节点进行训练
-  save_freq: 5  # 每隔五个训练步骤保存一次检查点
+  save_freq: 10  # 每隔五个训练步骤保存一次检查点
   test_freq: 10  # 每隔十个训练步骤执行一次验证
   total_epochs: 3  # 对训练数据执行三个完整训练轮次
   total_training_steps: 150  # 不固定总步骤数，由数据量和 total_epochs 推导
   max_actor_ckpt_to_keep: 10  # 最多保留十个常规 Actor 检查点
   keep_best_validation_ckpt: true  # 额外保留验证指标最优的 Actor 检查点
-  val_before_train: true  # 正式训练开始前不单独执行一次验证
+  val_before_train: false  # 正式训练开始前不单独执行一次验证
   ray_kwargs:  # 配置 Ray 集群初始化参数
     ray_init:  # 配置 ray.init 调用参数
       runtime_env:  # 配置传递给 Ray Worker 的运行时环境

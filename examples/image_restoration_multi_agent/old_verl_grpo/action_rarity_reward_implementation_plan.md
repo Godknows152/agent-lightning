@@ -36,7 +36,15 @@ r_i_rarity = 0.02 * g_i * s_i
 
 该标量被加到轨迹最后一个模型生成 token 的 `token_level_rewards`，然后重新计算最终 advantage。这样经验频率不需要可微，策略梯度通过最终 reward/advantage 更新 actor；基础 advantage 非正的稀有但低质量轨迹不会得到奖励。
 
-## 4. 训练指标
+## 4. 多轮 stop 提示结构
+
+- 每条轨迹只在第一轮注入一次 system prompt；工具执行后的后续轮次不再追加 system message。
+- 是否为第一轮由已生成的 assistant 回合数判断；成功修复次数仅用于 stop 门槛，首次工具执行失败也不会导致 system prompt 再次注入。
+- 完整工具 schema（包括 `stop`）只随第一轮 system 区块序列化一次，避免 Qwen 工具模板在后续轮次为动态 schema 重复生成 system 区块。
+- 第一轮 system 规则只禁止首个 assistant 回合选择 `stop`，并明确后续回合以当前 user 状态提示为准。
+- 后续 user 状态提示根据成功执行的非停止修复次数，明确本轮 `stop` 是否可用；达到 `prompt_min_stop_tool_calls` 后才提示模型可以停止。
+
+## 5. 训练与验证指标
 
 | 指标 | 含义 |
 |---|---|
@@ -50,8 +58,10 @@ r_i_rarity = 0.02 * g_i * s_i
 | `actor/action_rarity_valid_trajectory_rate` | 至少执行一次非停止修复的轨迹比例 |
 | `num_turns/{min,max,mean}` | 为兼容既有 SwanLab 图表而保留的名称；记录每条轨迹实际进入执行队列的工具调用次数 |
 | `tool_call_counts/{min,max,mean}` | 与 `num_turns/*` 相同的工具调用次数，使用语义明确的新名称 |
+| `val-aux/num_turns/{min,max,mean}` | 验证集轨迹实际进入执行队列的工具调用次数；仅在旧式 rollout 缺少工具计数字段时回退为对话轮数 |
+| `val-aux/tool_call_counts/{min,max,mean}` | 验证集工具调用次数的语义明确别名；只在实际工具计数字段可用时记录 |
 
-## 5. 启动方式
+## 6. 启动方式
 
 ```bash
 bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v3.sh --preflight
@@ -65,7 +75,7 @@ OLD_VERL_ACTION_RARITY_REWARD_COEFF=0.01 \
   bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v3.sh
 ```
 
-## 6. 日志与训练输出
+## 7. 日志与训练输出
 
 所有专家的 v1/v2/v3 入口按专家和版本隔离运行产物：
 
@@ -83,7 +93,7 @@ outputs/<expert>/vN/
 
 `VERL_LOG_DIR` 指向对应的 `log/<expert>/vN`，因此主训练日志和两类工具调用日志不会跨版本混写。checkpoint、惩罚样本导出和 SwanLab 本地记录统一位于对应的 `outputs/<expert>/vN`。
 
-## 7. 已知边界
+## 8. 已知边界
 
 - 经验奖励只能强化 rollout 中实际采样到的稀有 action；完全坍缩且没有替代 action 样本时，它本身没有恢复信号。
 - 当前第一版按全局 batch 统计，不区分图像状态。正 advantage 门控用于抑制不合适的稀有 action，但它不是严格的状态条件熵。

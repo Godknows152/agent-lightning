@@ -10,7 +10,7 @@ from tool_registry import ToolRegistry
 DIAGNOSIS_PROMPT_VERSION = "diagnosis-hermes-v1"
 DIAGNOSIS_TOOL_NAME = "diagnose_degradation"
 EXPERT_PROMPT_VERSION = "expert-hermes-v1"
-EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION = "expert-single-step-sft-hermes-thinking-v3"
+EXPERT_SINGLE_STEP_SFT_PROMPT_VERSION = "expert-single-step-sft-hermes-thinking-v4"
 
 DIAGNOSIS_TOOL_SCHEMA: dict[str, object] = {
     "type": "function",
@@ -144,7 +144,8 @@ observed image content and the learned policy.
 Rules:
 1. Call restore_image exactly once.
 2. The action argument must be one enum value from the supplied tool schema.
-3. Do not output stop in this initial single-step SFT task."""
+3. Do not output stop on the first assistant turn. On later turns, follow the current
+   user message to determine whether stop is available."""
 
 
 def build_expert_single_step_sft_user_prompt() -> str:
