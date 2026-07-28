@@ -46,6 +46,33 @@ if [[ $# -gt 0 ]]; then
   shift
 fi
 
+CONFIG_PATH_OVERRIDE=""
+CONFIG_NAME_OVERRIDE=""
+FORWARD_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config-path=*)
+      CONFIG_PATH_OVERRIDE="${1#*=}"
+      ;;
+    --config-path)
+      CONFIG_PATH_OVERRIDE="${2:?--config-path requires a value}"
+      shift
+      ;;
+    --config-name=*)
+      CONFIG_NAME_OVERRIDE="${1#*=}"
+      ;;
+    --config-name)
+      CONFIG_NAME_OVERRIDE="${2:?--config-name requires a value}"
+      shift
+      ;;
+    *)
+      FORWARD_ARGS+=("$1")
+      ;;
+  esac
+  shift
+done
+set -- "${FORWARD_ARGS[@]}"
+
 SMOKE="${OLD_VERL_SMOKE:-0}"
 PREFLIGHT_ONLY="${OLD_VERL_PREFLIGHT_ONLY:-0}"
 if [[ "${1:-}" == "--smoke" ]]; then
@@ -73,8 +100,8 @@ BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
 LOG_ROOT="${OLD_VERL_DIR}/log"
 LOG_DIR="${OLD_VERL_LOG_DIR:-${LOG_ROOT}/${EXPERT}}"
-CONFIG_DIR="${OLD_VERL_DIR}/config"
-CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
+CONFIG_DIR="${CONFIG_PATH_OVERRIDE:-${OLD_VERL_DIR}/config}"
+CONFIG_NAME="${CONFIG_NAME_OVERRIDE:-${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
 RUN_NAMING_RESOLVER="${OLD_VERL_DIR}/scripts/resolve_training_run_name.py"
 LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"

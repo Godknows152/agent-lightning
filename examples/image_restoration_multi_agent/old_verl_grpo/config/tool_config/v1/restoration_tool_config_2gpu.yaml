@@ -1,0 +1,87 @@
+# Old-verl RestorationTool config using current project IQA calibration.
+#
+# Restoration/IQA GPU placement:
+#   - The launcher exposes only physical GPUs 0,1 as logical cuda:0,1.
+#   - Actor/SGLang and restoration/IQA share logical cuda:0/1 (physical GPU0/1).
+#   - Two restoration runtime workers distribute requests across those two GPUs.
+
+tools:
+  - class_name: "verl.tools.restoration_tool.RestorationTool"
+    config:
+      type: native
+      device: cuda:0
+      worker_devices: [cuda:0, cuda:1]
+      model_devices: [cuda:0, cuda:1]
+      output_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration
+      enable_tool_result_cache: true
+      tool_result_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration/.tool_result_cache
+      tool_result_cache_max_entries: 5000
+      tool_result_cache_max_size_gb: 20
+      tool_result_cache_ttl_hours: 24
+      tool_result_cache_cleanup_interval: 256
+      preload: true
+      auto_unload: false
+      # Auto-unload restoration models after each sampling stage, reload before next.
+      keep_models_loaded_between_sampling_steps: false
+      tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
+      external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
+      restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py
+      # Mark stop unavailable in user-state prompts until five successful restorations complete.
+      prompt_min_stop_tool_calls: 5
+
+      use_iqa: true
+      iqa_devices: [cuda:0, cuda:1]
+      iqa_device: cuda:0
+      normalize_iqa_scores: true
+      iqa_metric_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
+      iqa_weight_map_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
+
+      reward_mode: step_mixed_v1
+      alpha: 0.9
+      reward_scale: 4.0
+      final_iqa_reward_scale: 4.0
+      final_iqa_regression_penalty_scale: 1.0
+      final_iqa_step_penalty: 0.05
+      # Disable degradation-action affinity shaping; rely on IQA and penalty rewards only.
+      affinity_bonus_scale: 0.0
+      repeat_action_penalty: 0.75
+      repeat_low_gain_penalty: 2.0
+      # Penalize same-type repeats only when raw normalized IQA marginal gain is <= 0.03.
+      repeat_low_gain_threshold: 0.03
+      # Eligible stop calls are reward-neutral; calls before step five retain an early-stop penalty.
+      stop_min_step: 5
+      stop_iqa_delta_threshold: 0.6
+      stop_early_penalty: -1.2
+      stop_recent_reward_window: 2
+      stop_recent_reward_threshold: 0.2
+    tool_schema:
+      type: "function"
+      function:
+        name: "restore_image"
+        description: "Apply one registered restoration action or stop the trajectory."
+        parameters:
+          type: "object"
+          properties:
+            action:
+              type: "string"
+              enum:
+                - real_esrgan
+                - scunet
+                - retinexformer_fivek
+                - hvicidnet
+                - lightdiff
+                - turbo_rain
+                - s2former
+                - idt
+                - ridcp
+                - kanet
+                - turbo_snow
+                - snowmaster
+                - nafnet_denoise
+                - focalnet_dehaze
+                - focalnet_desnow
+                - mb_taylorformer_dehaze
+                - stop
+          required:
+            - action
+          additionalProperties: false

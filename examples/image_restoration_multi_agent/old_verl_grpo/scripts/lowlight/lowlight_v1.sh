@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OLD_VERL_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
-EXPERT="snow"
+EXPERT="lowlight"
+RUNTIME_EXPERT="low_light"
 VERSION="v1"
 CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${VERSION}/${EXPERT}_config_2gpu.yaml"
 
@@ -47,7 +48,7 @@ echo "Config: ${CONFIG_PATH}"
 
 export OLD_VERL_RUN_IN_FOREGROUND=1
 exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_2gpu.sh" \
-  "${EXPERT}" \
+  "${RUNTIME_EXPERT}" \
   "$@" \
   "--config-path=${OLD_VERL_DIR}/config/${EXPERT}/${VERSION}" \
   "--config-name=${EXPERT}_config_2gpu"
