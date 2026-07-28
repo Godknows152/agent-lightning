@@ -147,18 +147,36 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             raise ValueError("Model tool_choice_restricted_entropy is required when its coefficient is positive")
         decision_mask = data["tool_decision_position_mask"].to(bool) & response_mask
         call_start_mask = data["tool_choice_call_start_mask"].to(bool) & decision_mask
+
+        # Compute per-sequence entropy (trajectory-level average)
         sequence_entropy = (restricted_entropy * decision_mask).sum(dim=-1)
         call_count = call_start_mask.sum(dim=-1)
-        sequence_entropy = sequence_entropy / call_count.clamp(min=1)
+        sequence_entropy = sequence_entropy / call_count.clamp(min=1)  # Trajectory-level average
         sequence_mask = call_count.gt(0).to(sequence_entropy.dtype)
+
+        # Conditional gating: Only reward entropy when advantages are positive
+        # Use advantages sum as proxy for trajectory quality
+        trajectory_advantages = (advantages * response_mask).sum(dim=-1)  # (bs,)
+        reward_gate = (trajectory_advantages > 0).to(sequence_entropy.dtype)  # 0/1 gate
+
+        # Apply gate to entropy
+        gated_sequence_entropy = sequence_entropy * reward_gate * sequence_mask
+
+        # Global aggregation
         global_batch_size = config.global_batch_info.get("global_batch_size")
         if global_batch_size is None:
             global_batch_size = sequence_mask.sum().clamp(min=1)
+
+        # Normalize by effective samples (those with positive advantages)
+        effective_mask = sequence_mask * reward_gate
         tool_choice_entropy = (
-            masked_sum(sequence_entropy, sequence_mask) / global_batch_size * config.global_batch_info["dp_size"]
+            masked_sum(gated_sequence_entropy, effective_mask) / global_batch_size * config.global_batch_info["dp_size"]
         )
+
         tool_choice_entropy_bonus = tool_choice_entropy_coeff * tool_choice_entropy
         policy_loss -= tool_choice_entropy_bonus
+
+        # Metrics
         metrics["actor/tool_choice_restricted_entropy"] = Metric(
             value=tool_choice_entropy,
             aggregation=metric_aggregation,
@@ -169,6 +187,10 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         )
         metrics["actor/tool_choice_entropy_coeff"] = Metric(
             value=tool_choice_entropy_coeff,
+            aggregation=AggregationType.MEAN,
+        )
+        metrics["actor/tool_choice_entropy_gate_ratio"] = Metric(
+            value=effective_mask.sum() / sequence_mask.sum().clamp(min=1),
             aggregation=AggregationType.MEAN,
         )
 
