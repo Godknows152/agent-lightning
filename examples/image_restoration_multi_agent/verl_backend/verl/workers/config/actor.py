@@ -16,7 +16,6 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from omegaconf import MISSING
-
 from verl.base_config import BaseConfig
 from verl.trainer.config import CheckpointConfig, RolloutCorrectionConfig
 from verl.utils.profiler.config import ProfilerConfig
@@ -122,7 +121,6 @@ class ActorConfig(BaseConfig):
         loss_scale_factor (Optional[int]): Scale factor for 'seq-mean-token-sum-norm' loss aggregation mode.
             If None, uses response_length. Set to a constant to ensure consistent normalization.
         entropy_coeff (float): Entropy coefficient for regularization.
-        tool_choice_entropy_coeff (float): Entropy coefficient over legal restoration-tool choices.
         tau_pos (float): Positive tau for SAPO smoothing (>= 1.0 keeps rewards stable).
         tau_neg (float): Negative tau for SAPO smoothing (> tau_pos for asymmetry).
         use_kl_loss (bool): Whether to use KL divergence loss.
@@ -166,7 +164,6 @@ class ActorConfig(BaseConfig):
     loss_agg_mode: str = "token-mean"
     loss_scale_factor: Optional[int] = None
     entropy_coeff: float = 0
-    tool_choice_entropy_coeff: float = 0
     tau_pos: float = 1.0
     tau_neg: float = 1.05
     calculate_entropy: bool = False
@@ -221,8 +218,6 @@ class ActorConfig(BaseConfig):
         ]
         if self.loss_agg_mode not in valid_loss_agg_modes:
             raise ValueError(f"Invalid loss_agg_mode: {self.loss_agg_mode}")
-        if self.tool_choice_entropy_coeff < 0:
-            raise ValueError("tool_choice_entropy_coeff must be non-negative")
 
     def validate(self, n_gpus: int, train_batch_size: int, model_config: dict = None):
         """Validate actor configuration with runtime parameters."""

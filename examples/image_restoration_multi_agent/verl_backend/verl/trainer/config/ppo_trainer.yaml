@@ -73,6 +73,9 @@ algorithm:
   # Whether to normalize advantages by std (specific to GRPO)
   norm_adv_by_std_in_grpo: True
 
+  # Maximum quality-gated reward for empirical non-stop restoration-action rarity
+  action_rarity_reward_coeff: 0.0
+
   # Whether to enable in-reward KL penalty
   use_kl_in_reward: False
 

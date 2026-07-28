@@ -18,7 +18,6 @@ import math
 import os
 import re
 import sys
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -52,190 +51,6 @@ class AgentState(Enum):
     TERMINATED = "terminated"
 
 
-@dataclass(frozen=True)
-class ToolChoiceDecisionResult:
-    """Result of aligning one parsed restoration action to tool-choice trie decisions."""
-
-    decision_positions: tuple[int, ...]
-    candidate_token_ids: tuple[tuple[int, ...], ...]
-    candidate_leaf_counts: tuple[tuple[int, ...], ...]
-    matched: bool
-    action: str | None = None
-    failure_reason: str | None = None
-
-
-_ACTION_PARAMETER_PATTERN = re.compile(r"<parameter=action>(?P<raw_value>.*?)</parameter>", re.DOTALL)
-
-
-def _tool_choice_decision_failure(reason: str) -> ToolChoiceDecisionResult:
-    """Return a fail-closed result for a tool-choice alignment failure."""
-
-    return ToolChoiceDecisionResult((), (), (), matched=False, failure_reason=reason)
-
-
-def find_tool_choice_decisions(
-    response_ids: list[int],
-    tokenizer: Any,
-    parsed_tool_calls: list[FunctionCall],
-    allowed_actions: set[str],
-) -> ToolChoiceDecisionResult:
-    """Align a restoration action and return the branching decisions on its token trie.
-
-    Candidate tokens are derived in the exact generated XML context. This handles
-    actions that share their first token by adding a conditional decision at the
-    first later token where their trie branches.
-    """
-
-    if len(parsed_tool_calls) == 0:
-        return _tool_choice_decision_failure("no_parsed_tool_call")
-    if len(parsed_tool_calls) != 1:
-        return _tool_choice_decision_failure("multiple_tool_calls")
-
-    tool_call = parsed_tool_calls[0]
-    if tool_call.name != "restore_image":
-        return _tool_choice_decision_failure("unexpected_function_name")
-
-    try:
-        arguments = json.loads(tool_call.arguments)
-    except (json.JSONDecodeError, TypeError):
-        return _tool_choice_decision_failure("invalid_tool_arguments")
-    if not isinstance(arguments, dict) or set(arguments) != {"action"}:
-        return _tool_choice_decision_failure("missing_or_extra_action_arguments")
-
-    parsed_action = arguments.get("action")
-    if not isinstance(parsed_action, str) or not parsed_action:
-        return _tool_choice_decision_failure("missing_action_argument")
-    if parsed_action not in allowed_actions:
-        return _tool_choice_decision_failure("action_not_in_active_schema")
-
-    if not getattr(tokenizer, "is_fast", False):
-        return _tool_choice_decision_failure("tokenizer_not_fast")
-
-    text = tokenizer.decode(response_ids, skip_special_tokens=False)
-    matches = list(_ACTION_PARAMETER_PATTERN.finditer(text))
-    if len(matches) == 0:
-        return _tool_choice_decision_failure("missing_action_xml_span")
-    if len(matches) != 1:
-        return _tool_choice_decision_failure("multiple_action_xml_spans")
-
-    match = matches[0]
-    raw_value = match.group("raw_value")
-    action = raw_value.strip()
-    if action != parsed_action:
-        return _tool_choice_decision_failure("parsed_action_text_mismatch")
-
-    leading_whitespace = len(raw_value) - len(raw_value.lstrip())
-    trailing_whitespace = len(raw_value) - len(raw_value.rstrip())
-    action_start = match.start("raw_value") + leading_whitespace
-    action_end = match.end("raw_value") - trailing_whitespace
-    if action_start >= action_end:
-        return _tool_choice_decision_failure("empty_action_xml_span")
-
-    try:
-        encoding = tokenizer(
-            text,
-            add_special_tokens=False,
-            return_offsets_mapping=True,
-        )
-        encoded_ids = list(encoding["input_ids"])
-        offsets = list(encoding["offset_mapping"])
-    except (KeyError, TypeError, ValueError, NotImplementedError):
-        return _tool_choice_decision_failure("offset_mapping_unavailable")
-
-    if encoded_ids != response_ids:
-        return _tool_choice_decision_failure("token_id_roundtrip_mismatch")
-    if len(offsets) != len(response_ids):
-        return _tool_choice_decision_failure("offset_length_mismatch")
-
-    selected_indices: list[int] = []
-    for index, raw_offset in enumerate(offsets):
-        if not isinstance(raw_offset, (list, tuple)) or len(raw_offset) != 2:
-            return _tool_choice_decision_failure("invalid_token_offset")
-        token_start, token_end = int(raw_offset[0]), int(raw_offset[1])
-        overlaps_action = token_start < action_end and token_end > action_start
-        contained_in_action = action_start <= token_start and token_end <= action_end
-        if overlaps_action and not contained_in_action:
-            return _tool_choice_decision_failure("token_crosses_action_boundary")
-        if contained_in_action and token_end > token_start:
-            selected_indices.append(index)
-
-    if not selected_indices:
-        return _tool_choice_decision_failure("empty_action_token_span")
-    first_index, last_index = selected_indices[0], selected_indices[-1]
-    if selected_indices != list(range(first_index, last_index + 1)):
-        return _tool_choice_decision_failure("non_contiguous_action_tokens")
-    if tokenizer.decode(response_ids[first_index : last_index + 1], skip_special_tokens=False) != action:
-        return _tool_choice_decision_failure("decoded_action_token_mismatch")
-
-    action_token_ids: dict[str, tuple[int, ...]] = {}
-    for candidate_action in sorted(allowed_actions):
-        candidate_text = text[:action_start] + candidate_action + text[action_end:]
-        candidate_end = action_start + len(candidate_action)
-        try:
-            candidate_encoding = tokenizer(
-                candidate_text,
-                add_special_tokens=False,
-                return_offsets_mapping=True,
-            )
-            candidate_encoded_ids = list(candidate_encoding["input_ids"])
-            candidate_offsets = list(candidate_encoding["offset_mapping"])
-        except (KeyError, TypeError, ValueError, NotImplementedError):
-            return _tool_choice_decision_failure("candidate_offset_mapping_unavailable")
-        if len(candidate_encoded_ids) != len(candidate_offsets):
-            return _tool_choice_decision_failure("candidate_offset_length_mismatch")
-
-        candidate_ids: list[int] = []
-        for token_id, raw_offset in zip(candidate_encoded_ids, candidate_offsets, strict=True):
-            if not isinstance(raw_offset, (list, tuple)) or len(raw_offset) != 2:
-                return _tool_choice_decision_failure("invalid_candidate_token_offset")
-            token_start, token_end = int(raw_offset[0]), int(raw_offset[1])
-            overlaps_action = token_start < candidate_end and token_end > action_start
-            contained_in_action = action_start <= token_start and token_end <= candidate_end
-            if overlaps_action and not contained_in_action:
-                return _tool_choice_decision_failure("candidate_token_crosses_action_boundary")
-            if contained_in_action and token_end > token_start:
-                candidate_ids.append(int(token_id))
-        if not candidate_ids:
-            return _tool_choice_decision_failure("empty_candidate_action_tokens")
-        action_token_ids[candidate_action] = tuple(candidate_ids)
-
-    actual_token_ids = action_token_ids[action]
-    if actual_token_ids != tuple(response_ids[first_index : last_index + 1]):
-        return _tool_choice_decision_failure("candidate_context_token_mismatch")
-
-    remaining_actions = sorted(allowed_actions)
-    decision_positions: list[int] = []
-    candidate_token_ids: list[tuple[int, ...]] = []
-    candidate_leaf_counts: list[tuple[int, ...]] = []
-    for depth, actual_token_id in enumerate(actual_token_ids):
-        branches: dict[int, list[str]] = {}
-        for candidate_action in remaining_actions:
-            candidate_ids = action_token_ids[candidate_action]
-            if depth >= len(candidate_ids):
-                return _tool_choice_decision_failure("action_is_token_prefix_of_another_action")
-            branches.setdefault(candidate_ids[depth], []).append(candidate_action)
-        if len(branches) > 1:
-            ordered_token_ids = tuple(sorted(branches))
-            decision_positions.append(first_index + depth)
-            candidate_token_ids.append(ordered_token_ids)
-            candidate_leaf_counts.append(tuple(len(branches[token_id]) for token_id in ordered_token_ids))
-        remaining_actions = branches.get(actual_token_id, [])
-        if not remaining_actions:
-            return _tool_choice_decision_failure("actual_action_missing_from_candidate_trie")
-        if len(remaining_actions) == 1:
-            break
-
-    if not decision_positions:
-        return _tool_choice_decision_failure("fewer_than_two_active_actions")
-    return ToolChoiceDecisionResult(
-        tuple(decision_positions),
-        tuple(candidate_token_ids),
-        tuple(candidate_leaf_counts),
-        matched=True,
-        action=action,
-    )
-
-
 class AgentData:
     """Encapsulates all state variables for the agent loop. AgentData is passed to tool calling in case that
     tool may need to access full history state. User can store any tool session data in `extra_fields`."""
@@ -260,10 +75,6 @@ class AgentData:
         self.prompt_ids: list[int] = []
         self.response_ids: list[int] = []
         self.response_mask: list[int] = []
-        self.tool_choice_call_start_mask: list[int] = []
-        self.tool_decision_position_mask: list[int] = []
-        self.tool_choice_candidate_token_ids: list[list[int]] = []
-        self.tool_choice_candidate_leaf_counts: list[list[int]] = []
         self.response_logprobs: list[float] = []
         self.turn_scores: list[float] = []
         self.tool_rewards: list[float] = []
@@ -277,6 +88,8 @@ class AgentData:
         self.total_tool_calls = 0
         # Track action names across the trajectory for trajectory-level penalties
         self.action_history: list[str] = []
+        # Keep reward diversity statistics independent from failed tool executions.
+        self.successful_action_history: list[str] = []
 
         # Temporary state for tool calls
         self.tool_calls: list[FunctionCall] = []
@@ -331,120 +144,6 @@ class ToolAgentLoop(AgentLoopBase):
     def _generated_response_length(agent_data: AgentData) -> int:
         """Return the number of model tokens eligible for policy loss."""
         return sum(agent_data.response_mask)
-
-    @staticmethod
-    def _allowed_actions_from_tool_schemas(tool_schemas: list[Any]) -> set[str]:
-        """Return the active ``restore_image.action`` enum values."""
-
-        allowed_actions: set[str] = set()
-        for raw_schema in tool_schemas:
-            schema = raw_schema.model_dump() if hasattr(raw_schema, "model_dump") else raw_schema
-            if not isinstance(schema, dict):
-                continue
-            function = schema.get("function")
-            if not isinstance(function, dict) or function.get("name") != "restore_image":
-                continue
-            parameters = function.get("parameters")
-            properties = parameters.get("properties") if isinstance(parameters, dict) else None
-            action_schema = properties.get("action") if isinstance(properties, dict) else None
-            action_enum = action_schema.get("enum") if isinstance(action_schema, dict) else None
-            if isinstance(action_enum, list):
-                allowed_actions.update(action for action in action_enum if isinstance(action, str) and action)
-        return allowed_actions
-
-    @staticmethod
-    def _record_tool_choice_decision_result(agent_data: AgentData, result: ToolChoiceDecisionResult) -> None:
-        """Record compact tool-choice alignment diagnostics for one assistant turn."""
-
-        diagnostics = agent_data.extra_fields.setdefault(
-            "tool_choice_decision_diagnostics",
-            {
-                "attempted_turns": 0,
-                "matched_turns": 0,
-                "matched_decisions": 0,
-                "failure_counts": {},
-            },
-        )
-        diagnostics["attempted_turns"] += 1
-        agent_data.metrics["tool_choice_decision_attempted_turns"] = (
-            agent_data.metrics.get("tool_choice_decision_attempted_turns", 0) + 1
-        )
-        if result.matched:
-            diagnostics["matched_turns"] += 1
-            matched_decisions = len(result.decision_positions)
-            diagnostics["matched_decisions"] += matched_decisions
-            agent_data.metrics["tool_choice_decision_matched_turns"] = (
-                agent_data.metrics.get("tool_choice_decision_matched_turns", 0) + 1
-            )
-            agent_data.metrics["tool_choice_decision_matched_positions"] = (
-                agent_data.metrics.get("tool_choice_decision_matched_positions", 0) + matched_decisions
-            )
-            return
-
-        failure_reason = result.failure_reason or "unknown"
-        failure_counts = diagnostics["failure_counts"]
-        failure_counts[failure_reason] = failure_counts.get(failure_reason, 0) + 1
-        if failure_reason == "token_id_roundtrip_mismatch":
-            metric_name = "tool_choice_decision_roundtrip_failures"
-        elif failure_reason == "action_not_in_active_schema":
-            metric_name = "tool_choice_decision_invalid_schema_failures"
-        elif failure_reason in {
-            "token_crosses_action_boundary",
-            "candidate_token_crosses_action_boundary",
-            "decoded_action_token_mismatch",
-        }:
-            metric_name = "tool_choice_decision_boundary_failures"
-        else:
-            return
-        agent_data.metrics[metric_name] = agent_data.metrics.get(metric_name, 0) + 1
-
-    @staticmethod
-    def _is_active_restoration_stop_call(parsed_tool_calls: list[FunctionCall], allowed_actions: set[str]) -> bool:
-        """Return whether the turn is one valid stop call exposed by the active schema."""
-
-        if "stop" not in allowed_actions or len(parsed_tool_calls) != 1:
-            return False
-        tool_call = parsed_tool_calls[0]
-        if tool_call.name != "restore_image":
-            return False
-        try:
-            arguments = json.loads(tool_call.arguments)
-        except (json.JSONDecodeError, TypeError):
-            return False
-        return isinstance(arguments, dict) and set(arguments) == {"action"} and arguments.get("action") == "stop"
-
-    def _record_restoration_tool_choice_decisions(self, agent_data: AgentData, tool_choice_start: int) -> None:
-        """Record restricted-entropy decisions for non-stop restoration actions."""
-
-        active_tool_schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
-        allowed_actions = self._allowed_actions_from_tool_schemas(active_tool_schemas)
-        if self._is_active_restoration_stop_call(agent_data.tool_calls, allowed_actions):
-            return
-
-        entropy_actions = allowed_actions - {"stop"}
-        if self.tool_parser_name == "qwen3_coder":
-            decision_result = find_tool_choice_decisions(
-                agent_data.response_ids,
-                self.tokenizer,
-                agent_data.tool_calls,
-                entropy_actions,
-            )
-        else:
-            decision_result = _tool_choice_decision_failure(f"unsupported_tool_parser:{self.tool_parser_name}")
-        if decision_result.matched:
-            root_position = tool_choice_start + decision_result.decision_positions[0]
-            agent_data.tool_choice_call_start_mask[root_position] = 1
-            for position, token_ids, leaf_counts in zip(
-                decision_result.decision_positions,
-                decision_result.candidate_token_ids,
-                decision_result.candidate_leaf_counts,
-                strict=True,
-            ):
-                absolute_position = tool_choice_start + position
-                agent_data.tool_decision_position_mask[absolute_position] = 1
-                agent_data.tool_choice_candidate_token_ids[absolute_position] = list(token_ids)
-                agent_data.tool_choice_candidate_leaf_counts[absolute_position] = list(leaf_counts)
-        self._record_tool_choice_decision_result(agent_data, decision_result)
 
     @staticmethod
     def _record_penalty(
@@ -831,12 +530,6 @@ class ToolAgentLoop(AgentLoopBase):
             ]
         else:
             include_stop = completed_restoration_actions >= min_stop_tool_calls
-            system_prompt = prompt_config["build_system"](
-                expert_name,
-                registry,
-                allow_stop=include_stop,
-                min_stop_tool_calls=min_stop_tool_calls,
-            )
             user_prompt = prompt_config["build_state"](history_feedback=self._current_history_feedback_text(agent_data))
             if include_stop:
                 user_prompt += (
@@ -851,7 +544,6 @@ class ToolAgentLoop(AgentLoopBase):
                 )
             include_image = False
             messages = [
-                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": self._current_image_user_content(user_prompt, include_image)},
             ]
 
@@ -1044,10 +736,6 @@ class ToolAgentLoop(AgentLoopBase):
                 prompt_ids=prompt_ids,
                 response_ids=response_ids[: self.response_length],
                 response_mask=agent_data.response_mask[: self.response_length],
-                tool_choice_call_start_mask=agent_data.tool_choice_call_start_mask[: self.response_length],
-                tool_decision_position_mask=agent_data.tool_decision_position_mask[: self.response_length],
-                tool_choice_candidate_token_ids=agent_data.tool_choice_candidate_token_ids[: self.response_length],
-                tool_choice_candidate_leaf_counts=agent_data.tool_choice_candidate_leaf_counts[: self.response_length],
                 multi_modal_data=multi_modal_data,
                 response_logprobs=(
                     agent_data.response_logprobs[: self.response_length] if agent_data.response_logprobs else None
@@ -1061,9 +749,9 @@ class ToolAgentLoop(AgentLoopBase):
                 {
                     "turn_scores": agent_data.turn_scores,
                     "tool_rewards": agent_data.tool_rewards,
-                    "action_history": list(agent_data.action_history),
                     "pure_image_restoration_rewards": agent_data.pure_image_restoration_rewards,
                     "stop_rewards": agent_data.stop_rewards,
+                    "action_history": agent_data.successful_action_history,
                 }
             )
             return output
@@ -1140,11 +828,6 @@ class ToolAgentLoop(AgentLoopBase):
         agent_data.response_ids = response_ids
         agent_data.prompt_ids += agent_data.response_ids
         agent_data.response_mask += [1] * len(agent_data.response_ids)
-        agent_data.tool_choice_call_start_mask += [0] * len(agent_data.response_ids)
-        tool_choice_start = len(agent_data.tool_decision_position_mask)
-        agent_data.tool_decision_position_mask += [0] * len(agent_data.response_ids)
-        agent_data.tool_choice_candidate_token_ids += [[] for _ in agent_data.response_ids]
-        agent_data.tool_choice_candidate_leaf_counts += [[] for _ in agent_data.response_ids]
         if response_logprobs:
             agent_data.response_logprobs += response_logprobs
 
@@ -1162,8 +845,6 @@ class ToolAgentLoop(AgentLoopBase):
         active_tools = getattr(agent_data, "_active_tools", self.tools)
         tools = [tool.tool_schema for tool in active_tools.values()]
         _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(agent_data.response_ids, tools)
-        if getattr(agent_data, "data_source", "") == "restoration":
-            self._record_restoration_tool_choice_decisions(agent_data, tool_choice_start)
 
         # Check soft termination conditions (max turns) AFTER tool call extraction.
         # This ensures the final assistant turn's tool call (e.g. "stop") is still
@@ -1271,6 +952,8 @@ class ToolAgentLoop(AgentLoopBase):
                     agent_data.stop_rewards.append(reward_value)
                 if action_name:
                     agent_data.action_history.append(action_name)
+                    if not tool_metrics.get("error"):
+                        agent_data.successful_action_history.append(action_name)
                 if use_current_restoration_prompt and not tool_metrics.get("error"):
                     self._append_current_history_feedback(agent_data, tool_call_name, tool_metrics)
 
@@ -1312,7 +995,7 @@ class ToolAgentLoop(AgentLoopBase):
             )
             response_ids = await self.apply_chat_template(
                 add_messages,
-                tools=schemas,
+                tools=None,
                 images=images,
                 videos=videos,
                 remove_system_prompt=False,
@@ -1365,10 +1048,6 @@ class ToolAgentLoop(AgentLoopBase):
 
         agent_data.prompt_ids += response_ids
         agent_data.response_mask += [0] * len(response_ids)
-        agent_data.tool_choice_call_start_mask += [0] * len(response_ids)
-        agent_data.tool_decision_position_mask += [0] * len(response_ids)
-        agent_data.tool_choice_candidate_token_ids += [[] for _ in response_ids]
-        agent_data.tool_choice_candidate_leaf_counts += [[] for _ in response_ids]
         if agent_data.response_logprobs:
             agent_data.response_logprobs += [0.0] * len(response_ids)
         agent_data.user_turns += 1

@@ -16,6 +16,7 @@ Metrics related to the PPO trainer.
 """
 
 import logging
+import math
 from collections import Counter, defaultdict
 from functools import partial
 from typing import Any, Callable
@@ -387,66 +388,109 @@ def compute_restoration_reward_metrics(batch: DataProto) -> dict[str, Any]:
     }
 
 
-def _normalize_action_histories(value: Any, length: int) -> list[tuple[str, ...]]:
-    """Normalize per-trajectory executed restoration actions into immutable paths."""
+def _normalize_restoration_action_histories(value: Any, length: int) -> list[tuple[str, ...]]:
+    """Normalize successfully executed action histories for batch-level reward shaping."""
 
-    if value is None:
-        return [() for _ in range(length)]
     array = np.asarray(value, dtype=object)
     if array.shape == ():
         array = np.full(length, array.item(), dtype=object)
     if len(array) != length:
-        logger.warning("Expected action_history length %s, got %s; ignoring field", length, len(array))
-        return [() for _ in range(length)]
+        raise ValueError(f"Expected action_history length {length}, got {len(array)}")
 
-    paths: list[tuple[str, ...]] = []
+    histories: list[tuple[str, ...]] = []
     for item in array:
         if not isinstance(item, (list, tuple, np.ndarray)):
-            paths.append(())
+            histories.append(())
             continue
-        paths.append(tuple(action.strip() for action in item if isinstance(action, str) and action.strip()))
-    return paths
+        histories.append(
+            tuple(
+                action.strip()
+                for action in item
+                if isinstance(action, str) and action.strip() and action.strip() != "stop"
+            )
+        )
+    return histories
 
 
-def _empirical_entropy(samples: list[Any]) -> float:
-    """Return natural-log empirical Shannon entropy, or zero for no samples."""
+def apply_restoration_action_rarity_reward(
+    batch: DataProto,
+    *,
+    coefficient: float,
+    quality_gate: torch.Tensor,
+    num_repair_actions: int = 16,
+) -> tuple[DataProto, dict[str, Any]]:
+    """Add a quality-gated empirical action-rarity reward to terminal response tokens.
 
-    if not samples:
-        return 0.0
-    counts = Counter(samples)
-    probabilities = np.asarray(list(counts.values()), dtype=np.float64) / len(samples)
-    return float(-np.sum(probabilities * np.log(probabilities)))
-
-
-def compute_restoration_action_entropy_metrics(batch: DataProto) -> dict[str, Any]:
-    """Measure empirical restoration action-path and pooled action-choice diversity.
-
-    Empty trajectories are excluded from both entropy estimates. All successfully
-    parsed and executed actions, including ``stop``, participate in the metrics.
+    Each non-stop repair call receives normalized surprisal ``-log(c(a) / N) / log(K)``
+    from the current global rollout batch. A trajectory uses the mean surprisal of its
+    calls, so making more tool calls cannot increase the reward by itself.
     """
 
+    if not math.isfinite(coefficient) or coefficient < 0:
+        raise ValueError("action_rarity_reward_coeff must be finite and non-negative")
+    if coefficient == 0:
+        return batch, {}
+    if num_repair_actions < 2:
+        raise ValueError("num_repair_actions must be at least 2")
     if "action_history" not in batch.non_tensor_batch:
-        return {}
+        raise ValueError("action_history is required when action_rarity_reward_coeff is positive")
+    if "token_level_rewards" not in batch.batch or "response_mask" not in batch.batch:
+        raise ValueError("token_level_rewards and response_mask are required for action-rarity rewards")
+
     batch_size = len(batch)
-    if batch_size == 0:
-        return {}
+    histories = _normalize_restoration_action_histories(batch.non_tensor_batch["action_history"], batch_size)
+    counts = Counter(action for history in histories for action in history)
+    sample_count = sum(counts.values())
+    probabilities = {action: count / sample_count for action, count in counts.items()} if sample_count else {}
+    empirical_entropy = -sum(probability * math.log(probability) for probability in probabilities.values())
 
-    raw_action_histories = batch.non_tensor_batch["action_history"]
-    raw_array = np.asarray(raw_action_histories, dtype=object)
-    if raw_array.shape != () and all(item is None for item in raw_array):
-        return {}
+    normalizer = math.log(num_repair_actions)
+    scores = np.zeros(batch_size, dtype=np.float32)
+    valid_trajectory_mask = np.zeros(batch_size, dtype=bool)
+    for index, history in enumerate(histories):
+        if not history:
+            continue
+        valid_trajectory_mask[index] = True
+        mean_surprisal = sum(-math.log(probabilities[action]) for action in history) / len(history)
+        scores[index] = min(1.0, mean_surprisal / normalizer)
 
-    action_paths = _normalize_action_histories(raw_action_histories, batch_size)
-    valid_paths = [path for path in action_paths if path]
-    action_choices = [action for path in valid_paths for action in path]
+    token_level_rewards = batch.batch["token_level_rewards"]
+    response_mask = batch.batch["response_mask"].to(device=token_level_rewards.device, dtype=torch.bool)
+    if token_level_rewards.ndim != 2 or response_mask.shape != token_level_rewards.shape:
+        raise ValueError("token_level_rewards and response_mask must have identical [B, R] shapes")
+    if quality_gate.ndim != 1 or quality_gate.numel() != batch_size:
+        raise ValueError("quality_gate must have shape [B]")
 
-    return {
-        "actor/action_path_entropy": _empirical_entropy(valid_paths),
-        "actor/tool_choice_entropy": _empirical_entropy(action_choices),
-        "actor/action_path_valid_trajectory_rate": len(valid_paths) / batch_size,
-        "actor/action_path_unique_count": len(set(valid_paths)),
-        "actor/tool_choice_sample_count": len(action_choices),
-        "actor/tool_choice_unique_action_count": len(set(action_choices)),
+    score_tensor = torch.as_tensor(scores, device=token_level_rewards.device, dtype=token_level_rewards.dtype)
+    gate_tensor = quality_gate.to(device=token_level_rewards.device, dtype=torch.bool)
+    has_response = response_mask.any(dim=-1)
+    sequence_rewards = coefficient * score_tensor * gate_tensor * has_response
+
+    response_positions = torch.arange(response_mask.shape[1], device=response_mask.device).expand_as(response_mask)
+    last_response_positions = response_positions.masked_fill(~response_mask, -1).max(dim=-1).values
+    active_rows = sequence_rewards.ne(0) & last_response_positions.ge(0)
+    bonus = torch.zeros_like(token_level_rewards)
+    row_indices = torch.arange(batch_size, device=token_level_rewards.device)[active_rows]
+    bonus[row_indices, last_response_positions[active_rows]] = sequence_rewards[active_rows]
+    batch.batch["token_level_rewards"] = token_level_rewards + bonus
+
+    batch.non_tensor_batch["action_rarity_score"] = scores
+    batch.non_tensor_batch["action_rarity_reward"] = sequence_rewards.detach().float().cpu().numpy()
+
+    valid_tensor = torch.as_tensor(valid_trajectory_mask, device=token_level_rewards.device, dtype=torch.bool)
+    valid_count = int(valid_tensor.sum().item())
+    gate_ratio = float((gate_tensor & valid_tensor).sum().item() / valid_count) if valid_count else 0.0
+    valid_score_mean = float(score_tensor[valid_tensor].float().mean().item()) if valid_count else 0.0
+    return batch, {
+        "actor/tool_choice_entropy": float(empirical_entropy),
+        "actor/tool_choice_sample_count": int(sample_count),
+        "actor/tool_choice_unique_action_count": int(len(counts)),
+        "actor/action_rarity_score_mean": valid_score_mean,
+        "actor/action_rarity_reward_mean": float(sequence_rewards.float().mean().item()),
+        "actor/action_rarity_reward_max": float(sequence_rewards.float().max().item()) if batch_size else 0.0,
+        "actor/action_rarity_reward_coeff": float(coefficient),
+        "actor/action_rarity_reward_gate_ratio": gate_ratio,
+        "actor/action_rarity_valid_trajectory_rate": float(valid_count / batch_size) if batch_size else 0.0,
     }
 
 

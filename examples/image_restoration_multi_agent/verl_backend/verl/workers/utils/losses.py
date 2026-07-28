@@ -15,7 +15,6 @@
 
 import torch
 from tensordict import TensorDict
-
 from verl.trainer.diffusion.diffusion_algos import kl_penalty_image
 from verl.trainer.ppo.core_algos import agg_loss, compute_value_loss, get_policy_loss_fn, kl_penalty
 from verl.utils import tensordict_utils as tu
@@ -85,18 +84,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
 
     # select fields and convert to padded tensor
     fields = ["response_mask", "old_log_probs", "advantages"]
-    tool_choice_entropy_coeff = config.tool_choice_entropy_coeff
-    if tool_choice_entropy_coeff > 0:
-        required_fields = {
-            "tool_choice_call_start_mask",
-            "tool_decision_position_mask",
-        }
-        missing_fields = required_fields.difference(data.keys())
-        if missing_fields:
-            raise ValueError(
-                f"Tool-choice fields are required when tool_choice_entropy_coeff is positive: {sorted(missing_fields)}"
-            )
-        fields.extend(sorted(required_fields))
     if "rollout_is_weights" in data:
         fields.append("rollout_is_weights")
     if "ref_log_prob" in data:
@@ -140,59 +127,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         entropy_coeff = config.entropy_coeff
         policy_loss -= entropy_coeff * entropy_loss
         metrics["actor/entropy_loss"] = Metric(value=entropy_loss, aggregation=metric_aggregation)
-
-    if tool_choice_entropy_coeff > 0:
-        restricted_entropy = model_output.get("tool_choice_restricted_entropy")
-        if restricted_entropy is None:
-            raise ValueError("Model tool_choice_restricted_entropy is required when its coefficient is positive")
-        decision_mask = data["tool_decision_position_mask"].to(bool) & response_mask
-        call_start_mask = data["tool_choice_call_start_mask"].to(bool) & decision_mask
-
-        # Compute per-sequence entropy (trajectory-level average)
-        sequence_entropy = (restricted_entropy * decision_mask).sum(dim=-1)
-        call_count = call_start_mask.sum(dim=-1)
-        sequence_entropy = sequence_entropy / call_count.clamp(min=1)  # Trajectory-level average
-        sequence_mask = call_count.gt(0).to(sequence_entropy.dtype)
-
-        # Conditional gating: Only reward entropy when advantages are positive
-        # Use advantages sum as proxy for trajectory quality
-        trajectory_advantages = (advantages * response_mask).sum(dim=-1)  # (bs,)
-        reward_gate = (trajectory_advantages > 0).to(sequence_entropy.dtype)  # 0/1 gate
-
-        # Apply gate to entropy
-        gated_sequence_entropy = sequence_entropy * reward_gate * sequence_mask
-
-        # Global aggregation
-        global_batch_size = config.global_batch_info.get("global_batch_size")
-        if global_batch_size is None:
-            global_batch_size = sequence_mask.sum().clamp(min=1)
-
-        # Normalize by effective samples (those with positive advantages)
-        effective_mask = sequence_mask * reward_gate
-        tool_choice_entropy = (
-            masked_sum(gated_sequence_entropy, effective_mask) / global_batch_size * config.global_batch_info["dp_size"]
-        )
-
-        tool_choice_entropy_bonus = tool_choice_entropy_coeff * tool_choice_entropy
-        policy_loss -= tool_choice_entropy_bonus
-
-        # Metrics
-        metrics["actor/tool_choice_restricted_entropy"] = Metric(
-            value=tool_choice_entropy,
-            aggregation=metric_aggregation,
-        )
-        metrics["actor/tool_choice_entropy_bonus"] = Metric(
-            value=tool_choice_entropy_bonus,
-            aggregation=metric_aggregation,
-        )
-        metrics["actor/tool_choice_entropy_coeff"] = Metric(
-            value=tool_choice_entropy_coeff,
-            aggregation=AggregationType.MEAN,
-        )
-        metrics["actor/tool_choice_entropy_gate_ratio"] = Metric(
-            value=effective_mask.sum() / sequence_mask.sum().clamp(min=1),
-            aggregation=AggregationType.MEAN,
-        )
 
     # add kl loss
     if config.use_kl_loss:

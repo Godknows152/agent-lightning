@@ -71,7 +71,6 @@ actor_rollout_ref:
     loss_agg_mode: token-mean
     loss_scale_factor: null
     entropy_coeff: 0
-    tool_choice_entropy_coeff: 0
     calculate_entropy: false
     use_kl_loss: false
     use_prefix_grouper: false
@@ -698,6 +697,7 @@ algorithm:
   lam: 1.0
   adv_estimator: gae
   norm_adv_by_std_in_grpo: true
+  action_rarity_reward_coeff: 0.0
   use_kl_in_reward: false
   kl_penalty: kl
   kl_ctrl:

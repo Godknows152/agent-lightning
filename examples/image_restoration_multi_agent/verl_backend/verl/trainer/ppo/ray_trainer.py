@@ -32,7 +32,6 @@ from omegaconf import OmegaConf, open_dict
 from torch.utils.data import Dataset, Sampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
-
 from verl import DataProto
 from verl.experimental.dataset.sampler import AbstractCurriculumSampler
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
@@ -43,8 +42,8 @@ from verl.trainer.distillation.losses import is_distillation_enabled
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
 from verl.trainer.ppo.metric_utils import (
+    apply_restoration_action_rarity_reward,
     compute_data_metrics,
-    compute_restoration_action_entropy_metrics,
     compute_restoration_penalty_metrics,
     compute_restoration_reward_metrics,
     compute_throughout_metrics,
@@ -286,9 +285,9 @@ class RayPPOTrainer:
         assert self.hybrid_engine, "Currently, only support hybrid engine"
 
         if self.hybrid_engine:
-            assert Role.ActorRollout in role_worker_mapping or Role.ActorRolloutRef in role_worker_mapping, (
-                f"{role_worker_mapping.keys()=}"
-            )
+            assert (
+                Role.ActorRollout in role_worker_mapping or Role.ActorRolloutRef in role_worker_mapping
+            ), f"{role_worker_mapping.keys()=}"
 
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
@@ -1206,9 +1205,9 @@ class RayPPOTrainer:
         else:
             if self.config.trainer.resume_mode == "resume_path":
                 assert isinstance(self.config.trainer.resume_from_path, str), "resume ckpt must be str type"
-                assert "global_step_" in self.config.trainer.resume_from_path, (
-                    "resume ckpt must specify the global_steps"
-                )
+                assert (
+                    "global_step_" in self.config.trainer.resume_from_path
+                ), "resume ckpt must specify the global_steps"
                 global_step_folder = self.config.trainer.resume_from_path
                 if not os.path.isabs(global_step_folder):
                     working_dir = os.getcwd()
@@ -1437,7 +1436,6 @@ class RayPPOTrainer:
         calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
             self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
         )
-        calculate_tool_choice_entropy = self.config.actor_rollout_ref.actor.tool_choice_entropy_coeff > 0.0
         distillation_use_topk = (
             self.distillation_config.distillation_loss.loss_settings.use_topk
             if is_distillation_enabled(self.config.get("distillation"))
@@ -1451,7 +1449,6 @@ class RayPPOTrainer:
         tu.assign_non_tensor(
             batch_td,
             calculate_entropy=calculate_entropy,
-            calculate_tool_choice_entropy=calculate_tool_choice_entropy,
             distillation_use_topk=distillation_use_topk,
             global_batch_size=ppo_mini_batch_size,
             mini_batch_size=ppo_mini_batch_size,
@@ -1504,7 +1501,6 @@ class RayPPOTrainer:
         The light-weight advantage computation is done on the driver process.
         """
         from omegaconf import OmegaConf
-
         from verl.utils.tracking import Tracking
 
         logger = Tracking(
@@ -1763,6 +1759,29 @@ class RayPPOTrainer:
                             config=self.config.algorithm,
                         )
 
+                        action_rarity_reward_coeff = float(self.config.algorithm.get("action_rarity_reward_coeff", 0.0))
+                        if not np.isfinite(action_rarity_reward_coeff) or action_rarity_reward_coeff < 0:
+                            raise ValueError("action_rarity_reward_coeff must be finite and non-negative")
+                        if action_rarity_reward_coeff > 0:
+                            base_trajectory_advantages = (batch.batch["advantages"] * batch.batch["response_mask"]).sum(
+                                dim=-1
+                            )
+                            batch, action_rarity_metrics = apply_restoration_action_rarity_reward(
+                                batch,
+                                coefficient=action_rarity_reward_coeff,
+                                quality_gate=base_trajectory_advantages > 0,
+                            )
+                            metrics.update(action_rarity_metrics)
+                            batch = compute_advantage(
+                                batch,
+                                adv_estimator=self.config.algorithm.adv_estimator,
+                                gamma=self.config.algorithm.gamma,
+                                lam=self.config.algorithm.lam,
+                                num_repeat=self.config.actor_rollout_ref.rollout.n,
+                                norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                                config=self.config.algorithm,
+                            )
+
                     # update critic
                     if self.use_critic:
                         with marked_timer("update_critic", timing_raw, color="pink"):
@@ -1853,7 +1872,6 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
-                metrics.update(compute_restoration_action_entropy_metrics(batch=batch))
                 metrics.update(compute_restoration_penalty_metrics(batch=batch))
                 metrics.update(compute_restoration_reward_metrics(batch=batch))
                 # GDPO per-component reward metrics

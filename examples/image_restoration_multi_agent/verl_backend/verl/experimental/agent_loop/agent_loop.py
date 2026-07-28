@@ -29,7 +29,6 @@ from PIL import Image
 from pydantic import BaseModel, ConfigDict
 from tensordict import TensorDict
 from transformers import AutoProcessor, AutoTokenizer
-
 from verl.experimental.agent_loop.prometheus_utils import update_prometheus_config
 from verl.experimental.agent_loop.utils import resolve_config_path
 from verl.experimental.teacher_loop import MultiTeacherModelManager
@@ -60,18 +59,6 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 DEFAULT_ROUTING_CACHE_SIZE = 10000
-MAX_TOOL_CHOICE_CANDIDATES = 17
-
-
-def _pad_tool_choice_candidates(rows: list[list[int]]) -> torch.Tensor:
-    """Pad per-position tool candidates to a fixed width for TensorDict transport."""
-
-    if any(len(row) > MAX_TOOL_CHOICE_CANDIDATES for row in rows):
-        raise ValueError(f"A tool decision cannot have more than {MAX_TOOL_CHOICE_CANDIDATES} candidates")
-    return torch.tensor(
-        [row + [0] * (MAX_TOOL_CHOICE_CANDIDATES - len(row)) for row in rows],
-        dtype=torch.int64,
-    )
 
 
 class _RoundBarrier:
@@ -274,12 +261,6 @@ class AgentLoopMetrics(BaseModel):
     tool_calls: float = 0.0
     compute_score: float = 0.0
     num_preempted: int = -1  # -1 means not available
-    tool_choice_decision_attempted_turns: int = 0
-    tool_choice_decision_matched_turns: int = 0
-    tool_choice_decision_matched_positions: int = 0
-    tool_choice_decision_roundtrip_failures: int = 0
-    tool_choice_decision_invalid_schema_failures: int = 0
-    tool_choice_decision_boundary_failures: int = 0
 
 
 class AgentLoopOutput(BaseModel):
@@ -291,14 +272,6 @@ class AgentLoopOutput(BaseModel):
     """Response token ids including LLM generated token, tool response token."""
     response_mask: list[int]
     """Response mask, 1 for LLM generated token, 0 for tool response token."""
-    tool_choice_call_start_mask: Optional[list[int]] = None
-    """Mask for the first trie decision of each valid tool call."""
-    tool_decision_position_mask: Optional[list[int]] = None
-    """Mask for generated positions where the policy chooses among tool-trie branches."""
-    tool_choice_candidate_token_ids: Optional[list[list[int]]] = None
-    """Candidate branch token ids at each tool decision position."""
-    tool_choice_candidate_leaf_counts: Optional[list[list[int]]] = None
-    """Number of final tools represented by each candidate branch."""
     response_logprobs: Optional[list[float]] = None
     """Log probabilities for the response tokens."""
     routed_experts: Optional[Any] = None
@@ -321,19 +294,6 @@ class AgentLoopOutput(BaseModel):
         output["prompts"] = torch.tensor(output.pop("prompt_ids"), dtype=torch.int64)
         output["responses"] = torch.tensor(output.pop("response_ids"), dtype=torch.int64)
         output["response_mask"] = torch.tensor(output.pop("response_mask"), dtype=torch.int64)
-        response_length = len(output["responses"])
-        call_start_mask = output.pop("tool_choice_call_start_mask", None) or [0] * response_length
-        decision_mask = output.pop("tool_decision_position_mask", None) or [0] * response_length
-        candidate_token_ids = output.pop("tool_choice_candidate_token_ids", None) or [
-            [] for _ in range(response_length)
-        ]
-        candidate_leaf_counts = output.pop("tool_choice_candidate_leaf_counts", None) or [
-            [] for _ in range(response_length)
-        ]
-        output["tool_choice_call_start_mask"] = torch.tensor(call_start_mask, dtype=torch.int64)
-        output["tool_decision_position_mask"] = torch.tensor(decision_mask, dtype=torch.int64)
-        output["tool_choice_candidate_token_ids"] = _pad_tool_choice_candidates(candidate_token_ids)
-        output["tool_choice_candidate_leaf_counts"] = _pad_tool_choice_candidates(candidate_leaf_counts)
 
         response_logprobs = output.pop("response_logprobs", None)
         if response_logprobs is not None:
@@ -376,14 +336,6 @@ class _InternalAgentLoopOutput(AgentLoopOutput):
     """Padded position ids."""
     response_mask: torch.Tensor
     """Padded response mask."""
-    tool_choice_call_start_mask: Optional[torch.Tensor] = None
-    """Padded mask for the first trie decision of each valid tool call."""
-    tool_decision_position_mask: Optional[torch.Tensor] = None
-    """Padded tool decision position mask."""
-    tool_choice_candidate_token_ids: Optional[torch.Tensor] = None
-    """Padded candidate branch token ids."""
-    tool_choice_candidate_leaf_counts: Optional[torch.Tensor] = None
-    """Padded candidate branch leaf counts."""
     attention_mask: torch.Tensor
     """Padded attention mask."""
     response_logprobs: Optional[torch.Tensor] = None
@@ -701,10 +653,6 @@ class AgentLoopWorker:
             - responses: [bsz, response_length], output token ids include response tokens
               from LLM generation and observation tokens from tool_calls.
             - response_mask: [bsz, response_length], 1 for LLM generated tokens, 0 for observation/padding tokens.
-            - tool_choice_call_start_mask: [bsz, response_length], 1 at each valid tool call's first decision.
-            - tool_decision_position_mask: [bsz, response_length], 1 at tool-trie branch decisions.
-            - tool_choice_candidate_token_ids: [bsz, response_length, 17], candidate branch token ids.
-            - tool_choice_candidate_leaf_counts: [bsz, response_length, 17], tools represented by each branch.
             - input_ids: [bsz, prompt_length + response_length], whole sequence token ids, including prompt tokens
               and response tokens.
             - attention_mask: [bsz, prompt_length + response_length], 0 for padding tokens, 1 for other tokens.
@@ -713,8 +661,6 @@ class AgentLoopWorker:
             For multi-turn conversations:
             responses:     |<- LLM generation ->|<- tool_calls ->|<- LLM generation ->|<- padding ->|
             response_mask: | 1, 1, 1, ..., 1, 1 | 0, 0, .., 0, 0 | 1, 1, 1, ..., 1, 1 | 0, 0, ..., 0|
-            call starts:   | 0, 0, 1, ..., 0, 0 | 0, 0, .., 0, 0 | 0, 1, 0, ..., 0, 0 | 0, 0, ..., 0|
-            decision mask: | 0, 0, 1, ..., 0, 0 | 0, 0, .., 0, 0 | 0, 1, 0, ..., 0, 0 | 0, 0, ..., 0|
         """
         config = self.rollout_config
 
@@ -845,9 +791,9 @@ class AgentLoopWorker:
             name="agent_loop",
             trace=trace,
         ):
-            assert agent_name in _agent_loop_registry, (
-                f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
-            )
+            assert (
+                agent_name in _agent_loop_registry
+            ), f"Agent loop {agent_name} not registered, registered agent loops: {_agent_loop_registry.keys()}"
 
             agent_loop_config = _agent_loop_registry[agent_name]
             agent_loop = hydra.utils.instantiate(
@@ -921,61 +867,12 @@ class AgentLoopWorker:
         if response_mask_output["input_ids"].dim() == 1:
             response_mask_output["input_ids"] = response_mask_output["input_ids"].unsqueeze(0)
 
-        call_start_mask = output.tool_choice_call_start_mask or [0] * len(output.response_ids)
-        decision_mask = output.tool_decision_position_mask or [0] * len(output.response_ids)
-        candidate_token_ids = output.tool_choice_candidate_token_ids or [[] for _ in output.response_ids]
-        candidate_leaf_counts = output.tool_choice_candidate_leaf_counts or [[] for _ in output.response_ids]
-        if not (
-            len(call_start_mask)
-            == len(decision_mask)
-            == len(candidate_token_ids)
-            == len(candidate_leaf_counts)
-            == len(output.response_ids)
-        ):
-            raise ValueError(
-                "Tool-choice fields and response_ids must have the same length, "
-                f"got {len(call_start_mask)}, {len(decision_mask)}, {len(candidate_token_ids)}, "
-                f"{len(candidate_leaf_counts)}, "
-                f"and {len(output.response_ids)}"
-            )
-        call_start_mask_output = self.tokenizer.pad(
-            {"input_ids": call_start_mask},
-            padding="max_length",
-            max_length=self.rollout_config.response_length,
-            return_tensors="pt",
-            return_attention_mask=False,
-        )
-        if call_start_mask_output["input_ids"].dim() == 1:
-            call_start_mask_output["input_ids"] = call_start_mask_output["input_ids"].unsqueeze(0)
-        decision_mask_output = self.tokenizer.pad(
-            {"input_ids": decision_mask},
-            padding="max_length",
-            max_length=self.rollout_config.response_length,
-            return_tensors="pt",
-            return_attention_mask=False,
-        )
-        if decision_mask_output["input_ids"].dim() == 1:
-            decision_mask_output["input_ids"] = decision_mask_output["input_ids"].unsqueeze(0)
-
-        response_padding = self.rollout_config.response_length - len(output.response_ids)
-        candidate_token_ids_tensor = _pad_tool_choice_candidates(
-            candidate_token_ids + ([[]] * response_padding)
-        ).unsqueeze(0)
-        candidate_leaf_counts_tensor = _pad_tool_choice_candidates(
-            candidate_leaf_counts + ([[]] * response_padding)
-        ).unsqueeze(0)
-
         response_logprobs = None
         if output.response_logprobs is not None:
             pad_size = self.rollout_config.response_length - len(output.response_logprobs)
             response_logprobs = torch.tensor(output.response_logprobs + [0.0] * pad_size).unsqueeze(0)
 
         response_mask = response_mask_output["input_ids"] * response_output["attention_mask"]
-        tool_choice_call_start_mask = call_start_mask_output["input_ids"] * response_mask
-        tool_decision_position_mask = decision_mask_output["input_ids"] * response_mask
-        tool_choice_call_start_mask *= tool_decision_position_mask
-        candidate_token_ids_tensor *= tool_decision_position_mask.unsqueeze(-1)
-        candidate_leaf_counts_tensor *= tool_decision_position_mask.unsqueeze(-1)
         attention_mask = torch.cat([prompt_output["attention_mask"], response_output["attention_mask"]], dim=1)
         input_ids = torch.cat([prompt_output["input_ids"], response_output["input_ids"]], dim=1)
 
@@ -1048,10 +945,6 @@ class AgentLoopWorker:
             input_ids=input_ids,
             position_ids=position_ids,
             response_mask=response_mask,
-            tool_choice_call_start_mask=tool_choice_call_start_mask,
-            tool_decision_position_mask=tool_decision_position_mask,
-            tool_choice_candidate_token_ids=candidate_token_ids_tensor,
-            tool_choice_candidate_leaf_counts=candidate_leaf_counts_tensor,
             attention_mask=attention_mask,
             response_logprobs=response_logprobs,
             routed_experts=routed_experts,
@@ -1199,43 +1092,6 @@ class AgentLoopWorker:
         prompt_ids = torch.cat([input.prompt_ids for input in inputs], dim=0)
         response_ids = torch.cat([input.response_ids for input in inputs], dim=0)
         response_mask = torch.cat([input.response_mask for input in inputs], dim=0)
-        tool_choice_call_start_mask = torch.cat(
-            [
-                input.tool_choice_call_start_mask
-                if input.tool_choice_call_start_mask is not None
-                else torch.zeros_like(input.response_mask)
-                for input in inputs
-            ],
-            dim=0,
-        )
-        tool_decision_position_mask = torch.cat(
-            [
-                input.tool_decision_position_mask
-                if input.tool_decision_position_mask is not None
-                else torch.zeros_like(input.response_mask)
-                for input in inputs
-            ],
-            dim=0,
-        )
-        candidate_shape = (*inputs[0].response_mask.shape, MAX_TOOL_CHOICE_CANDIDATES)
-        tool_choice_candidate_token_ids = torch.cat(
-            [
-                input.tool_choice_candidate_token_ids
-                if input.tool_choice_candidate_token_ids is not None
-                else torch.zeros(candidate_shape, dtype=torch.long, device=input.response_mask.device)
-                for input in inputs
-            ],
-            dim=0,
-        )
-        tool_choice_candidate_leaf_counts = torch.cat(
-            [
-                input.tool_choice_candidate_leaf_counts
-                if input.tool_choice_candidate_leaf_counts is not None
-                else torch.zeros(candidate_shape, dtype=torch.long, device=input.response_mask.device)
-                for input in inputs
-            ],
-            dim=0,
-        )
         attention_mask = torch.cat([input.attention_mask for input in inputs], dim=0)
         input_ids = torch.cat([input.input_ids for input in inputs], dim=0)
         position_ids = torch.cat([input.position_ids for input in inputs], dim=0)
@@ -1252,10 +1108,6 @@ class AgentLoopWorker:
                 "prompts": prompt_ids,  # [bsz, prompt_length]
                 "responses": response_ids,  # [bsz, response_length]
                 "response_mask": response_mask,  # [bsz, response_length]
-                "tool_choice_call_start_mask": tool_choice_call_start_mask,  # [bsz, response_length]
-                "tool_decision_position_mask": tool_decision_position_mask,  # [bsz, response_length]
-                "tool_choice_candidate_token_ids": tool_choice_candidate_token_ids,  # [bsz, response_length, 17]
-                "tool_choice_candidate_leaf_counts": tool_choice_candidate_leaf_counts,
                 "input_ids": input_ids,  # [bsz, prompt_length + response_length]
                 "attention_mask": attention_mask,  # [bsz, prompt_length + response_length]
                 # position_ids: [bsz, 3, prompt_length + response_length] or [bsz, prompt_length + response_length]
@@ -1297,12 +1149,12 @@ class AgentLoopWorker:
         default_extra_keys = {
             "turn_scores",
             "tool_rewards",
-            "action_history",
             "pure_image_restoration_rewards",
             "stop_rewards",
             "pure_image_restoration_reward",
             "stop_reward",
             "other_penalty",
+            "action_history",
             "penalty_records",
             "min_global_steps",
             "max_global_steps",
@@ -1543,13 +1395,12 @@ class AgentLoopManager:
         output.meta_info = {"timing": timing, **outputs[0].meta_info}
         return output
 
-    def _performance_metrics(self, metrics: list[list[dict[str, Any]]], output: DataProto) -> dict[str, float]:
+    def _performance_metrics(self, metrics: list[list[dict[str, str]]], output: DataProto) -> dict[str, float]:
         timing = {}
-        flat_metrics = [metric for chunk in metrics for metric in chunk]
-        t_generate_sequences = np.array([metric["generate_sequences"] for metric in flat_metrics])
-        t_tool_calls = np.array([metric["tool_calls"] for metric in flat_metrics])
-        t_compute_score = np.array([metric["compute_score"] for metric in flat_metrics])
-        num_preempted = np.array([metric["num_preempted"] for metric in flat_metrics])
+        t_generate_sequences = np.array([metric["generate_sequences"] for chunk in metrics for metric in chunk])
+        t_tool_calls = np.array([metric["tool_calls"] for chunk in metrics for metric in chunk])
+        t_compute_score = np.array([metric["compute_score"] for chunk in metrics for metric in chunk])
+        num_preempted = np.array([metric["num_preempted"] for chunk in metrics for metric in chunk])
         timing["agent_loop/num_preempted/min"] = num_preempted.min()
         timing["agent_loop/num_preempted/max"] = num_preempted.max()
         timing["agent_loop/num_preempted/mean"] = num_preempted.mean()
@@ -1562,39 +1413,6 @@ class AgentLoopManager:
         timing["agent_loop/compute_score/min"] = t_compute_score.min()
         timing["agent_loop/compute_score/max"] = t_compute_score.max()
         timing["agent_loop/compute_score/mean"] = t_compute_score.mean()
-
-        decision_attempts = sum(
-            int(metric.get("tool_choice_decision_attempted_turns", 0)) for metric in flat_metrics
-        )
-        decision_matches = sum(
-            int(metric.get("tool_choice_decision_matched_turns", 0)) for metric in flat_metrics
-        )
-        decision_positions = sum(
-            int(metric.get("tool_choice_decision_matched_positions", 0)) for metric in flat_metrics
-        )
-        trajectories_with_decisions = sum(
-            int(metric.get("tool_choice_decision_matched_positions", 0) > 0) for metric in flat_metrics
-        )
-        timing["tool_choice_decision/attempted_turns"] = decision_attempts
-        timing["tool_choice_decision/matched_turns"] = decision_matches
-        timing["tool_choice_decision/match_rate"] = (
-            decision_matches / decision_attempts if decision_attempts else 0.0
-        )
-        timing["tool_choice_decision/positions_per_trajectory_mean"] = decision_positions / len(flat_metrics)
-        timing["tool_choice_decision/trajectories_with_decision_rate"] = trajectories_with_decisions / len(
-            flat_metrics
-        )
-        for metric_name in (
-            "roundtrip_failures",
-            "invalid_schema_failures",
-            "boundary_failures",
-        ):
-            failure_count = sum(
-                int(metric.get(f"tool_choice_decision_{metric_name}", 0)) for metric in flat_metrics
-            )
-            timing[f"tool_choice_decision/{metric_name.removesuffix('_failures')}_failure_rate"] = (
-                failure_count / decision_attempts if decision_attempts else 0.0
-            )
 
         # batch sequence generation is bounded by the slowest sample
         slowest = np.argmax(t_generate_sequences + t_tool_calls + t_compute_score)

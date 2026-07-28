@@ -20,6 +20,7 @@ data:  # 配置训练与验证数据及序列长度限制
 
 algorithm:  # 配置 GRPO 优势估计与 KL 控制策略
   adv_estimator: grpo  # 使用组相对策略优化方式计算优势值
+  action_rarity_reward_coeff: 0.0  # v1/v2 关闭经验 action 稀有度奖励；独立 v3 启动器覆盖为 0.02
   kl_ctrl:  # 配置策略与参考策略之间的 KL 控制器
     kl_coef: 0.08  # KL 惩罚系数，用于约束策略偏离参考模型的程度
 
@@ -55,8 +56,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
       lr_warmup_steps_ratio: 0.03  # 使用总训练步数的前三个百分点进行线性预热
       min_lr_ratio: 0.1  # 将训练末期的最低学习率限制为基础学习率的十分之一
       num_cycles: 0.5  # 在整个训练过程中执行一次标准半余弦下降
-    entropy_coeff: 0.005  # 设置整段模型响应的熵奖励系数，鼓励策略保持一定探索性
-    tool_choice_entropy_coeff: 0.0  # v1/v2 显式关闭合法工具选择分布的受限熵正则
+    entropy_coeff: 0.005  # 设置熵奖励系数，鼓励策略保持一定探索性
     calculate_entropy: true  # 在训练中计算并记录策略输出熵
     ppo_epochs: 1  # 每批 Rollout 数据执行一次 PPO 参数更新
     use_kl_loss: true  # 在 Actor 损失中显式加入相对参考策略的 KL 损失

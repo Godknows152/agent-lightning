@@ -24,10 +24,10 @@ from tensordict import TensorDict
 
 from verl import DataProto
 from verl.trainer.ppo.metric_utils import (
+    apply_restoration_action_rarity_reward,
     bootstrap_metric,
     calc_maj_val,
     compute_data_metrics,
-    compute_restoration_action_entropy_metrics,
     compute_restoration_penalty_metrics,
     compute_restoration_reward_metrics,
     compute_throughout_metrics,
@@ -153,55 +153,108 @@ class TestRestorationRewardMetrics(unittest.TestCase):
         self.assertEqual(compute_restoration_reward_metrics(batch), {})
 
 
-class TestRestorationActionEntropyMetrics(unittest.TestCase):
-    """Tests for empirical action-path and pooled tool-choice entropy."""
+class TestRestorationActionRarityReward(unittest.TestCase):
+    """Tests for empirical non-stop action surprisal rewards."""
 
-    def test_computes_batch_entropies_and_coverage_from_executed_actions(self):
-        action_histories = np.empty(5, dtype=object)
-        action_histories[:] = [
-            ["ridcp", "scunet", "stop"],
-            ["ridcp", "scunet", "stop"],
-            ["ridcp", "stop"],
-            [],
-            None,
-        ]
-        batch = DataProto(
-            batch=TensorDict({}, batch_size=[5]),
-            non_tensor_batch={"action_history": action_histories},
+    @staticmethod
+    def _batch(action_histories: list[object], response_mask: torch.Tensor | None = None) -> DataProto:
+        batch_size = len(action_histories)
+        if response_mask is None:
+            response_mask = torch.tensor([[1, 0, 1, 0]] * batch_size)
+        values = np.empty(batch_size, dtype=object)
+        values[:] = action_histories
+        return DataProto(
+            batch=TensorDict(
+                {
+                    "token_level_rewards": torch.zeros(batch_size, response_mask.shape[1]),
+                    "response_mask": response_mask,
+                },
+                batch_size=[batch_size],
+            ),
+            non_tensor_batch={"action_history": values},
         )
 
-        metrics = compute_restoration_action_entropy_metrics(batch)
+    def test_assigns_normalized_surprisal_and_excludes_stop(self):
+        batch = self._batch([["a"], ["a"], ["b"], ["c", "stop"]])
 
-        expected_path_entropy = -(2 / 3) * np.log(2 / 3) - (1 / 3) * np.log(1 / 3)
-        expected_choice_entropy = -2 * (3 / 8) * np.log(3 / 8) - (2 / 8) * np.log(2 / 8)
-        self.assertAlmostEqual(metrics["actor/action_path_entropy"], expected_path_entropy)
-        self.assertAlmostEqual(metrics["actor/tool_choice_entropy"], expected_choice_entropy)
-        self.assertEqual(metrics["actor/action_path_valid_trajectory_rate"], 3 / 5)
-        self.assertEqual(metrics["actor/action_path_unique_count"], 2)
-        self.assertEqual(metrics["actor/tool_choice_sample_count"], 8)
+        batch, metrics = apply_restoration_action_rarity_reward(
+            batch,
+            coefficient=0.02,
+            quality_gate=torch.tensor([True, True, True, False]),
+        )
+
+        # p(a)=1/2 gives score 0.25; p(b)=p(c)=1/4 gives score 0.5.
+        expected_rewards = torch.tensor([0.005, 0.005, 0.01, 0.0])
+        torch.testing.assert_close(batch.batch["token_level_rewards"][:, 2], expected_rewards)
+        torch.testing.assert_close(batch.batch["token_level_rewards"][:, [0, 1, 3]], torch.zeros(4, 3))
+        np.testing.assert_allclose(batch.non_tensor_batch["action_rarity_reward"], expected_rewards.numpy())
+        self.assertAlmostEqual(metrics["actor/tool_choice_entropy"], 1.5 * np.log(2.0))
+        self.assertEqual(metrics["actor/tool_choice_sample_count"], 4)
         self.assertEqual(metrics["actor/tool_choice_unique_action_count"], 3)
+        self.assertAlmostEqual(metrics["actor/action_rarity_reward_gate_ratio"], 0.75)
+        self.assertAlmostEqual(metrics["actor/action_rarity_reward_mean"], 0.005)
 
-    def test_empty_histories_are_zero_without_nan(self):
-        action_histories = np.empty(2, dtype=object)
-        action_histories[:] = [[], None]
-        batch = DataProto(
-            batch=TensorDict({}, batch_size=[2]),
-            non_tensor_batch={"action_history": action_histories},
+    def test_averages_multiple_calls_instead_of_accumulating_reward(self):
+        batch = self._batch([["a"], ["b", "b"]])
+
+        batch, _ = apply_restoration_action_rarity_reward(
+            batch,
+            coefficient=1.0,
+            quality_gate=torch.ones(2, dtype=torch.bool),
         )
 
-        metrics = compute_restoration_action_entropy_metrics(batch)
+        expected = torch.tensor(
+            [
+                np.log(3.0) / np.log(16.0),
+                -np.log(2.0 / 3.0) / np.log(16.0),
+            ],
+            dtype=torch.float32,
+        )
+        torch.testing.assert_close(batch.batch["token_level_rewards"][:, 2], expected)
 
-        self.assertEqual(metrics["actor/action_path_entropy"], 0.0)
+    def test_collapsed_batch_and_trajectories_without_repair_actions_get_zero(self):
+        batch = self._batch([["a"], ["a", "stop"], ["stop"], []])
+
+        batch, metrics = apply_restoration_action_rarity_reward(
+            batch,
+            coefficient=0.02,
+            quality_gate=torch.ones(4, dtype=torch.bool),
+        )
+
+        torch.testing.assert_close(batch.batch["token_level_rewards"], torch.zeros(4, 4))
         self.assertEqual(metrics["actor/tool_choice_entropy"], 0.0)
-        self.assertEqual(metrics["actor/action_path_valid_trajectory_rate"], 0.0)
-        self.assertEqual(metrics["actor/action_path_unique_count"], 0)
-        self.assertEqual(metrics["actor/tool_choice_sample_count"], 0)
-        self.assertEqual(metrics["actor/tool_choice_unique_action_count"], 0)
+        self.assertEqual(metrics["actor/action_rarity_reward_mean"], 0.0)
+        self.assertEqual(metrics["actor/action_rarity_valid_trajectory_rate"], 0.5)
 
-    def test_returns_empty_when_action_history_is_unavailable(self):
-        batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
+    def test_positive_coefficient_requires_action_histories(self):
+        batch = DataProto(
+            batch=TensorDict(
+                {
+                    "token_level_rewards": torch.zeros(1, 2),
+                    "response_mask": torch.ones(1, 2),
+                },
+                batch_size=[1],
+            ),
+            non_tensor_batch={},
+        )
 
-        self.assertEqual(compute_restoration_action_entropy_metrics(batch), {})
+        with self.assertRaisesRegex(ValueError, "action_history"):
+            apply_restoration_action_rarity_reward(
+                batch,
+                coefficient=0.02,
+                quality_gate=torch.ones(1, dtype=torch.bool),
+            )
+
+    def test_rejects_invalid_coefficient(self):
+        batch = self._batch([["a"]])
+
+        for coefficient in (-0.01, float("nan"), float("inf")):
+            with self.subTest(coefficient=coefficient), self.assertRaisesRegex(ValueError, "finite and non-negative"):
+                apply_restoration_action_rarity_reward(
+                    batch,
+                    coefficient=coefficient,
+                    quality_gate=torch.ones(1, dtype=torch.bool),
+                )
 
 
 class TestMetric(unittest.TestCase):

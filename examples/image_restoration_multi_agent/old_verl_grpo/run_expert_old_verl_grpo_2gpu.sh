@@ -20,8 +20,6 @@ Environment overrides:
   OLD_VERL_PREFLIGHT_ONLY=1
   OLD_VERL_TOOL_REGISTRY_PATH=/path/to/tools.yaml
   OLD_VERL_CONFIG_NAME=fog_config_2gpu  # defaults to <expert>_config_2gpu
-  OLD_VERL_TRAINING_VARIANT=v1|v2|v3  # set automatically by train_sh wrappers
-  OLD_VERL_LOG_DIR=/path/to/version-log-dir
   OLD_VERL_CUDA_VISIBLE_DEVICES=0,1
   OLD_VERL_CLEAR_INTERMEDIATE_IMAGES=1
   OLD_VERL_INTERMEDIATE_DIR=/home/LXJ/tmp/agent_lightning_old_verl_restoration
@@ -73,10 +71,9 @@ EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
 LOG_ROOT="${OLD_VERL_DIR}/log"
-LOG_DIR="${OLD_VERL_LOG_DIR:-${LOG_ROOT}/${EXPERT}}"
+LOG_DIR="${LOG_ROOT}/${EXPERT}"
 CONFIG_DIR="${OLD_VERL_DIR}/config"
 CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
-TRAINING_VARIANT="${OLD_VERL_TRAINING_VARIANT:-}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
 RUN_NAMING_RESOLVER="${OLD_VERL_DIR}/scripts/resolve_training_run_name.py"
 LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
@@ -90,14 +87,6 @@ RAY_BIN="${RAY_BIN:-/home/LXJ/anaconda3/envs/verl/bin/ray}"
 MODEL_PATH_OVERRIDE="${OLD_VERL_MODEL_PATH:-${DEFAULT_MODEL_PATH}}"
 SFT_ADAPTER_ROOT="${OLD_VERL_SFT_ADAPTER_ROOT:-${DEFAULT_SFT_ADAPTER_ROOT}}"
 ADAPTER_PATH_OVERRIDE="${OLD_VERL_ADAPTER_PATH:-${SFT_ADAPTER_ROOT}/${EXPERT}}"
-
-case "${TRAINING_VARIANT}" in
-  ""|v1|v2|v3) ;;
-  *)
-    echo "Unsupported training variant: ${TRAINING_VARIANT}" >&2
-    exit 2
-    ;;
-esac
 
 mkdir -p "${LOG_DIR}"
 if [[ "${OLD_VERL_RUN_IN_FOREGROUND:-0}" != "1" && "${PREFLIGHT_ONLY}" != "1" ]]; then
@@ -325,48 +314,6 @@ if [[ -n "${SWANLAB_MODE_OVERRIDE}" ]]; then
   CONFIG_OVERRIDES+=("trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE_OVERRIDE}")
 fi
 
-IFS=$'\t' read -r \
-  EFFECTIVE_TOOL_CONFIG \
-  EFFECTIVE_REWARD_MODE \
-  EFFECTIVE_ENTROPY_COEFF \
-  EFFECTIVE_TOOL_CHOICE_ENTROPY_COEFF \
-  < <(
-    "${PYTHON_BIN}" - \
-      "${CONFIG_DIR}" \
-      "${CONFIG_NAME}" \
-      "${ROOT}" \
-      "${CONFIG_OVERRIDES[@]}" \
-      "${HYDRA_OVERRIDES[@]}" \
-      "$@" <<'PY'
-import sys
-from pathlib import Path
-
-import yaml
-from hydra import compose, initialize_config_dir
-
-config_dir = str(Path(sys.argv[1]).resolve())
-repository_root = Path(sys.argv[3]).resolve()
-with initialize_config_dir(version_base=None, config_dir=config_dir):
-    config = compose(config_name=sys.argv[2], overrides=sys.argv[4:])
-
-tool_config_path = Path(config.actor_rollout_ref.rollout.multi_turn.tool_config_path)
-resolved_tool_config_path = tool_config_path if tool_config_path.is_absolute() else repository_root / tool_config_path
-with resolved_tool_config_path.open(encoding="utf-8") as file:
-    tool_config = yaml.safe_load(file)
-
-print(
-    "\t".join(
-        (
-            str(tool_config_path),
-            str(tool_config["tools"][0]["config"].get("reward_mode")),
-            str(config.actor_rollout_ref.actor.entropy_coeff),
-            str(config.actor_rollout_ref.actor.tool_choice_entropy_coeff),
-        )
-    )
-)
-PY
-  )
-
 # Expose only physical GPU0/1 to the trainer, rollout, restoration, and IQA
 # workers. The zero-GPU AgentLoop does not require an additional visible GPU.
 export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
@@ -468,19 +415,16 @@ if [[ "${PREFLIGHT_ONLY}" == "1" ]]; then
     "${SWANLAB_LOG_DIR_OVERRIDE}" \
     "${LOG_DIR}" \
     "${RESUME_FROM_PATH_OVERRIDE}" \
-    "${TRAINING_VARIANT}" \
-    "${EXPERT}" \
     "${CONFIG_OVERRIDES[@]}" \
     "${HYDRA_OVERRIDES[@]}" \
     "$@" <<'PY'
+import os
 import sys
 from pathlib import Path
 
-import yaml
 from hydra import compose, initialize_config_dir
 
-config_dir_path = Path(sys.argv[1]).resolve()
-config_dir = str(config_dir_path)
+config_dir = str(Path(sys.argv[1]).resolve())
 config_name = sys.argv[2]
 expected_model = str(Path(sys.argv[3]).resolve())
 expected_adapter = str(Path(sys.argv[4]).resolve())
@@ -489,9 +433,7 @@ expected_output_dir = str(Path(sys.argv[6]).resolve())
 expected_swanlab_log_dir = str(Path(sys.argv[7]).resolve())
 expected_verl_log_dir = str(Path(sys.argv[8]).resolve())
 expected_resume_path = str(Path(sys.argv[9]).resolve()) if sys.argv[9] else None
-training_variant = sys.argv[10]
-expert = sys.argv[11]
-overrides = sys.argv[12:]
+overrides = sys.argv[10:]
 
 with initialize_config_dir(version_base=None, config_dir=config_dir):
     config = compose(config_name=config_name, overrides=overrides)
@@ -541,71 +483,15 @@ if config.actor_rollout_ref.ref.fsdp_config.model_dtype != "bfloat16":
     )
 if config.actor_rollout_ref.ref.fsdp_config.param_offload is not True:
     errors.append("frozen KL reference parameter offload is not enabled")
-
-if training_variant:
-    expected_tool_config_name = {
-        "v1": "restoration_tool_config_current_iqa_2gpu.yaml",
-        "v2": "restoration_tool_config_marginal_efficiency_2gpu.yaml",
-        "v3": "restoration_tool_config_marginal_efficiency_2gpu.yaml",
-    }[training_variant]
-    raw_tool_config_path = Path(config.actor_rollout_ref.rollout.multi_turn.tool_config_path)
-    actual_tool_config_name = raw_tool_config_path.name
-    if actual_tool_config_name != expected_tool_config_name:
+expected_action_rarity_coeff = os.environ.get("OLD_VERL_EXPECT_ACTION_RARITY_REWARD_COEFF")
+if expected_action_rarity_coeff is not None:
+    expected_action_rarity_coeff = float(expected_action_rarity_coeff)
+    actual_action_rarity_coeff = float(config.algorithm.action_rarity_reward_coeff)
+    if abs(actual_action_rarity_coeff - expected_action_rarity_coeff) > 1e-12:
         errors.append(
-            f"{training_variant} tool config={actual_tool_config_name!r}, "
-            f"expected {expected_tool_config_name!r}"
+            f"action_rarity_reward_coeff={actual_action_rarity_coeff!r}, "
+            f"expected {expected_action_rarity_coeff!r}"
         )
-    repository_root = config_dir_path.parents[3]
-    tool_config_path = raw_tool_config_path if raw_tool_config_path.is_absolute() else repository_root / raw_tool_config_path
-    with tool_config_path.open(encoding="utf-8") as file:
-        tool_config = yaml.safe_load(file)
-    actual_reward_mode = tool_config["tools"][0]["config"].get("reward_mode")
-    expected_reward_mode = "step_mixed_v1" if training_variant == "v1" else "marginal_efficiency_v1"
-    if actual_reward_mode != expected_reward_mode:
-        errors.append(
-            f"{training_variant} reward_mode={actual_reward_mode!r}, expected {expected_reward_mode!r}"
-        )
-
-    entropy_coeff = float(config.actor_rollout_ref.actor.entropy_coeff)
-    tool_entropy_coeff = float(config.actor_rollout_ref.actor.tool_choice_entropy_coeff)
-    if abs(entropy_coeff - 0.005) > 1e-12:
-        errors.append(f"{training_variant} entropy_coeff={entropy_coeff!r}, expected 0.005")
-    expected_tool_entropy = 0.01 if training_variant == "v3" else 0.0
-    if abs(tool_entropy_coeff - expected_tool_entropy) > 1e-12:
-        errors.append(
-            f"{training_variant} tool_choice_entropy_coeff={tool_entropy_coeff!r}, "
-            f"expected {expected_tool_entropy!r}"
-        )
-    if tool_entropy_coeff > 0.0:
-        if config.actor_rollout_ref.model.use_remove_padding is not False:
-            errors.append("tool-choice entropy requires actor_rollout_ref.model.use_remove_padding=false")
-        if config.actor_rollout_ref.model.use_fused_kernels is not False:
-            errors.append("tool-choice entropy requires actor_rollout_ref.model.use_fused_kernels=false")
-        if int(config.actor_rollout_ref.actor.ulysses_sequence_parallel_size) != 1:
-            errors.append("tool-choice entropy requires actor_rollout_ref.actor.ulysses_sequence_parallel_size=1")
-    if config.actor_rollout_ref.actor.calculate_entropy is not True:
-        errors.append(f"{training_variant} calculate_entropy must be true")
-
-    expected_config_name = (
-        f"{expert}_v3_config_2gpu" if training_variant == "v3" else f"{expert}_config_2gpu"
-    )
-    if config_name != expected_config_name:
-        errors.append(
-            f"{training_variant} config name={config_name!r}, expected {expected_config_name!r}"
-        )
-    expected_suffix = f"_{training_variant}"
-    if not str(config.trainer.experiment_name).endswith(expected_suffix):
-        errors.append(
-            f"{training_variant} experiment_name={config.trainer.experiment_name!r}, "
-            f"expected suffix {expected_suffix!r}"
-        )
-    if Path(config.trainer.default_local_dir).name != f"{config.trainer.experiment_name}":
-        errors.append(
-            f"{training_variant} output directory must end with experiment name "
-            f"{config.trainer.experiment_name!r}"
-        )
-    if Path(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR).name != training_variant:
-        errors.append(f"{training_variant} VERL_LOG_DIR must end in /{training_variant}")
 micro_batch_sizes = {
     "actor.ppo_micro_batch_size_per_gpu": (
         config.actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu,
@@ -627,10 +513,6 @@ for name, (value, expected) in micro_batch_sizes.items():
 if errors:
     raise SystemExit("Invalid composed RL config:\n- " + "\n- ".join(errors))
 PY
-  echo "Variant: ${TRAINING_VARIANT:-unspecified}"
-  echo "Config: ${CONFIG_NAME}"
-  echo "Reward: ${EFFECTIVE_REWARD_MODE} (${EFFECTIVE_TOOL_CONFIG})"
-  echo "Entropy: response=${EFFECTIVE_ENTROPY_COEFF} tool_choice=${EFFECTIVE_TOOL_CHOICE_ENTROPY_COEFF}"
   echo "Preflight passed for ${EXPERT}: experiment=${EXPERIMENT_NAME_OVERRIDE} output=${OUTPUT_DIR_OVERRIDE}"
   exit 0
 fi
@@ -688,15 +570,12 @@ if [[ "${OLD_VERL_STOP_RAY:-1}" == "1" ]]; then
 fi
 
 echo "Running old-verl ${RUN_KIND} GRPO for ${EXPERT} on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
-echo "Variant: ${TRAINING_VARIANT:-unspecified}"
 echo "Model:   ${MODEL_PATH_OVERRIDE}"
 echo "Adapter: ${ADAPTER_PATH_OVERRIDE}"
 echo "Data:    ${TRAIN_PARQUET} / ${VAL_PARQUET}"
 echo "Output:  ${OUTPUT_DIR_OVERRIDE}"
 echo "Logs:    ${LOG_DIR}"
 echo "Config:  ${CONFIG_DIR}/${CONFIG_NAME}.yaml"
-echo "Reward:  ${EFFECTIVE_REWARD_MODE} (${EFFECTIVE_TOOL_CONFIG})"
-echo "Entropy: response=${EFFECTIVE_ENTROPY_COEFF} tool_choice=${EFFECTIVE_TOOL_CHOICE_ENTROPY_COEFF}"
 echo "Resume:  ${RESUME_FROM_PATH_OVERRIDE:-fresh run}"
 printf 'SwanLab: project=%s experiment=%s mode=%s log_dir=%s\n' \
   "${PROJECT_NAME_OVERRIDE:-configured by YAML}" \
