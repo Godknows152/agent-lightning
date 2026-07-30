@@ -102,7 +102,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
     Returns:
         A dictionary of metrics including:
             - critic/score/mean, max, min: Statistics about sequence scores
-            - critic/rewards/mean, max, min: Statistics about sequence rewards
+            - critic/rewards/mean, max, min, variance: Statistics about sequence rewards
             - critic/advantages/mean, max, min: Statistics about advantages
             - critic/returns/mean, max, min: Statistics about returns
             - critic/values/mean, max, min: Statistics about critic values (if use_critic=True)
@@ -144,9 +144,10 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         reward_mean = torch.mean(non_aborted_sequence_reward).detach().item()
         reward_max = torch.max(non_aborted_sequence_reward).detach().item()
         reward_min = torch.min(non_aborted_sequence_reward).detach().item()
+        reward_variance = torch.var(non_aborted_sequence_reward, correction=0).detach().item()
     else:
         logger.warning("All samples are aborted, returning default reward metrics")
-        reward_mean = reward_max = reward_min = float("nan")
+        reward_mean = reward_max = reward_min = reward_variance = float("nan")
 
     valid_adv = torch.masked_select(advantages, response_mask)
     valid_returns = torch.masked_select(returns, response_mask)
@@ -221,6 +222,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "critic/rewards/mean": reward_mean,
         "critic/rewards/max": reward_max,
         "critic/rewards/min": reward_min,
+        "critic/rewards/variance": reward_variance,
         # adv
         "critic/advantages/mean": adv_mean,
         "critic/advantages/max": adv_max,
@@ -417,6 +419,34 @@ def _normalize_restoration_action_histories(value: Any, length: int) -> list[tup
     return histories
 
 
+def _empirical_entropy(samples: list[Any]) -> float:
+    """Return natural-log empirical Shannon entropy, or zero for no samples."""
+
+    if not samples:
+        return 0.0
+    counts = Counter(samples)
+    return float(-sum((count / len(samples)) * math.log(count / len(samples)) for count in counts.values()))
+
+
+def compute_restoration_action_entropy_metrics(batch: DataProto) -> dict[str, Any]:
+    """Measure batch-level entropy of successful non-stop restoration actions and paths."""
+
+    if "action_history" not in batch.non_tensor_batch or len(batch) == 0:
+        return {}
+    try:
+        histories = _normalize_restoration_action_histories(batch.non_tensor_batch["action_history"], len(batch))
+    except ValueError as exc:
+        logger.warning("Cannot compute restoration action entropy metrics: %s", exc)
+        return {}
+
+    valid_histories = [history for history in histories if history]
+    action_choices = [action for history in valid_histories for action in history]
+    return {
+        "actor/tool_choice_entropy": _empirical_entropy(action_choices),
+        "actor/action_path_entropy": _empirical_entropy(valid_histories),
+    }
+
+
 def apply_restoration_action_rarity_reward(
     batch: DataProto,
     *,
@@ -447,7 +477,7 @@ def apply_restoration_action_rarity_reward(
     counts = Counter(action for history in histories for action in history)
     sample_count = sum(counts.values())
     probabilities = {action: count / sample_count for action, count in counts.items()} if sample_count else {}
-    empirical_entropy = -sum(probability * math.log(probability) for probability in probabilities.values())
+    empirical_entropy = _empirical_entropy([action for history in histories for action in history])
 
     normalizer = math.log(num_repair_actions)
     scores = np.zeros(batch_size, dtype=np.float32)

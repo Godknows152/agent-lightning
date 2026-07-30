@@ -28,6 +28,7 @@ from verl.trainer.ppo.metric_utils import (
     bootstrap_metric,
     calc_maj_val,
     compute_data_metrics,
+    compute_restoration_action_entropy_metrics,
     compute_restoration_penalty_metrics,
     compute_restoration_reward_metrics,
     compute_throughout_metrics,
@@ -151,6 +152,50 @@ class TestRestorationRewardMetrics(unittest.TestCase):
         batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
 
         self.assertEqual(compute_restoration_reward_metrics(batch), {})
+
+
+class TestRestorationActionEntropyMetrics(unittest.TestCase):
+    """Tests for the two empirical restoration action entropy metrics."""
+
+    def test_computes_non_stop_action_and_path_entropies(self):
+        action_histories = np.empty(5, dtype=object)
+        action_histories[:] = [
+            ["ridcp", "scunet", "stop"],
+            ["ridcp", "scunet", "stop"],
+            ["ridcp", "stop"],
+            ["stop"],
+            None,
+        ]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[5]),
+            non_tensor_batch={"action_history": action_histories},
+        )
+
+        metrics = compute_restoration_action_entropy_metrics(batch)
+
+        expected_path_entropy = -(2 / 3) * np.log(2 / 3) - (1 / 3) * np.log(1 / 3)
+        expected_choice_entropy = -(3 / 5) * np.log(3 / 5) - (2 / 5) * np.log(2 / 5)
+        self.assertEqual(set(metrics), {"actor/tool_choice_entropy", "actor/action_path_entropy"})
+        self.assertAlmostEqual(metrics["actor/tool_choice_entropy"], expected_choice_entropy)
+        self.assertAlmostEqual(metrics["actor/action_path_entropy"], expected_path_entropy)
+
+    def test_empty_histories_report_zero_entropy(self):
+        action_histories = np.empty(2, dtype=object)
+        action_histories[:] = [["stop"], None]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[2]),
+            non_tensor_batch={"action_history": action_histories},
+        )
+
+        self.assertEqual(
+            compute_restoration_action_entropy_metrics(batch),
+            {"actor/tool_choice_entropy": 0.0, "actor/action_path_entropy": 0.0},
+        )
+
+    def test_returns_empty_when_action_history_is_unavailable(self):
+        batch = DataProto(batch=TensorDict({}, batch_size=[1]), non_tensor_batch={})
+
+        self.assertEqual(compute_restoration_action_entropy_metrics(batch), {})
 
 
 class TestRestorationActionRarityReward(unittest.TestCase):
@@ -522,6 +567,7 @@ class TestComputeDataMetrics(unittest.TestCase):
         # Check some specific values
         self.assertAlmostEqual(metrics["critic/score/mean"], 5.0)  # Sum of token_level_scores
         self.assertAlmostEqual(metrics["critic/rewards/mean"], 2.5)  # Sum of token_level_rewards
+        self.assertAlmostEqual(metrics["critic/rewards/variance"], 1.0)
 
     def test_compute_data_metrics_without_critic(self):
         """Test compute_data_metrics with critic disabled."""
@@ -535,6 +581,15 @@ class TestComputeDataMetrics(unittest.TestCase):
         self.assertIn("critic/score/mean", metrics)
         self.assertIn("critic/rewards/mean", metrics)
         self.assertIn("response_length/mean", metrics)
+
+    def test_reward_variance_excludes_aborted_samples_and_uses_population_variance(self):
+        self.batch.batch["attention_mask"][1, -2:] = 0
+        self.batch.batch["response_mask"][1] = 0
+
+        metrics = compute_data_metrics(self.batch, use_critic=False)
+
+        self.assertAlmostEqual(metrics["critic/rewards/mean"], 1.5)
+        self.assertAlmostEqual(metrics["critic/rewards/variance"], 0.0)
 
     def test_num_turns_metrics_prefer_actual_tool_call_counts(self):
         self.batch.non_tensor_batch = {

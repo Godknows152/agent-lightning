@@ -44,6 +44,7 @@ from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
 from verl.trainer.ppo.metric_utils import (
     apply_restoration_action_rarity_reward,
     compute_data_metrics,
+    compute_restoration_action_entropy_metrics,
     compute_restoration_penalty_metrics,
     compute_restoration_reward_metrics,
     compute_throughout_metrics,
@@ -1951,6 +1952,7 @@ class RayPPOTrainer:
                 )
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+                metrics.update(compute_restoration_action_entropy_metrics(batch=batch))
                 metrics.update(compute_restoration_penalty_metrics(batch=batch))
                 metrics.update(compute_restoration_reward_metrics(batch=batch))
                 # GDPO per-component reward metrics
