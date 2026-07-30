@@ -15,6 +15,7 @@ agent_lightning_paper.pdf
 /examples/image_restoration_multi_agent/grpo/log/
 /examples/image_restoration_multi_agent/grpo/outputs/
 /examples/image_restoration_multi_agent/grpo/artifacts/
+/examples/image_restoration_multi_agent/old_verl_grpo/docs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
