@@ -18,6 +18,14 @@ PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
+# v4: Valid action names for thinking decision-point detection
+_RESTORATION_DECISION_POINT_ACTIONS: tuple[str, ...] = (
+    "real_esrgan", "scunet", "retinexformer_fivek", "hvicidnet", "lightdiff",
+    "turbo_rain", "s2former", "idt", "ridcp", "kanet", "turbo_snow",
+    "snowmaster", "nafnet_denoise", "focalnet_dehaze", "focalnet_desnow",
+    "mb_taylorformer_dehaze",
+)
+
 import json
 import os
 import uuid
@@ -1504,6 +1512,75 @@ class RayPPOTrainer:
         old_log_prob = DataProto.from_tensordict(old_log_prob)
         return old_log_prob, old_log_prob_mfu
 
+    def _compute_decision_point_mask(self, batch: DataProto) -> tuple[torch.Tensor, float]:
+        """v4: Find the first token of the first action name in each response's thinking region.
+
+        Returns:
+            mask: (bsz, response_len) float32 tensor; 1 at decision-point positions, 0 elsewhere.
+            found_rate: fraction of samples where a decision point was found.
+        """
+        responses = batch.batch["responses"]  # (bsz, response_len)
+        bsz, response_len = responses.shape
+        mask = torch.zeros(bsz, response_len, dtype=torch.float32, device=responses.device)
+        found_count = 0
+
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+
+        for i in range(bsz):
+            ids = responses[i].tolist()
+            # Strip trailing padding
+            actual_len = response_len
+            for j in range(response_len - 1, -1, -1):
+                if ids[j] != pad_id:
+                    actual_len = j + 1
+                    break
+            if actual_len == 0:
+                continue
+            ids_trimmed = ids[:actual_len]
+
+            # Decode response (thinking starts at pos 0; <think> tag is in the prompt)
+            response_text = self.tokenizer.decode(ids_trimmed, skip_special_tokens=False)
+
+            # Thinking region ends at </think>
+            think_end = response_text.find("</think>")
+            if think_end == -1:
+                continue
+            thinking_text = response_text[:think_end]
+
+            # Find first occurrence of any action name (case-insensitive, try variants)
+            lower_thinking = thinking_text.lower()
+            best = None  # (char_pos_in_thinking, action_name)
+            for action in _RESTORATION_DECISION_POINT_ACTIONS:
+                # Try underscore/hyphen/space variants (e.g. "real_esrgan" → "real-esrgan")
+                for variant in (action, action.replace("_", "-"), action.replace("_", " ")):
+                    pos = lower_thinking.find(variant.lower())
+                    if pos != -1:
+                        if best is None or pos < best[0]:
+                            best = (pos, action)
+                        break
+
+            if best is None:
+                continue
+
+            # Map character position to token position in the response
+            action_char_start = best[0]
+
+            # Get token offsets for the full response
+            enc = self.tokenizer(response_text, return_offsets_mapping=True, add_special_tokens=False)
+            offsets = enc["offset_mapping"]
+
+            for j, (char_s, char_e) in enumerate(offsets):
+                if j >= actual_len:
+                    break
+                if char_s <= action_char_start < char_e or char_s == action_char_start:
+                    if j < response_len:
+                        mask[i, j] = 1.0
+                        found_count += 1
+                    break
+
+        found_rate = found_count / max(bsz, 1)
+        return mask, found_rate
+
     def _update_actor(self, batch: DataProto) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
@@ -1513,8 +1590,10 @@ class RayPPOTrainer:
         batch_td = batch.to_tensordict()
         # step 2: convert from padding to no-padding
         batch_td = left_right_2_no_padding(batch_td)
-        calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
-            self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
+        calculate_entropy = (
+            self.config.actor_rollout_ref.actor.calculate_entropy
+            or (self.config.actor_rollout_ref.actor.entropy_coeff != 0.0)
+            or (self.config.actor_rollout_ref.actor.decision_point_entropy_coeff != 0.0)
         )
         distillation_use_topk = (
             self.distillation_config.distillation_loss.loss_settings.use_topk
@@ -1874,6 +1953,12 @@ class RayPPOTrainer:
                         # Still in critic warmup, only update weights to wake up rollout replicas.
                         self.checkpoint_manager.update_weights(self.global_steps)
                     else:
+                        # v4: Compute decision-point mask for selective entropy regularization
+                        if self.config.actor_rollout_ref.actor.decision_point_entropy_coeff > 0.0:
+                            _dp_mask, _dp_found_rate = self._compute_decision_point_mask(batch)
+                            batch.batch["decision_point_mask"] = _dp_mask
+                            metrics["actor/decision_point_found_rate"] = _dp_found_rate
+
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):
                             actor_output = self._update_actor(batch)

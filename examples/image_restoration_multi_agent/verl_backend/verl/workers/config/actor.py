@@ -164,6 +164,7 @@ class ActorConfig(BaseConfig):
     loss_agg_mode: str = "token-mean"
     loss_scale_factor: Optional[int] = None
     entropy_coeff: float = 0
+    decision_point_entropy_coeff: float = 0.0
     tau_pos: float = 1.0
     tau_neg: float = 1.05
     calculate_entropy: bool = False

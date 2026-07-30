@@ -88,6 +88,10 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         fields.append("rollout_is_weights")
     if "ref_log_prob" in data:
         fields.append("ref_log_prob")
+    # v4: decision_point_mask for selective entropy regularization
+    has_dp_mask = "decision_point_mask" in data and config.decision_point_entropy_coeff > 0.0
+    if has_dp_mask:
+        fields.append("decision_point_mask")
     data = data.select(*fields).to_padded_tensor()
 
     response_mask = data["response_mask"].to(bool)
@@ -127,6 +131,23 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         entropy_coeff = config.entropy_coeff
         policy_loss -= entropy_coeff * entropy_loss
         metrics["actor/entropy_loss"] = Metric(value=entropy_loss, aggregation=metric_aggregation)
+
+    # v4: add decision point selective entropy loss
+    if entropy is not None and has_dp_mask:
+        dp_mask = data["decision_point_mask"].to(bool)  # (bsz, response_len)
+        if dp_mask.any():
+            dp_entropy_loss = agg_loss(
+                loss_mat=entropy,
+                loss_mask=dp_mask,
+                loss_agg_mode=loss_agg_mode,
+                **config.global_batch_info,
+            )
+            policy_loss -= config.decision_point_entropy_coeff * dp_entropy_loss
+        else:
+            dp_entropy_loss = torch.tensor(0.0, device=entropy.device)
+        metrics["actor/decision_point_entropy"] = Metric(
+            value=dp_entropy_loss, aggregation=metric_aggregation
+        )
 
     # add kl loss
     if config.use_kl_loss:
