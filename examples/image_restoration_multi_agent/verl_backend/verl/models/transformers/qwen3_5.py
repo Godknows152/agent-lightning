@@ -183,11 +183,13 @@ def forward_with_normal_backend(
     input_ids: torch.LongTensor = None,
     labels: Optional[torch.LongTensor] = None,
     temperature: float = 1.0,
+    logits_to_keep: int | torch.Tensor = 0,
     **kwargs,
 ) -> "Qwen3_5CausalLMOutputForPPO":
     outputs = self.model(input_ids, **kwargs)
     hidden_states = outputs[0]
-    logits = self.lm_head(hidden_states)
+    slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+    logits = self.lm_head(hidden_states[:, slice_indices, :])
     return Qwen3_5CausalLMOutputForPPO(
         logits=logits,
         hidden_states=outputs.hidden_states,

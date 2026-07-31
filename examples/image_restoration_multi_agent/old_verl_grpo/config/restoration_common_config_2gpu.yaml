@@ -78,7 +78,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     disable_multimodal_special_token_generation: true  # 禁止模型在回复中生成多模态占位特殊 Token
     n: 3  # 每个原始提示采样三条候选轨迹，用于组内相对优势计算
     tensor_model_parallel_size: 2  # 将 SGLang 模型张量并行切分到两张训练 GPU
-    gpu_memory_utilization: 0.2  # SGLang 静态权重和缓存池可使用的单卡显存比例
+    gpu_memory_utilization: 0.15  # SGLang 静态权重和缓存池可使用的单卡显存比例
     force_full_sleep_for_lora: true  # Actor 更新阶段让 LoRA Rollout 引擎完全休眠并释放权重与缓存显存
     max_num_seqs: 16  # 限制 SGLang 同时运行的生成请求数；当前被注释，因此继承 VERL 默认值
     # max_model_len: 9728  # 单次 SGLang 请求允许的提示与生成内容总 Token 上限

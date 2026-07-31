@@ -153,3 +153,53 @@ def test_teacher_forced_candidate_forward_keeps_action_entropy_in_autograd_graph
     assert model.transition_logits.grad is not None
     assert model.transition_logits.grad[1, 2].abs().item() > 0.0
     assert model.transition_logits.grad[1, 3].abs().item() > 0.0
+
+
+@pytest.mark.parametrize(("logits_to_keep", "expected_length"), [(0, 7), (3, 3)])
+def test_qwen3_5_normal_forward_applies_logits_to_keep_before_lm_head(logits_to_keep, expected_length):
+    pytest.importorskip("transformers.models.qwen3_5.modeling_qwen3_5")
+    from verl.models.transformers.qwen3_5 import forward_with_normal_backend
+
+    class FakeOutputs:
+        def __init__(self, hidden_states):
+            self.last_hidden_state = hidden_states
+            self.hidden_states = None
+
+        def __getitem__(self, index):
+            assert index == 0
+            return self.last_hidden_state
+
+    class FakeBackbone:
+        def __init__(self, hidden_states):
+            self.hidden_states = hidden_states
+            self.kwargs = None
+
+        def __call__(self, input_ids, **kwargs):
+            del input_ids
+            self.kwargs = kwargs
+            return FakeOutputs(self.hidden_states)
+
+    class RecordingLMHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_shape = None
+
+        def forward(self, hidden_states):
+            self.input_shape = hidden_states.shape
+            return hidden_states
+
+    hidden_states = torch.arange(2 * 7 * 4, dtype=torch.float32).reshape(2, 7, 4)
+    backbone = FakeBackbone(hidden_states)
+    lm_head = RecordingLMHead()
+    model = SimpleNamespace(model=backbone, lm_head=lm_head)
+
+    output = forward_with_normal_backend(
+        model,
+        input_ids=torch.ones(2, 7, dtype=torch.long),
+        logits_to_keep=logits_to_keep,
+        use_cache=False,
+    )
+
+    assert backbone.kwargs == {"use_cache": False}
+    assert lm_head.input_shape == torch.Size([2, expected_length, 4])
+    assert output.logits.shape == torch.Size([2, expected_length, 4])

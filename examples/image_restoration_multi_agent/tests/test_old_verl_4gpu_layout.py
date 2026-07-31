@@ -33,26 +33,16 @@ def test_four_gpu_common_config_uses_all_cards_with_two_tp2_rollout_replicas() -
 
 
 def test_four_gpu_tool_configs_create_one_restoration_and_iqa_worker_per_card() -> None:
-    tool_configs = [
-        OLD_VERL_ROOT
-        / "config"
-        / "tool_config"
-        / "restoration_tool_config_current_iqa_4gpu.yaml",
-        OLD_VERL_ROOT
-        / "config"
-        / "tool_config"
-        / "restoration_tool_config_marginal_efficiency_4gpu.yaml",
-        *(
-            OLD_VERL_ROOT
-            / "config"
-            / "tool_config"
-            / version
-            / "restoration_tool_config_4gpu.yaml"
-            for version in ("v1", "v2", "v3")
-        ),
-    ]
+    tool_config_root = OLD_VERL_ROOT / "config" / "tool_config"
+    tool_configs = {
+        tool_config_root / "restoration_tool_config_current_iqa_4gpu.yaml": True,
+        tool_config_root / "restoration_tool_config_marginal_efficiency_4gpu.yaml": True,
+        tool_config_root / "v1" / "restoration_tool_config_4gpu.yaml": True,
+        tool_config_root / "v2" / "restoration_tool_config_4gpu.yaml": False,
+        tool_config_root / "v3" / "restoration_tool_config_4gpu.yaml": True,
+    }
 
-    for path in tool_configs:
+    for path, keep_models_loaded in tool_configs.items():
         runtime = _read_yaml(path)["tools"][0]["config"]
         assert runtime["worker_devices"] == DEVICES, path
         assert runtime["model_devices"] == DEVICES, path
@@ -61,7 +51,7 @@ def test_four_gpu_tool_configs_create_one_restoration_and_iqa_worker_per_card() 
             "agent_lightning_old_verl_restoration_4gpu"
         ), path
         assert runtime["tool_result_cache_dir"].startswith(runtime["output_dir"]), path
-        assert runtime["keep_models_loaded_between_sampling_steps"] is True, path
+        assert runtime["keep_models_loaded_between_sampling_steps"] is keep_models_loaded, path
 
 
 def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> None:

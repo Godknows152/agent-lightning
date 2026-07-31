@@ -24,8 +24,8 @@ tools:
       tool_result_cache_cleanup_interval: 256
       preload: true
       auto_unload: false
-      # Keep all four restoration replicas resident across sampling steps.
-      keep_models_loaded_between_sampling_steps: true
+      # Keep replicas resident within one rollout batch, then unload before Actor training.
+      keep_models_loaded_between_sampling_steps: false
       tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
       external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
       restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py

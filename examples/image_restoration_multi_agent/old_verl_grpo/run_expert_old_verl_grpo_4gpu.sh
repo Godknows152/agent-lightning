@@ -498,8 +498,13 @@ else:
     for field in ("worker_devices", "model_devices", "iqa_devices"):
         if runtime_config.get(field) != expected_devices:
             errors.append(f"tool {field}={runtime_config.get(field)!r}, expected {expected_devices!r}")
-    if runtime_config.get("keep_models_loaded_between_sampling_steps") is not True:
-        errors.append("four-GPU restoration models must remain loaded between sampling steps")
+    expected_keep_models_loaded = tool_config_path.parent.name != "v2"
+    if runtime_config.get("keep_models_loaded_between_sampling_steps") is not expected_keep_models_loaded:
+        errors.append(
+            "tool keep_models_loaded_between_sampling_steps="
+            f"{runtime_config.get('keep_models_loaded_between_sampling_steps')!r}, "
+            f"expected {expected_keep_models_loaded!r} for {tool_config_path.parent.name}"
+        )
     if runtime_config.get("device") != "cuda:0":
         errors.append(f"tool device={runtime_config.get('device')!r}, expected 'cuda:0'")
     if runtime_config.get("iqa_device") != "cuda:0":
