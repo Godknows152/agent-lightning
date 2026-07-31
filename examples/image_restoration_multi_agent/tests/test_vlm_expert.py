@@ -109,7 +109,7 @@ def _registry() -> ToolRegistry:
     return ToolRegistry.from_yaml(config.tools_config)
 
 
-def _parsed_tool_call(action: str = "scunet", function_name: str = "restore_image") -> list[dict[str, Any]]:
+def _parsed_tool_call(action: str = "B_scunet", function_name: str = "restore_image") -> list[dict[str, Any]]:
     return [
         {
             "id": "call-expert-test",
@@ -122,7 +122,7 @@ def _parsed_tool_call(action: str = "scunet", function_name: str = "restore_imag
     ]
 
 
-def _raw_qwen3_call(action: str = "scunet", function_name: str = "restore_image") -> str:
+def _raw_qwen3_call(action: str = "B_scunet", function_name: str = "restore_image") -> str:
     return (
         "<tool_call>\n"
         f"<function={function_name}>\n"
@@ -231,7 +231,7 @@ def test_parse_expert_response_prefers_openai_tool_calls_and_validates_arguments
     status, _, action, tool_call_id, _ = parse_expert_response(
         "raw text that must not be used",
         _registry(),
-        _parsed_tool_call("scunet"),
+        _parsed_tool_call("B_scunet"),
     )
 
     assert status == ExpertParseStatus.VALID
@@ -251,7 +251,7 @@ def test_parse_expert_response_rejects_invalid_openai_arguments_json() -> None:
 
 def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path) -> None:
     config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
-    client = _FakeClient(None, _parsed_tool_call("scunet"))
+    client = _FakeClient(None, _parsed_tool_call("B_scunet"))
     history_image_path = tmp_path / "history.png"
     history_image_path.write_bytes(b"history-image")
     latest_image_path = tmp_path / "latest.png"
@@ -295,7 +295,7 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
     assert image_url.startswith("data:image/png;base64,")
     assert base64.b64decode(image_url.split(",", 1)[1]) == b"latest-image"
     prompt_text = str(messages[-1])
-    assert "Historical tool feedback: Step 0: selected action scunet; IQA aggregate_score=0.5000." in prompt_text
+    assert "Historical tool feedback: Step 0: selected action B_scunet; IQA aggregate_score=0.5000." in prompt_text
     assert "Do not reuse any restoration action already listed in the history." in prompt_text
     assert "current_aggregate_score" not in prompt_text
     assert "raw_scores" not in prompt_text
@@ -307,7 +307,7 @@ def test_vlm_expert_uses_only_latest_image_and_full_text_history(tmp_path: Path)
 def test_vlm_expert_hides_stop_before_minimum_tool_calls(tmp_path: Path) -> None:
     config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
     registry = _registry()
-    client = _FakeClient(None, _parsed_tool_call("scunet"))
+    client = _FakeClient(None, _parsed_tool_call("B_scunet"))
     image_path = tmp_path / "latest.png"
     image_path.write_bytes(b"latest-image")
     agent = VLMRestorationExpertAgent(
@@ -334,7 +334,7 @@ def test_vlm_expert_hides_stop_before_minimum_tool_calls(tmp_path: Path) -> None
 def test_vlm_expert_first_turn_exactly_reuses_single_step_sft_prompts(tmp_path: Path) -> None:
     config = load_stage_f_example_config(EXAMPLE_DIR / "config" / "stage_f.yaml")
     registry = _registry()
-    client = _FakeClient(None, _parsed_tool_call("scunet"))
+    client = _FakeClient(None, _parsed_tool_call("B_scunet"))
     image_path = tmp_path / "initial.png"
     image_path.write_bytes(b"initial-image")
     agent = VLMRestorationExpertAgent(

@@ -59,8 +59,13 @@ class _PromptExpertName:
 
 
 class _PromptRegistry:
+    _runtime_to_model = {"scunet": "B_scunet", "stop": "stop"}
+
     def build_tool_schema(self, *, include_stop: bool) -> dict:
         return {"include_stop": include_stop}
+
+    def to_model_action(self, action: str) -> str:
+        return self._runtime_to_model[action]
 
 
 def _current_prompt_config() -> dict:
@@ -421,7 +426,7 @@ def test_successful_tool_reward_has_no_fixed_call_bonus() -> None:
     loop.max_parallel_calls = 1
     loop.processor = None
     agent_data = _agent_data()
-    agent_data.tool_calls = [FunctionCall(name="restore_image", arguments='{"action": "scunet"}')]
+    agent_data.tool_calls = [FunctionCall(name="restore_image", arguments='{"action": "B_scunet"}')]
     agent_data.extra_fields["_terminate_after_tool"] = True
 
     state = asyncio.run(loop._handle_processing_tools_state(agent_data))
@@ -456,7 +461,7 @@ def test_next_restoration_prompt_reuses_initial_schema_without_reinjecting_syste
     agent_data.assistant_turns = 0
     agent_data.messages, _ = loop._build_current_restoration_decision_prompt(agent_data)
     agent_data.assistant_turns = 1
-    agent_data.tool_calls = [FunctionCall(name="restore_image", arguments='{"action": "scunet"}')]
+    agent_data.tool_calls = [FunctionCall(name="restore_image", arguments='{"action": "B_scunet"}')]
 
     state = asyncio.run(loop._handle_processing_tools_state(agent_data))
 
@@ -464,6 +469,7 @@ def test_next_restoration_prompt_reuses_initial_schema_without_reinjecting_syste
     assert captured["tools"] is None
     assert captured["remove_system_prompt"] is True
     assert [message["role"] for message in captured["messages"]] == ["user"]
+    assert "selected action B_scunet" in captured["messages"][0]["content"]
     assert "The stop action is now available" in captured["messages"][0]["content"]
     assert [message["role"] for message in agent_data.messages] == ["system", "user", "user"]
     assert sum(message["role"] == "system" for message in agent_data.messages) == 1

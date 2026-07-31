@@ -55,10 +55,10 @@ def test_expert_tool_schema_embeds_action_descriptions_from_registry() -> None:
     descriptions = action_schema["description"]
 
     assert (
-        "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint."
+        "- N_focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint."
         in descriptions
     )
-    assert "- hvicidnet: HVI-CIDNet low-light image enhancement model." in descriptions
+    assert "- D_hvicidnet: HVI-CIDNet low-light image enhancement model." in descriptions
     assert (
         "- stop: Stop the trajectory and keep the historical best restored image."
         in descriptions
@@ -75,7 +75,7 @@ def test_single_step_prompt_hides_stop_description() -> None:
     action = cast(dict[str, object], properties["action"])
     assert "stop" not in action["enum"]
     assert "- stop:" not in str(action["description"])
-    assert "- focalnet_dehaze:" in str(action["description"])
+    assert "- N_focalnet_dehaze:" in str(action["description"])
     assert "<tools>" not in prompt
     assert "<tool_descriptions>" not in prompt
 

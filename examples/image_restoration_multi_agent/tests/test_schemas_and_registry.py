@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from config import load_example_config
+from exceptions import UnknownActionError
 from pydantic import ValidationError
 from schemas import DegradationType, DiagnosisResult, ExpertName
 from tool_registry import RESTORE_FUNCTION_NAME, STOP_ACTION, ToolRegistry
@@ -28,28 +29,28 @@ def test_tool_schema_contains_all_actions_and_stop() -> None:
 
     assert schema["function"]["name"] == RESTORE_FUNCTION_NAME
     action_schema = schema["function"]["parameters"]["properties"]["action"]
-    assert action_schema["enum"] == list(registry.actions)
+    assert action_schema["enum"] == list(registry.model_actions)
     assert action_schema["enum"][-1] == STOP_ACTION
-    assert "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in action_schema["description"]
+    assert "- N_focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in action_schema["description"]
     assert "- stop: Stop the trajectory and keep the historical best restored image." in action_schema["description"]
     assert schema["function"]["parameters"]["additionalProperties"] is False
-    assert set(registry.actions[:-1]) == {
-        "real_esrgan",
-        "scunet",
-        "retinexformer_fivek",
-        "hvicidnet",
-        "lightdiff",
-        "turbo_rain",
-        "s2former",
-        "idt",
-        "ridcp",
-        "kanet",
-        "turbo_snow",
-        "snowmaster",
-        "nafnet_denoise",
-        "focalnet_dehaze",
-        "focalnet_desnow",
-        "mb_taylorformer_dehaze",
+    assert set(registry.model_actions[:-1]) == {
+        "A_real_esrgan",
+        "B_scunet",
+        "C_retinexformer_fivek",
+        "D_hvicidnet",
+        "E_lightdiff",
+        "F_turbo_rain",
+        "G_s2former",
+        "H_idt",
+        "I_ridcp",
+        "J_kanet",
+        "K_turbo_snow",
+        "L_snowmaster",
+        "M_nafnet_denoise",
+        "N_focalnet_dehaze",
+        "O_focalnet_desnow",
+        "P_mb_taylorformer_dehaze",
     }
     assert all(registry.get_tool(action).runtime is not None for action in registry.actions[:-1])
 
@@ -61,7 +62,7 @@ def test_tool_schema_can_hide_stop_for_early_training_turns() -> None:
 
     action_enum = schema["function"]["parameters"]["properties"]["action"]["enum"]
     assert STOP_ACTION not in action_enum
-    assert action_enum == list(registry.actions[:-1])
+    assert action_enum == list(registry.model_actions[:-1])
 
 
 def test_tool_descriptions_follow_stop_visibility() -> None:
@@ -71,9 +72,19 @@ def test_tool_descriptions_follow_stop_visibility() -> None:
     full_descriptions = registry.build_tool_descriptions()
     early_descriptions = registry.build_tool_descriptions(include_stop=False)
 
-    assert "- focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in full_descriptions
+    assert "- N_focalnet_dehaze: FocalNet image dehazing model with the ITS checkpoint." in full_descriptions
     assert "- stop: Stop the trajectory and keep the historical best restored image." in full_descriptions
     assert "- stop:" not in early_descriptions
+
+
+def test_model_action_mapping_is_reversible_and_rejects_canonical_model_output() -> None:
+    config = load_example_config(EXAMPLE_DIR / "config" / "default.yaml")
+    registry = ToolRegistry.from_yaml(config.tools_config)
+
+    assert registry.to_model_action("scunet") == "B_scunet"
+    assert registry.to_runtime_action("B_scunet") == "scunet"
+    with pytest.raises(UnknownActionError):
+        registry.to_runtime_action("scunet")
 
 
 def test_diagnosis_rejects_mismatched_route() -> None:

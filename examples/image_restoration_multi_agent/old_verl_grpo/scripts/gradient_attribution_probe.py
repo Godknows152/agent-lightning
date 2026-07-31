@@ -12,13 +12,13 @@ gradient_attribution_probe.py
   python gradient_attribution_probe.py
 
   # 指定模型路径和动作
-  python gradient_attribution_probe.py --model_path /path/to/Qwen3.5-9B --action focalnet_dehaze
+  python gradient_attribution_probe.py --model_path /path/to/Qwen3.5-9B --action N_focalnet_dehaze
 
   # 从文件读取生成的文本（粘贴一条rollout的thinking+tool_call内容）
-  python gradient_attribution_probe.py --text_file my_rollout.txt --action focalnet_dehaze
+  python gradient_attribution_probe.py --text_file my_rollout.txt --action N_focalnet_dehaze
 
   # 使用 LoRA adapter（训练过的版本）
-  python gradient_attribution_probe.py --lora_path /path/to/lora --action nafnet_denoise
+  python gradient_attribution_probe.py --lora_path /path/to/lora --action M_nafnet_denoise
 
   # 保存归因热图为 PNG
   python gradient_attribution_probe.py --save_plot attribution.png
@@ -34,15 +34,15 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 DEFAULT_MODEL_PATH = "/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
 DEFAULT_LORA_PATH = (
     "/home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/"
-    "image_restoration_experts/outputs/qwen3_5_0721/format_cold_start/fog"
+    "image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/fog"
 )
 
 # ── 16 个合法动作 ─────────────────────────────────────────────────────────────
 VALID_ACTIONS = [
-    "real_esrgan", "scunet", "retinexformer_fivek", "hvicidnet", "lightdiff",
-    "turbo_rain", "s2former", "idt", "ridcp", "kanet", "turbo_snow",
-    "snowmaster", "nafnet_denoise", "focalnet_dehaze", "focalnet_desnow",
-    "mb_taylorformer_dehaze",
+    "A_real_esrgan", "B_scunet", "C_retinexformer_fivek", "D_hvicidnet", "E_lightdiff",
+    "F_turbo_rain", "G_s2former", "H_idt", "I_ridcp", "J_kanet", "K_turbo_snow",
+    "L_snowmaster", "M_nafnet_denoise", "N_focalnet_dehaze", "O_focalnet_desnow",
+    "P_mb_taylorformer_dehaze",
 ]
 
 # ── 内置示例文本（可替换为真实 rollout 内容）────────────────────────────────
@@ -53,14 +53,20 @@ with reduced visibility and a milky white overlay across the entire scene. \
 Distant objects are barely visible and the contrast is very low.
 
 For fog and haze degradation, I need to choose the right tool. The available \
-dehaze tools are focalnet_dehaze and mb_taylorformer_dehaze. FocalNet architecture \
+dehaze tools are N_focalnet_dehaze and P_mb_taylorformer_dehaze. FocalNet architecture \
 has attention mechanisms specifically designed for non-uniform haze patterns, \
 while MB-TaylorFormer uses a multi-scale approach.
 
-Given the uniform haze distribution in this image, I will start with focalnet_dehaze \
+Given the uniform haze distribution in this image, I will start with N_focalnet_dehaze \
 as it tends to perform well on standard fog conditions.
 </think>
-<tool_call>{"action": "focalnet_dehaze"}</tool_call>\
+<tool_call>
+<function=restore_image>
+<parameter=action>
+N_focalnet_dehaze
+</parameter>
+</function>
+</tool_call>\
 """
 
 
@@ -329,7 +335,7 @@ def main() -> None:
                         help="直接传入生成的文本（thinking + tool_call）")
     parser.add_argument("--text_file", default=None,
                         help="从文件读取生成的文本")
-    parser.add_argument("--action", default="focalnet_dehaze",
+    parser.add_argument("--action", default="N_focalnet_dehaze",
                         choices=VALID_ACTIONS,
                         help="该文本中选择的动作名")
     parser.add_argument("--device", default="cuda:0",

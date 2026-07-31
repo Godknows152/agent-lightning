@@ -42,26 +42,26 @@ FIRST_TURN_RESTORATION_ACTIONS: tuple[str, ...] = (
     "mb_taylorformer_dehaze",
 )
 
-# Exact action-name surfaces used by the 0721 SFT thinking targets. Sequence
+# Exact model-facing action names used by the 0731 SFT thinking targets. Sequence
 # probabilities are assigned to these complete strings, not just their first
 # token and not the canonical tool-schema values.
 SFT_THINKING_ACTION_SURFACES: Mapping[str, str] = {
-    "real_esrgan": "Real-ESRGAN",
-    "scunet": "SCUNet",
-    "retinexformer_fivek": "Retinexformer-FiveK",
-    "hvicidnet": "HVI-CIDNet",
-    "lightdiff": "LightenDiffusion",
-    "turbo_rain": "Turbo-Rain",
-    "s2former": "S2Former",
-    "idt": "IDT",
-    "ridcp": "RIDCP",
-    "kanet": "KA-Net",
-    "turbo_snow": "Turbo-Snow",
-    "snowmaster": "SnowMaster",
-    "nafnet_denoise": "NAFNet-Denoise",
-    "focalnet_dehaze": "FocalNet-Dehaze",
-    "focalnet_desnow": "FocalNet-Desnow",
-    "mb_taylorformer_dehaze": "MB-TaylorFormer-Dehaze",
+    "real_esrgan": "A_real_esrgan",
+    "scunet": "B_scunet",
+    "retinexformer_fivek": "C_retinexformer_fivek",
+    "hvicidnet": "D_hvicidnet",
+    "lightdiff": "E_lightdiff",
+    "turbo_rain": "F_turbo_rain",
+    "s2former": "G_s2former",
+    "idt": "H_idt",
+    "ridcp": "I_ridcp",
+    "kanet": "J_kanet",
+    "turbo_snow": "K_turbo_snow",
+    "snowmaster": "L_snowmaster",
+    "nafnet_denoise": "M_nafnet_denoise",
+    "focalnet_dehaze": "N_focalnet_dehaze",
+    "focalnet_desnow": "O_focalnet_desnow",
+    "mb_taylorformer_dehaze": "P_mb_taylorformer_dehaze",
 }
 
 if set(SFT_THINKING_ACTION_SURFACES) != set(FIRST_TURN_RESTORATION_ACTIONS):
@@ -71,13 +71,7 @@ if set(SFT_THINKING_ACTION_SURFACES) != set(FIRST_TURN_RESTORATION_ACTIONS):
 def action_match_variants(action: str) -> tuple[str, ...]:
     """Return stable thinking-text aliases for one canonical action."""
 
-    candidates = (
-        SFT_THINKING_ACTION_SURFACES[action],
-        action,
-        action.replace("_", "-"),
-        action.replace("_", " "),
-    )
-    return tuple(dict.fromkeys(candidates))
+    return (SFT_THINKING_ACTION_SURFACES[action],)
 
 
 def find_first_restoration_action(text: str) -> tuple[int, str] | None:

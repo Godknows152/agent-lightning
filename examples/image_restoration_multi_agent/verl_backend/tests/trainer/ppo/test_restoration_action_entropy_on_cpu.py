@@ -13,14 +13,17 @@
 # limitations under the License.
 
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+import yaml
 from tensordict import TensorDict
 
 from verl.trainer.ppo.restoration_action_entropy import (
     FIRST_TURN_RESTORATION_ACTIONS,
+    SFT_THINKING_ACTION_SURFACES,
     action_sequence_entropies,
     find_first_restoration_action,
 )
@@ -29,6 +32,18 @@ from verl.workers.engine.fsdp.transformer_impl import (
     FSDPEngineWithLMHead,
     _build_decision_action_candidate_chunk,
 )
+
+
+def test_action_entropy_surfaces_match_shared_tool_registry() -> None:
+    tools_config = Path(__file__).resolve().parents[4] / "config" / "tools.yaml"
+    payload = yaml.safe_load(tools_config.read_text(encoding="utf-8"))
+    registry_surfaces = {
+        item["name"]: item["model_name"]
+        for item in payload["tools"]
+        if item.get("enabled", True)
+    }
+
+    assert dict(SFT_THINKING_ACTION_SURFACES) == registry_surfaces
 
 
 def test_complete_action_entropy_is_normalized_and_differentiable():
@@ -60,9 +75,9 @@ def test_uniform_complete_action_distribution_has_unit_normalized_entropy():
 @pytest.mark.parametrize(
     ("surface", "expected_action"),
     [
-        ("I will use HVI-CIDNet next.", "hvicidnet"),
-        ("Choose LightenDiffusion for this image.", "lightdiff"),
-        ("Apply KA-Net before reassessing.", "kanet"),
+        ("I will use D_hvicidnet next.", "hvicidnet"),
+        ("Choose E_lightdiff for this image.", "lightdiff"),
+        ("Apply J_kanet before reassessing.", "kanet"),
     ],
 )
 def test_detector_recognizes_exact_sft_action_surfaces(surface, expected_action):

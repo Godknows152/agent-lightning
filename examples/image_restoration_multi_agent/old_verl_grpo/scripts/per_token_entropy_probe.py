@@ -7,9 +7,9 @@ The probe reports two different distributions:
 * ``sampling_entropy`` is entropy after temperature, multimodal-token bias,
   top-k, and top-p. This is the distribution sampled by this standalone probe.
 * ``action_sequence_entropy`` is categorical entropy over the normalized
-  probabilities of the complete first-turn legal action strings. It separates
-  actions that share their first token, such as ``turbo_rain`` and
-  ``turbo_snow``.
+  probabilities of the complete first-turn legal model-facing action strings.
+  The 0731 action vocabulary also gives every legal action a distinct first
+  branch token.
 
 The prompt, tool schema, image bytes, and multimodal message structure come from
 the same repository sources as ``ToolAgentLoop``. No temporary prompt/schema
@@ -70,7 +70,7 @@ from verl.workers.rollout.utils import get_multimodal_special_token_ids  # noqa:
 DEFAULT_MODEL_PATH = "/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
 DEFAULT_LORA_PATH = (
     "/home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/"
-    "qwen3_5_0721/format_cold_start/fog"
+    "qwen3_5_0731/format_cold_start/fog"
 )
 DEFAULT_DATA_PATH = str(OLD_VERL_ROOT / "data" / "fog_train.parquet")
 DEFAULT_TOOL_REGISTRY_PATH = str(IMAGE_RESTORATION_ROOT / "config" / "tools.yaml")
@@ -463,7 +463,7 @@ def score_action_sequence_distribution(
     return {
         "definition": "categorical entropy over normalized complete action-string sequence probabilities",
         "temperature": float(temperature),
-        "surface_form_source": "0721 SFT thinking targets",
+        "surface_form_source": "0731 first-token-distinct SFT thinking targets",
         "candidate_leading_text": candidate_leading_text,
         "action_count": action_count,
         "maximum_entropy": maximum_entropy,

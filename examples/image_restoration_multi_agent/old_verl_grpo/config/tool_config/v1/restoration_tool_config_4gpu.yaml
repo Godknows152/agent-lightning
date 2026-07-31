@@ -65,22 +65,22 @@ tools:
             action:
               type: "string"
               enum:
-                - real_esrgan
-                - scunet
-                - retinexformer_fivek
-                - hvicidnet
-                - lightdiff
-                - turbo_rain
-                - s2former
-                - idt
-                - ridcp
-                - kanet
-                - turbo_snow
-                - snowmaster
-                - nafnet_denoise
-                - focalnet_dehaze
-                - focalnet_desnow
-                - mb_taylorformer_dehaze
+                - A_real_esrgan
+                - B_scunet
+                - C_retinexformer_fivek
+                - D_hvicidnet
+                - E_lightdiff
+                - F_turbo_rain
+                - G_s2former
+                - H_idt
+                - I_ridcp
+                - J_kanet
+                - K_turbo_snow
+                - L_snowmaster
+                - M_nafnet_denoise
+                - N_focalnet_dehaze
+                - O_focalnet_desnow
+                - P_mb_taylorformer_dehaze
                 - stop
           required:
             - action

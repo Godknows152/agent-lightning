@@ -108,7 +108,7 @@ LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
 TOOL_REGISTRY_PATH="${OLD_VERL_TOOL_REGISTRY_PATH:-${EXAMPLE_DIR}/config/tools.yaml}"
 INTERMEDIATE_DIR="${OLD_VERL_INTERMEDIATE_DIR:-/home/LXJ/tmp/agent_lightning_old_verl_restoration}"
 DEFAULT_MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
-DEFAULT_SFT_ADAPTER_ROOT="${ROOT}/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0721/format_cold_start"
+DEFAULT_SFT_ADAPTER_ROOT="${ROOT}/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start"
 
 PYTHON_BIN="${PYTHON_BIN:-/home/LXJ/anaconda3/envs/verl/bin/python}"
 RAY_BIN="${RAY_BIN:-/home/LXJ/anaconda3/envs/verl/bin/ray}"

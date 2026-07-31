@@ -274,22 +274,27 @@ def _resolve_path(value: str | None, *, base_dir: Path) -> str | None:
     return str(path.resolve())
 
 
-def _load_tool_runtime_config(tool_registry_path: str | None) -> tuple[set[str], dict[str, dict[str, Any]]]:
-    """Load enabled current-framework actions and candidate runtimes from tools.yaml."""
+def _load_tool_runtime_config(
+    tool_registry_path: str | None,
+) -> tuple[set[str], dict[str, dict[str, Any]], dict[str, str]]:
+    """Load canonical runtimes and model-facing action mappings from tools.yaml."""
 
     if not tool_registry_path:
-        return set(ALLOWED_ACTIONS), {}
+        actions = set(ALLOWED_ACTIONS) | {"stop"}
+        return actions, {}, {action: action for action in actions}
 
     registry_path = Path(tool_registry_path).expanduser().resolve()
     if not registry_path.is_file():
         logger.warning("Tool registry path does not exist: %s", registry_path)
-        return set(ALLOWED_ACTIONS), {}
+        actions = set(ALLOWED_ACTIONS) | {"stop"}
+        return actions, {}, {action: action for action in actions}
 
     payload = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"tool registry must be a mapping: {registry_path}")
 
     actions = {"stop"}
+    model_to_runtime = {"stop": "stop"}
     candidate_runtimes: dict[str, dict[str, Any]] = {}
     for item in payload.get("tools", []):
         if not isinstance(item, dict) or item.get("enabled", True) is False:
@@ -297,11 +302,17 @@ def _load_tool_runtime_config(tool_registry_path: str | None) -> tuple[set[str],
         name = str(item.get("name", "")).strip()
         if not name:
             continue
+        model_name = str(item.get("model_name", name)).strip()
+        if not model_name:
+            raise ValueError(f"tool {name!r} has an empty model_name")
+        if model_name in model_to_runtime:
+            raise ValueError(f"duplicate model-facing restoration action: {model_name}")
         actions.add(name)
+        model_to_runtime[model_name] = name
         runtime = item.get("runtime")
         if isinstance(runtime, dict) and runtime.get("adapter") == "candidate":
             candidate_runtimes[name] = dict(runtime)
-    return actions, candidate_runtimes
+    return actions, candidate_runtimes, model_to_runtime
 
 
 def get_toolkit(
@@ -924,10 +935,18 @@ class RestorationTool(BaseTool):
             base_dir=example_root,
         )
         self.candidate_timeout_seconds = float(config.get("candidate_timeout_seconds", 600.0))
-        self.allowed_actions, self.candidate_tool_runtimes = _load_tool_runtime_config(self.tool_registry_path)
+        (
+            self.allowed_actions,
+            self.candidate_tool_runtimes,
+            self.model_to_runtime_actions,
+        ) = _load_tool_runtime_config(self.tool_registry_path)
         if not self.allowed_actions:
             self.allowed_actions = set(ALLOWED_ACTIONS)
         self.allowed_actions.add("stop")
+        self.runtime_to_model_actions = {
+            runtime_action: model_action
+            for model_action, runtime_action in self.model_to_runtime_actions.items()
+        }
 
         project_root = Path(__file__).resolve().parent.parent.parent
         if self.iqa_stats_path and not os.path.isabs(self.iqa_stats_path):
@@ -1503,12 +1522,14 @@ class RestorationTool(BaseTool):
         Args:
             degradation_type: Optional degradation category for affinity hints.
         """
-        history_str = " → ".join(actions_history) if actions_history else "none"
+        model_action = self.runtime_to_model_actions.get(action, action)
+        model_history = [self.runtime_to_model_actions.get(item, item) for item in actions_history]
+        history_str = " → ".join(model_history) if model_history else "none"
         repeat_tool_type_key = repeat_tool_type_key or action
 
         def _repeat_feedback_line(final_iqa_mode: bool) -> str:
             if repeat_tool_type_key == action:
-                prefix = f"Trajectory uses of '{action}': {same_type_action_count}."
+                prefix = f"Trajectory uses of '{model_action}': {same_type_action_count}."
             else:
                 prefix = f"Trajectory uses of {repeat_tool_type_key} tools: {same_type_action_count}."
             suffix = (
@@ -1521,7 +1542,7 @@ class RestorationTool(BaseTool):
         if self.reward_mode == REWARD_MODE_MARGINAL_EFFICIENCY_V1:
             break_even_gain = self.tool_call_cost / self.reward_scale if self.reward_scale > 0.0 else float("inf")
             lines = [
-                f"Step {step}: Applied '{action}'.",
+                f"Step {step}: Applied '{model_action}'.",
                 f"Step reward: {reward:.4f}",
                 f"Weighted marginal improvement: {marginal:.4f}",
                 f"Tool-call cost: {self.tool_call_cost:.4f}",
@@ -1541,7 +1562,7 @@ class RestorationTool(BaseTool):
             best_identity_delta = identity_delta if best_identity_delta is None else best_identity_delta
             best_improvement = 0.0 if best_improvement is None else best_improvement
             lines = [
-                f"Step {step}: Applied '{action}'.",
+                f"Step {step}: Applied '{model_action}'.",
                 f"Step reward: {reward:.4f}",
                 f"Current improvement over original image: {identity_delta:.4f}",
                 f"Trajectory-best improvement over original image: {best_identity_delta:.4f}",
@@ -1575,7 +1596,7 @@ class RestorationTool(BaseTool):
             return "\n".join(lines)
 
         lines = [
-            f"Step {step}: Applied '{action}'.",
+            f"Step {step}: Applied '{model_action}'.",
             f"Step reward: {reward:.4f}",
             f"Weighted marginal improvement: {marginal:.4f}",
             f"Improvement over original image: {identity_delta:.4f}",
@@ -1672,21 +1693,23 @@ class RestorationTool(BaseTool):
 
         Args:
             instance_id: The instance identifier returned by ``create``.
-            parameters: Dict with key ``action`` (e.g. ``'ridcp'``, ``'scunet'``).
+            parameters: Dict with one model-facing ``action`` schema value.
 
         Returns:
             (ToolResponse, step_reward, metrics_dict)
         """
-        action = parameters.get("action", "").lower().strip()
+        model_action = str(parameters.get("action", "")).strip()
+        action = self.model_to_runtime_actions.get(model_action)
 
         allowed_actions = getattr(self, "allowed_actions", ALLOWED_ACTIONS)
         instance = self._instance_dict.get(instance_id)
-        if action not in allowed_actions:
-            error_msg = f"Invalid action '{action}'. " f"Allowed: {', '.join(sorted(allowed_actions))}"
+        if action is None or action not in allowed_actions:
+            allowed_model_actions = sorted(self.model_to_runtime_actions)
+            error_msg = f"Invalid action '{model_action}'. Allowed: {', '.join(allowed_model_actions)}"
             if instance is not None:
                 self._append_trajectory_call(
                     instance,
-                    action,
+                    model_action,
                     status="error",
                     restoration_step=int(instance.get("step", 0)),
                     reward=FAILURE_REWARD,
@@ -1696,7 +1719,11 @@ class RestorationTool(BaseTool):
             return (
                 ToolResponse(text=error_msg),
                 FAILURE_REWARD,
-                {"error": "invalid_action", "skip_tool_call_reward": True},
+                {
+                    "model_action": model_action,
+                    "error": "invalid_action",
+                    "skip_tool_call_reward": True,
+                },
             )
 
         if instance is None:
@@ -1746,6 +1773,7 @@ class RestorationTool(BaseTool):
                 reward,
                 {
                     "action": "stop",
+                    "model_action": model_action,
                     "step": step,
                     "reward_mode": self.reward_mode,
                     "identity_delta": identity_delta,
@@ -1939,6 +1967,7 @@ class RestorationTool(BaseTool):
             )
             metrics = {
                 "action": action,
+                "model_action": model_action,
                 "step": instance["step"],
                 "reward": reward,
                 "reward_mode": self.reward_mode,

@@ -87,12 +87,15 @@ class _CharacterTokenizer:
 
 def test_decision_point_maps_exact_action_offset_and_ignores_stop(probe) -> None:
     tokenizer = _CharacterTokenizer()
-    text = "The image is hazy. I will use RIDCP now.\n</think>"
+    text = "The image is hazy. I will use I_ridcp now.\n</think>"
 
-    position, action = probe.find_decision_point(text, list(range(len(text))), tokenizer)
+    position, action, leading_text = probe.find_decision_point(
+        text, list(range(len(text))), tokenizer
+    )
 
     assert action == "ridcp"
-    assert position == text.lower().index("ridcp")
+    assert position == text.index("I_ridcp")
+    assert leading_text == ""
 
     stop_text = "I should stop now.\n</think>"
-    assert probe.find_decision_point(stop_text, list(range(len(stop_text))), tokenizer) == (-1, None)
+    assert probe.find_decision_point(stop_text, list(range(len(stop_text))), tokenizer) == (-1, None, "")

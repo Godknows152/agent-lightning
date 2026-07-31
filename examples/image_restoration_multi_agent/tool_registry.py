@@ -33,6 +33,7 @@ class ToolDefinition(StrictModel):
     """One registered restoration action."""
 
     name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    model_name: str | None = Field(default=None, min_length=1, pattern=r"^[A-Za-z][A-Za-z0-9_]*$")
     description: str = Field(min_length=1)
     enabled: bool = True
     runtime: ToolRuntime | None = None
@@ -66,6 +67,24 @@ class ToolRegistry:
     def __init__(self, config: ToolRegistryConfig) -> None:
         self.config = config
         self._tools = {tool.name: tool for tool in config.tools if tool.enabled}
+        self._runtime_to_model = {
+            tool.name: tool.model_name or tool.name for tool in self._tools.values()
+        }
+        self._runtime_to_model[STOP_ACTION] = STOP_ACTION
+        self._model_to_runtime = {
+            model_action: runtime_action
+            for runtime_action, model_action in self._runtime_to_model.items()
+        }
+        if len(self._model_to_runtime) != len(self._runtime_to_model):
+            raise ValueError("model-facing restoration action names must be unique")
+
+        explicit_model_names = [tool.model_name for tool in self._tools.values()]
+        if any(explicit_model_names):
+            if not all(explicit_model_names):
+                raise ValueError("either every enabled restoration tool must define model_name or none may define it")
+            initials = [action[0] for action in self._model_to_runtime]
+            if len(initials) != len(set(initials)):
+                raise ValueError("model-facing restoration actions must have unique first characters")
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> ToolRegistry:
@@ -94,11 +113,36 @@ class ToolRegistry:
 
         return (*self._tools.keys(), STOP_ACTION)
 
+    @property
+    def model_actions(self) -> tuple[str, ...]:
+        """Return the action values exposed to the model in tool schemas."""
+
+        return tuple(self._runtime_to_model[action] for action in self.actions)
+
     def validate_action(self, action: str) -> None:
         """Reject actions that are not available to every expert."""
 
         if action not in self.actions:
             raise UnknownActionError(f"unknown restoration action: {action}")
+
+    def to_model_action(self, action: str) -> str:
+        """Translate one canonical runtime action to its model-facing name."""
+
+        self.validate_action(action)
+        return self._runtime_to_model[action]
+
+    def to_runtime_action(self, model_action: str) -> str:
+        """Translate a model-facing schema value to its canonical runtime action."""
+
+        try:
+            return self._model_to_runtime[model_action]
+        except KeyError as error:
+            raise UnknownActionError(f"unknown restoration action: {model_action}") from error
+
+    def validate_model_action(self, model_action: str) -> None:
+        """Reject values that are not in the model-facing action vocabulary."""
+
+        self.to_runtime_action(model_action)
 
     def get_tool(self, action: str) -> ToolDefinition:
         """Return one enabled tool definition after validating its action."""
@@ -109,9 +153,10 @@ class ToolRegistry:
         return self._tools[action]
 
     def build_tool_schema(self, *, include_stop: bool = True) -> dict[str, Any]:
-        """Build the canonical OpenAI-compatible restore_image tool definition."""
+        """Build the model-facing OpenAI-compatible restore_image definition."""
 
-        actions = list(self.actions if include_stop else self._tools.keys())
+        runtime_actions = self.actions if include_stop else tuple(self._tools)
+        actions = [self.to_model_action(action) for action in runtime_actions]
         description = (
             "Apply exactly one registered restoration action or stop the trajectory."
             if include_stop
@@ -144,7 +189,10 @@ class ToolRegistry:
     def build_tool_descriptions(self, *, include_stop: bool = True) -> str:
         """Build a compact action-to-purpose list for model-facing prompts."""
 
-        lines = [f"- {tool.name}: {tool.description}" for tool in self._tools.values()]
+        lines = [
+            f"- {self.to_model_action(tool.name)}: {tool.description}"
+            for tool in self._tools.values()
+        ]
         if include_stop:
             lines.append("- stop: Stop the trajectory and keep the historical best restored image.")
         return "\n".join(lines)

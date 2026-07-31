@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from exceptions import UnknownActionError
 from schemas import (
     ExpertDecisionRecord,
     ExpertDecisionSource,
@@ -43,9 +44,17 @@ class ReplayExpertAgent:
     ) -> ReplayExpertAgent:
         """Encode actions as native Qwen3 calls that pass through strict parsing."""
 
+        responses: list[str] = []
+        for action in actions:
+            try:
+                model_action = tool_registry.to_model_action(action)
+            except UnknownActionError:
+                model_action = action
+            responses.append(cls.qwen3_response(model_action))
+
         return cls(
             expert_name,
-            [cls.qwen3_response(action) for action in actions],
+            responses,
             tool_registry,
             resource_name=resource_name,
         )

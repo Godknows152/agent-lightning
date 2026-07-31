@@ -1,42 +1,55 @@
 registry_name: all_restoration_tools
 tools:
   - name: real_esrgan
+    model_name: A_real_esrgan
     description: Real-ESRGAN general enhancement and super-resolution model.
     runtime: {adapter: verl_toolkit, model: real_esrgan}
   - name: scunet
+    model_name: B_scunet
     description: SCUNet blind real-image denoising model.
     runtime: {adapter: verl_toolkit, model: scunet}
   - name: retinexformer_fivek
+    model_name: C_retinexformer_fivek
     description: Retinexformer low-light enhancement model trained on FiveK.
     runtime: {adapter: verl_toolkit, model: retinexformer_fivek}
   - name: hvicidnet
+    model_name: D_hvicidnet
     description: HVI-CIDNet low-light image enhancement model.
     runtime: {adapter: verl_toolkit, model: hvicidnet}
   - name: lightdiff
+    model_name: E_lightdiff
     description: LightenDiffusion low-light image enhancement model.
     runtime: {adapter: verl_toolkit, model: lightdiff}
   - name: turbo_rain
+    model_name: F_turbo_rain
     description: Img2img-turbo rain-removal model.
     runtime: {adapter: verl_toolkit, model: turbo_rain}
   - name: s2former
+    model_name: G_s2former
     description: UDR-S2Former rain-removal model.
     runtime: {adapter: verl_toolkit, model: s2former}
   - name: idt
+    model_name: H_idt
     description: IDT image deraining model.
     runtime: {adapter: verl_toolkit, model: idt}
   - name: ridcp
+    model_name: I_ridcp
     description: RIDCP image dehazing model.
     runtime: {adapter: verl_toolkit, model: ridcp}
   - name: kanet
+    model_name: J_kanet
     description: KA-Net image dehazing model.
     runtime: {adapter: verl_toolkit, model: kanet}
   - name: turbo_snow
+    model_name: K_turbo_snow
     description: Img2img-turbo snow-removal model.
     runtime: {adapter: verl_toolkit, model: turbo_snow}
   - name: snowmaster
+    model_name: L_snowmaster
     description: SnowMaster image desnowing model.
     runtime: {adapter: verl_toolkit, model: snowmaster}
   - name: nafnet_denoise
+    model_name: M_nafnet_denoise
     description: NAFNet SIDD image denoising model.
     runtime:
       adapter: candidate
@@ -44,6 +57,7 @@ tools:
       repo: restoration_repos/NAFNet
       checkpoint: restoration_repos/NAFNet/experiments/pretrained_models/NAFNet-SIDD-width64.pth
   - name: focalnet_dehaze
+    model_name: N_focalnet_dehaze
     description: FocalNet image dehazing model with the ITS checkpoint.
     runtime:
       adapter: candidate
@@ -51,6 +65,7 @@ tools:
       repo: restoration_repos/FocalNet
       checkpoint: restoration_repos/FocalNet/checkpoints/model_its.pkl
   - name: focalnet_desnow
+    model_name: O_focalnet_desnow
     description: FocalNet image desnowing model with the CSD checkpoint.
     runtime:
       adapter: candidate
@@ -58,6 +73,7 @@ tools:
       repo: restoration_repos/FocalNet
       checkpoint: restoration_repos/FocalNet/checkpoints/model_csd.pkl
   - name: mb_taylorformer_dehaze
+    model_name: P_mb_taylorformer_dehaze
     description: MB-TaylorFormer-B image dehazing model with the OTS checkpoint.
     runtime:
       adapter: candidate

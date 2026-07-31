@@ -170,11 +170,11 @@ def parse_expert_response(
             tool_call_id,
             f"unexpected argument fields: {', '.join(extra_fields)}",
         )
-    action = arguments.get("action")
-    if not isinstance(action, str) or not action:
+    model_action = arguments.get("action")
+    if not isinstance(model_action, str) or not model_action:
         return ExpertParseStatus.MISSING_FIELD, payload, None, tool_call_id, "action must be a non-empty string"
     try:
-        tool_registry.validate_action(action)
+        action = tool_registry.to_runtime_action(model_action)
     except UnknownActionError as parse_error:
         return ExpertParseStatus.UNKNOWN_ACTION, payload, None, tool_call_id, str(parse_error)
     return ExpertParseStatus.VALID, payload, action, tool_call_id, None
@@ -200,7 +200,7 @@ def _generated_token_ids(first_choice: dict[str, Any]) -> list[int] | None:
     return _int_list(provider_fields.get("token_ids"))
 
 
-def _history_feedback_text(state: RestorationTrajectoryState) -> str:
+def _history_feedback_text(state: RestorationTrajectoryState, tool_registry: ToolRegistry) -> str:
     """Build the natural-language tool feedback shown to the expert."""
 
     lines: list[str] = []
@@ -211,7 +211,9 @@ def _history_feedback_text(state: RestorationTrajectoryState) -> str:
             if evaluation is not None
             else "IQA score unavailable"
         )
-        lines.append(f"Step {step.step_index}: selected action {step.expert_decision.action}; {score_text}.")
+        action = step.expert_decision.action
+        model_action = tool_registry.to_model_action(action) if action is not None else "unknown"
+        lines.append(f"Step {step.step_index}: selected action {model_action}; {score_text}.")
     if not lines:
         return "No historical restoration actions have been executed yet."
     return "Historical tool feedback: " + " ".join(lines)
@@ -270,7 +272,7 @@ class VLMRestorationExpertAgent:
                     min_stop_tool_calls=self.min_stop_tool_calls,
                 )
                 state_prompt = build_expert_state_prompt(
-                    history_feedback=_history_feedback_text(state),
+                    history_feedback=_history_feedback_text(state, self.tool_registry),
                 )
             messages: list[dict[str, Any]] = [
                 {"role": "system", "content": system_prompt},

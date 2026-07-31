@@ -18,8 +18,8 @@ data:
 actor_rollout_ref:
   model:
     path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
-    # Actor 从 0721 rain SFT LoRA 初始化并继续更新；冻结参考策略加载同一份初始 LoRA。
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0721/format_cold_start/rain
+    # Actor 从 0731 rain SFT LoRA 初始化并继续更新；冻结参考策略加载同一份初始 LoRA。
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/rain
   rollout:
     multi_turn:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_4gpu.yaml

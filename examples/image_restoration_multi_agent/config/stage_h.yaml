@@ -36,19 +36,19 @@ expert_resources:
   fog_expert:
     resource_name: fog_expert_policy
     served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/fog
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/fog
   snow_expert:
     resource_name: snow_expert_policy
     served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/snow
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/snow
   rain_expert:
     resource_name: rain_expert_policy
     served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/rain
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/rain
   low_light_expert:
     resource_name: low_light_expert_policy
     served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5/format_cold_start/low_light
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/low_light
 
 runtime:
   restoration:

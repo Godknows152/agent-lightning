@@ -551,11 +551,17 @@ class ToolAgentLoop(AgentLoopBase):
         tool_schemas = [registry.build_tool_schema(include_stop=True)]
         return messages, tool_schemas
 
-    @staticmethod
-    def _append_current_history_feedback(agent_data: AgentData, tool_name: str, tool_metrics: dict[str, Any]) -> None:
-        action = str(tool_metrics.get("action") or tool_name)
-        if action == "stop":
+    def _append_current_history_feedback(
+        self, agent_data: AgentData, tool_name: str, tool_metrics: dict[str, Any]
+    ) -> None:
+        runtime_action = str(tool_metrics.get("action") or tool_name)
+        if runtime_action == "stop":
             return
+        model_action = tool_metrics.get("model_action")
+        if not isinstance(model_action, str) or not model_action:
+            prompt_config = self.current_restoration_prompt
+            registry = prompt_config.get("registry") if prompt_config else None
+            model_action = registry.to_model_action(runtime_action) if registry is not None else runtime_action
         step_value = tool_metrics.get("step")
         try:
             step_index = max(0, int(step_value) - 1)
@@ -567,7 +573,7 @@ class ToolAgentLoop(AgentLoopBase):
             score_text = f"IQA aggregate_score={float(aggregate_score):.4f}"
         else:
             score_text = "IQA score unavailable"
-        entry = f"Step {step_index}: selected action {action}; {score_text}."
+        entry = f"Step {step_index}: selected action {model_action}; {score_text}."
         history = getattr(agent_data, "current_prompt_history", None)
         if history is None:
             history = []

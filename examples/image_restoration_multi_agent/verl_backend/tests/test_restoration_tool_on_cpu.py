@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 from verl.tools import restoration_tool as restoration_tool_module
@@ -34,6 +35,28 @@ def _build_tool_schema() -> OpenAIFunctionToolSchema:
 
 def _build_tool(**config) -> RestorationTool:
     return RestorationTool(config=config, tool_schema=_build_tool_schema())
+
+
+def test_model_action_alias_is_translated_before_runtime_validation_on_cpu() -> None:
+    tools_config = Path(__file__).resolve().parents[2] / "config" / "tools.yaml"
+    tool = _build_tool(tool_registry_path=str(tools_config))
+
+    _, alias_reward, alias_metrics = asyncio.run(
+        tool.execute("missing-instance", {"action": "B_scunet"})
+    )
+    _, canonical_reward, canonical_metrics = asyncio.run(
+        tool.execute("missing-instance", {"action": "scunet"})
+    )
+
+    assert tool.model_to_runtime_actions["B_scunet"] == "scunet"
+    assert alias_reward == pytest.approx(-5.0)
+    assert alias_metrics["error"] == "instance_not_found"
+    assert canonical_reward == pytest.approx(-5.0)
+    assert canonical_metrics == {
+        "model_action": "scunet",
+        "error": "invalid_action",
+        "skip_tool_call_reward": True,
+    }
 
 
 def test_repeat_penalty_discourages_low_gain_repeats_on_cpu():
