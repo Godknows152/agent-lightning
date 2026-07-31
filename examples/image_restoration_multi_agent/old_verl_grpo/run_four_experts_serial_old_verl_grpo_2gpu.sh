@@ -18,7 +18,7 @@ if [[ -n "${OLD_VERL_ADAPTER_PATH:-}" ]]; then
 fi
 
 for expert in "${EXPERTS[@]}"; do
-  mkdir -p "${LOG_ROOT}/${expert}"
+  mkdir -p "${LOG_ROOT}/${expert}/2gpu"
 done
 if [[ "${OLD_VERL_BACKGROUND_CHILD:-0}" != "1" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -30,7 +30,7 @@ if [[ "${OLD_VERL_BACKGROUND_CHILD:-0}" != "1" ]]; then
   BACKGROUND_PID=$!
   echo "Started four-expert serial GRPO in background (PID ${BACKGROUND_PID})."
   for expert in "${EXPERTS[@]}"; do
-    echo "${expert} log file: ${LOG_ROOT}/${expert}/${expert}_${TIMESTAMP}.log"
+    echo "${expert} log file: ${LOG_ROOT}/${expert}/2gpu/${expert}_${TIMESTAMP}.log"
   done
   exit 0
 fi
@@ -39,12 +39,13 @@ TIMESTAMP="${OLD_VERL_LOG_TIMESTAMP:?OLD_VERL_LOG_TIMESTAMP is required for the 
 
 clear_intermediate_images=1
 for expert in "${EXPERTS[@]}"; do
-  EXPERT_LOG="${LOG_ROOT}/${expert}/${expert}_${TIMESTAMP}.log"
+  EXPERT_LOG="${LOG_ROOT}/${expert}/2gpu/${expert}_${TIMESTAMP}.log"
   {
     echo "===== old-verl GRPO start: ${expert} on GPU ${OLD_VERL_CUDA_VISIBLE_DEVICES} ====="
     echo "PID: $$"
     echo "Log file: ${EXPERT_LOG}"
     OLD_VERL_RUN_IN_FOREGROUND=1 \
+      OLD_VERL_LOG_DIR="${LOG_ROOT}/${expert}/2gpu" \
       OLD_VERL_CLEAR_INTERMEDIATE_IMAGES="${clear_intermediate_images}" \
       OLD_VERL_CLEAR_PENALIZED_SAMPLES="${OLD_VERL_CLEAR_PENALIZED_SAMPLES}" \
       OLD_VERL_CONFIG_NAME="${expert}_config_2gpu" \

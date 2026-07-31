@@ -1,0 +1,145 @@
+# 旧版 VERL 的四卡共享 GRPO 配置：Actor/SGLang 与图像修复/IQA 共享物理 GPU0/1/2/3。
+
+defaults:  # 定义 Hydra 默认配置的继承与合并顺序
+  - ppo_trainer  # 继承 VERL 标准 PPO/GRPO 训练器配置
+  - _self_  # 让当前文件中的配置覆盖此前继承的默认值
+
+data:  # 配置训练与验证数据及序列长度限制
+  train_files:  # 指定训练数据文件列表，各专家配置会覆盖此默认路径
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/4gpu/fog_train.parquet  # 默认雾图像专家的训练数据
+  val_files:  # 指定验证数据文件列表，各专家配置会覆盖此默认路径
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/4gpu/fog_val.parquet  # 默认雾图像专家的验证数据
+  val_max_samples: 64  # 限制验证样本数
+  val_batch_size: 32
+  train_batch_size: 16  # 每个训练步骤采样的原始提示数量
+  max_prompt_length: 2048  # 分词后原始提示文本允许的最大 Token 数
+  max_image_pixels: 589824  # 输入图像的最大像素数（768×768），用于限制视觉 Token 和显存占用
+  max_response_length: 4096  # 存储模型生成内容及零损失重构决策提示的最大 Token 数
+  return_raw_chat: true  # 返回原始聊天消息，供多轮 Agent 运行时重新构造提示
+  return_multi_modal_inputs: false  # 不在数据批次中直接返回预处理后的多模态张量，由运行时重建
+
+algorithm:  # 配置 GRPO 优势估计与 KL 控制策略
+  adv_estimator: grpo  # 使用组相对策略优化方式计算优势值
+  action_rarity_reward_coeff: 0.0  # v1/v2 关闭经验 action 稀有度奖励；独立 v3 启动器覆盖为 0.02
+  kl_ctrl:  # 配置策略与参考策略之间的 KL 控制器
+    kl_coef: 0.08  # KL 惩罚系数，用于约束策略偏离参考模型的程度
+
+actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
+  model:  # 配置 Actor、Rollout 与参考策略共享的基础模型信息
+    path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B  # 基础 Qwen3.5-9B 模型路径
+    lora_adapter_path: ???  # 必须由专家配置显式指定，禁止不同专家误用同一个 SFT LoRA
+    trust_remote_code: true  # 允许 Transformers 加载模型仓库提供的自定义代码
+    use_remove_padding: false  # 不启用移除 Padding 的变长序列优化，以保持当前多模态路径兼容
+    enable_gradient_checkpointing: true  # 启用梯度检查点，以计算换显存降低训练峰值显存
+    enable_activation_offload: false  # 不将中间激活卸载到 CPU，避免额外的数据传输开销
+    lora_rank: 16  # 设置 GRPO LoRA 低秩矩阵的秩
+    lora_alpha: 32  # 设置 LoRA 缩放系数，实际缩放与 alpha/rank 有关
+    target_modules:  # 明确限制 LoRA 只作用于语言模型投影层，避免选中视觉塔模块
+      - q_proj  # 对注意力 Query 投影应用 LoRA
+      - k_proj  # 对注意力 Key 投影应用 LoRA
+      - v_proj  # 对注意力 Value 投影应用 LoRA
+      - o_proj  # 对标准注意力输出投影应用 LoRA
+      - gate_proj  # 对前馈网络门控投影应用 LoRA
+      - up_proj  # 对前馈网络升维投影应用 LoRA
+      - down_proj  # 对前馈网络降维投影应用 LoRA
+      - in_proj_qkv  # 对线性注意力的融合 QKV 输入投影应用 LoRA
+      - in_proj_z  # 对线性注意力的 Z 门控输入投影应用 LoRA
+      - in_proj_b  # 对线性注意力的 B 分支输入投影应用 LoRA
+      - in_proj_a  # 对线性注意力的 A 分支输入投影应用 LoRA
+      - out_proj  # 对线性注意力输出投影应用 LoRA
+
+  actor:  # 配置参与梯度更新的策略模型
+    freeze_vision_tower: true  # 冻结视觉编码塔参数，只训练语言模型侧 LoRA
+    optim:  # 配置 Actor 优化器
+      lr: 3.0e-5  # 设置优化器学习率
+      lr_scheduler_type: cosine  # 使用带线性预热的余弦衰减学习率调度器
+      lr_warmup_steps_ratio: 0.05  # 使用总训练步数的前三个百分点进行线性预热
+      min_lr_ratio: 0.1  # 将训练末期的最低学习率限制为基础学习率的十分之一
+      num_cycles: 0.5  # 在整个训练过程中执行一次标准半余弦下降
+    entropy_coeff: 0.005  # 设置熵奖励系数，鼓励策略保持一定探索性
+    calculate_entropy: true  # 在训练中计算并记录策略输出熵
+    ppo_epochs: 1  # 每批 Rollout 数据执行一次 PPO 参数更新
+    use_kl_loss: true  # 在 Actor 损失中显式加入相对参考策略的 KL 损失
+    kl_loss_coef: 0.08  # 设置 Actor KL 损失项的权重
+    kl_loss_type: low_var_kl  # 使用低方差 KL 估计方式计算 KL 损失
+    fsdp_config:  # 配置 Actor 的 FSDP 参数分片与卸载策略
+      model_dtype: bfloat16  # 使用 BF16 保存和计算模型参数
+      param_offload: true  # 非计算阶段将 FSDP 参数卸载到 CPU 以节省 GPU 显存
+      optimizer_offload: true  # 将优化器状态卸载到 CPU 以节省 GPU 显存
+    ppo_mini_batch_size: 8  # 每次 PPO 更新使用的全局小批次大小
+    ppo_micro_batch_size_per_gpu: 1  # 每张 GPU 单次前后向计算处理的样本数
+
+  rollout:  # 配置用于生成训练轨迹的推理服务
+    name: sglang  # 使用 SGLang 作为异步 Rollout 推理后端
+    load_format: auto  # 让 SGLang 根据模型与检查点自动选择权重加载格式
+    dtype: bfloat16  # 使用 BF16 执行 Rollout 推理
+    temperature: 1  # 设置采样温度，数值越低输出越确定
+    top_p: 1  # 使用累计概率阈值为 0.9 的 nucleus sampling
+    disable_multimodal_special_token_generation: true  # 禁止模型在回复中生成多模态占位特殊 Token
+    n: 3  # 每个原始提示采样三条候选轨迹，用于组内相对优势计算
+    tensor_model_parallel_size: 2  # 四张卡自动形成两个 TP2 Rollout 副本：GPU0-1 与 GPU2-3
+    gpu_memory_utilization: 0.2  # SGLang 静态权重和缓存池可使用的单卡显存比例
+    force_full_sleep_for_lora: true  # Actor 更新阶段让 LoRA Rollout 引擎完全休眠并释放权重与缓存显存
+    max_num_seqs: 16  # 限制 SGLang 同时运行的生成请求数；当前被注释，因此继承 VERL 默认值
+    # max_model_len: 9728  # 单次 SGLang 请求允许的提示与生成内容总 Token 上限
+    enforce_eager: true  # 强制使用 eager 执行并禁用 CUDA Graph，以提高动态多轮场景兼容性
+    log_prob_micro_batch_size_per_gpu: 2  # 每张 GPU 计算 Rollout Token 对数概率时的微批次大小
+
+    agent:  # 配置执行多轮对话与工具调用的 AgentLoop Worker
+      num_workers: 1  # 启动一个 AgentLoop Ray Worker 负责异步轨迹执行
+      num_gpus_per_worker: 0.0  # AgentLoop Worker 不单独申请 GPU，工具运行时复用可见的四张训练卡
+      default_agent_loop: tool_agent  # 使用支持工具调用的默认 Agent 循环实现
+
+    multi_turn:  # 配置多轮生成、工具调用和轨迹预算
+      enable: true  # 启用多轮 Agent Rollout
+      max_user_turns: 7  # 单条轨迹允许的最大用户/工具反馈轮数
+      max_assistant_turns: 6  # 单条轨迹允许的最大模型回复轮数
+      max_generated_response_length: 2500  # 单条多轮轨迹中模型累计生成的最大 Token 数
+      round_barrier_size: 0  # 关闭轮次同步屏障，让各轨迹异步进入下一轮生成
+      format: qwen3_coder  # 使用与 Qwen3 工具调用兼容的多轮消息格式
+      tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/restoration_tool_config_current_iqa_4gpu.yaml  # 指定四卡图像修复与 IQA 工具配置文件
+
+  ref:  # 配置计算 KL 与参考对数概率的冻结参考策略
+    use_separate_lora_reference: true  # 冻结各专家初始 SFT LoRA 作为 KL 参考，而不是退回原始 Qwen 基座
+    log_prob_micro_batch_size_per_gpu: 2  # 每张 GPU 计算参考策略 Token 对数概率时的微批次大小
+    fsdp_config:
+      model_dtype: bfloat16  # 使用 BF16 保存冻结参考模型，避免双模型常驻导致额外显存压力
+      param_offload: true  # 非参考前向阶段将冻结模型卸载到 CPU，为 Actor、Rollout 和修复工具腾出显存
+
+trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
+  logger:  # 指定训练指标输出后端
+    - console  # 将训练指标打印到终端及主日志
+    - swanlab  # 将训练指标记录到 SwanLab
+  project_name: 4expert_grpo  # 设置实验跟踪平台中的项目名称
+  experiment_name: "fog_4gpu_${now:%m%d}"  # 默认按“专家名_4gpu_月日”生成，各专家配置会覆盖专家名
+  resume_mode: auto  # 自动检查输出目录并决定是否从已有检查点恢复
+  resume_from_path: null  # 不显式指定恢复路径，由自动恢复逻辑选择检查点
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/4gpu  # 保存四卡检查点与训练产物的默认目录
+  penalized_samples_dir: ${trainer.default_local_dir}/penalized_samples  # 每步保存受罚模型回答样本，随专家输出目录自动切换
+  penalized_samples_per_step: 8  # 每个训练步骤最多确定性抽样八条受罚轨迹，并同步到 SwanLab 文本表
+  log_val_generations: 10  # 每次验证记录两条生成样例
+  n_gpus_per_node: 4  # 每个节点分配四张 GPU，全部参与 Actor/FSDP、Rollout 和参考策略计算
+  nnodes: 1  # 使用一个计算节点进行训练
+  save_freq: 10  # 每隔五个训练步骤保存一次检查点
+  test_freq: 10  # 每隔十个训练步骤执行一次验证
+  total_epochs: 3  # 对训练数据执行三个完整训练轮次
+  total_training_steps: 150  # 不固定总步骤数，由数据量和 total_epochs 推导
+  max_actor_ckpt_to_keep: 10  # 最多保留十个常规 Actor 检查点
+  keep_best_validation_ckpt: true  # 额外保留验证指标最优的 Actor 检查点
+  val_before_train: false  # 正式训练开始前不单独执行一次验证
+  ray_kwargs:  # 配置 Ray 集群初始化参数
+    ray_init:  # 配置 ray.init 调用参数
+      runtime_env:  # 配置传递给 Ray Worker 的运行时环境
+        env_vars:  # 定义所有 Ray Worker 继承的环境变量
+          LD_LIBRARY_PATH: "/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/torch/lib:/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cudnn/lib"  # 指定 CUDA、PyTorch 与 cuDNN 动态库搜索路径
+          LD_PRELOAD: "/home/LXJ/anaconda3/envs/verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib/libcudart.so.12"  # 在 Worker 启动时预加载 CUDA 12 运行时库
+          PYTHONUNBUFFERED: "1"  # 禁用 Python 标准输出缓冲，确保训练日志实时写出
+          XFORMERS_IGNORE_FLASH_VERSION_CHECK: "1"  # 跳过 xFormers 对 Flash Attention 版本的兼容性检查
+          SGLANG_DISABLE_CUDNN_CHECK: "1"  # 跳过 SGLang 启动时的 cuDNN 版本检查
+          RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1"  # 禁止 Ray 重写仅包含 GPU0/1/2/3 的 CUDA_VISIBLE_DEVICES
+          RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"  # 配置零 GPU 资源任务的加速器环境变量覆盖行为
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/4gpu/swanlab"  # 指定四卡 SwanLab 本地日志目录
+          SWANLAB_MODE: "cloud"  # 使用云端模式记录并同步 SwanLab 实验
+          VERL_LOGGING_LEVEL: "WARN"  # 将 VERL 内部日志级别设为 WARNING 及以上
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/4gpu"  # 默认四卡日志根目录；专家配置和启动脚本会覆盖为版本目录
+          HF_HUB_DISABLE_PROGRESS_BARS: "1"  # 禁用 Transformers/Hugging Face 的 Loading weights 进度条

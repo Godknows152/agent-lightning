@@ -26,16 +26,16 @@ actor_rollout_ref:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_2gpu.yaml
   actor:
     # v4: Add thinking decision-point selective entropy regularization
-    decision_point_entropy_coeff: 0.05
+    decision_point_entropy_coeff: 0.005
 
 trainer:
   experiment_name: "fog_v4"
   resume_mode: auto
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4/2gpu
   ray_kwargs:
     ray_init:
       runtime_env:
         env_vars:
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4/swanlab"
-          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/fog/v4"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4/2gpu/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/fog/v4/2gpu"

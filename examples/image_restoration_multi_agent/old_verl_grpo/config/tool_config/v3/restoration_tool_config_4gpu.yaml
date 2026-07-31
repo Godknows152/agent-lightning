@@ -1,0 +1,82 @@
+# Old-verl RestorationTool config for the marginal-efficiency reward experiment.
+#
+# The reward for each successful restoration call is:
+#   4.0 * (weighted IQA after - weighted IQA before)
+#   - 0.12 tool-call cost
+#   - applicable low-gain same-type repeat penalty
+#
+# Stop is reward-neutral in this reward mode. Its prompt availability is
+# configured independently below.
+
+tools:
+  - class_name: "verl.tools.restoration_tool.RestorationTool"
+    config:
+      type: native
+      device: cuda:0
+      worker_devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+      model_devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+      output_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_4gpu
+      enable_tool_result_cache: true
+      tool_result_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_4gpu/.tool_result_cache
+      tool_result_cache_max_entries: 5000
+      tool_result_cache_max_size_gb: 20
+      tool_result_cache_ttl_hours: 24
+      tool_result_cache_cleanup_interval: 256
+      preload: true
+      auto_unload: false
+      # Keep all four restoration replicas resident across sampling steps.
+      keep_models_loaded_between_sampling_steps: true
+      tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
+      external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
+      restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py
+      # Mark stop available in user-state prompts after one successful restoration call.
+      prompt_min_stop_tool_calls: 1
+
+      use_iqa: true
+      iqa_devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+      iqa_device: cuda:0
+      normalize_iqa_scores: true
+      iqa_metric_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
+      iqa_weight_map_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
+
+      reward_mode: marginal_efficiency_v1
+      reward_scale: 4.0
+      # A call breaks even at a raw normalized weighted IQA gain of 0.12 / 4.0 = 0.03.
+      tool_call_cost: 0.12
+      # Disable degradation-action affinity shaping; rely on IQA and penalty rewards only.
+      affinity_bonus_scale: 0.0
+      repeat_action_penalty: 0.75
+      repeat_low_gain_penalty: 2.0
+      # Penalize same-type repeats only when raw normalized IQA marginal gain is <= 0.03.
+      repeat_low_gain_threshold: 0.03
+    tool_schema:
+      type: "function"
+      function:
+        name: "restore_image"
+        description: "Apply one registered restoration action or stop the trajectory."
+        parameters:
+          type: "object"
+          properties:
+            action:
+              type: "string"
+              enum:
+                - real_esrgan
+                - scunet
+                - retinexformer_fivek
+                - hvicidnet
+                - lightdiff
+                - turbo_rain
+                - s2former
+                - idt
+                - ridcp
+                - kanet
+                - turbo_snow
+                - snowmaster
+                - nafnet_denoise
+                - focalnet_dehaze
+                - focalnet_desnow
+                - mb_taylorformer_dehaze
+                - stop
+          required:
+            - action
+          additionalProperties: false

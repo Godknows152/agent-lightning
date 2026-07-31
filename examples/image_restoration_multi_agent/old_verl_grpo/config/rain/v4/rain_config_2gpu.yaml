@@ -32,10 +32,10 @@ trainer:
   experiment_name: "rain_v4"
   resume_mode: auto
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4/2gpu
   ray_kwargs:
     ray_init:
       runtime_env:
         env_vars:
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4/swanlab"
-          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/rain/v4"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4/2gpu/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/rain/v4/2gpu"

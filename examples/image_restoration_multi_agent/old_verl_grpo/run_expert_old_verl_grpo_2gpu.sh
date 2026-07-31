@@ -99,7 +99,7 @@ EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"
 OLD_VERL_DIR="${EXAMPLE_DIR}/old_verl_grpo"
 LOG_ROOT="${OLD_VERL_DIR}/log"
-LOG_DIR="${OLD_VERL_LOG_DIR:-${LOG_ROOT}/${EXPERT}}"
+LOG_DIR="${OLD_VERL_LOG_DIR:-${LOG_ROOT}/${EXPERT}/2gpu}"
 CONFIG_DIR="${CONFIG_PATH_OVERRIDE:-${OLD_VERL_DIR}/config}"
 CONFIG_NAME="${CONFIG_NAME_OVERRIDE:-${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}}"
 CONVERTER="${OLD_VERL_DIR}/scripts/convert_current_jsonl_to_verl_parquet.py"
@@ -267,7 +267,7 @@ fi
 
 RUN_NAMING_ARGS=(
   --expert "${EXPERT}"
-  --output-root "${OLD_VERL_DIR}/outputs"
+  --output-root "${OLD_VERL_DIR}/outputs/2gpu"
   --resume-mode "${RESUME_MODE_OVERRIDE}"
   --output-dir "${OUTPUT_DIR_OVERRIDE}"
 )

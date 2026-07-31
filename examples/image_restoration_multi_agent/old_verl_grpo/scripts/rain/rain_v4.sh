@@ -5,11 +5,13 @@ set -euo pipefail
 
 EXPERT="rain"
 VERSION="v4"
+export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 OLD_VERL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${VERSION}/${EXPERT}_config_2gpu.yaml"
-LOG_DIR="${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}"
+export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu}"
+LOG_DIR="${OLD_VERL_LOG_DIR}"
 
 mkdir -p "${LOG_DIR}"
 

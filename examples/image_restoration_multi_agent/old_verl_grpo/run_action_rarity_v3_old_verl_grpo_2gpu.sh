@@ -21,14 +21,14 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 VARIANT="v3"
-export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${SCRIPT_DIR}/log/${EXPERT}/${VARIANT}}"
+export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${SCRIPT_DIR}/log/${EXPERT}/${VARIANT}/2gpu}"
 LOG_DIR="${OLD_VERL_LOG_DIR}"
 TOOL_CONFIG_PATH="${SCRIPT_DIR}/config/tool_config/restoration_tool_config_marginal_efficiency_2gpu.yaml"
 ACTION_RARITY_REWARD_COEFF="${OLD_VERL_ACTION_RARITY_REWARD_COEFF:-0.02}"
 export OLD_VERL_EXPECT_ACTION_RARITY_REWARD_COEFF="${ACTION_RARITY_REWARD_COEFF}"
 export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VARIANT}}"
-export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${SCRIPT_DIR}/outputs/${EXPERT}/${VARIANT}}"
+export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${SCRIPT_DIR}/outputs/${EXPERT}/${VARIANT}/2gpu}"
 
 mkdir -p "${LOG_DIR}"
 if [[ "${OLD_VERL_BACKGROUND_CHILD:-0}" != "1" && "${1:-}" != "--preflight" ]]; then

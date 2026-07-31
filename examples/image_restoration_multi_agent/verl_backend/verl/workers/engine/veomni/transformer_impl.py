@@ -280,6 +280,12 @@ class VeOmniEngine(FSDPEngine):
             batch_num_tokens, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
         )
         tu.assign_non_tensor(data, batch_num_tokens=batch_num_tokens.item())
+        if "decision_point_mask" in data:
+            batch_num_decision_points = data["decision_point_mask"].sum().to(get_device_id())
+            torch.distributed.all_reduce(
+                batch_num_decision_points, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
+            )
+            tu.assign_non_tensor(data, batch_num_decision_points=int(batch_num_decision_points.item()))
         tu.assign_non_tensor(data, dp_size=self.get_data_parallel_size())
 
         micro_batches, indices = prepare_micro_batches(

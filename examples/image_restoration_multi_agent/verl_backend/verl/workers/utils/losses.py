@@ -90,8 +90,14 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         fields.append("ref_log_prob")
     # v4: decision_point_mask for selective entropy regularization
     has_dp_mask = "decision_point_mask" in data and config.decision_point_entropy_coeff > 0.0
+    batch_num_decision_points = None
     if has_dp_mask:
         fields.append("decision_point_mask")
+        batch_num_decision_points = tu.get_non_tensor_data(
+            data=data, key="batch_num_decision_points", default=None
+        )
+        if batch_num_decision_points is None:
+            raise ValueError("batch_num_decision_points is required when decision_point_mask is present")
     data = data.select(*fields).to_padded_tensor()
 
     response_mask = data["response_mask"].to(bool)
@@ -136,11 +142,13 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     if entropy is not None and has_dp_mask:
         dp_mask = data["decision_point_mask"].to(bool)  # (bsz, response_len)
         if dp_mask.any():
+            # Selective entropy is the mean over found decision points, independent of the PPO loss aggregation mode.
             dp_entropy_loss = agg_loss(
                 loss_mat=entropy,
                 loss_mask=dp_mask,
-                loss_agg_mode=loss_agg_mode,
-                **config.global_batch_info,
+                loss_agg_mode="token-mean",
+                dp_size=config.global_batch_info["dp_size"],
+                batch_num_tokens=batch_num_decision_points,
             )
             policy_loss -= config.decision_point_entropy_coeff * dp_entropy_loss
         else:

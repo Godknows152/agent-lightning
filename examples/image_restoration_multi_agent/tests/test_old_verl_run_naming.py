@@ -7,17 +7,104 @@ from pathlib import Path
 from types import ModuleType
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "old_verl_grpo" / "scripts" / "resolve_training_run_name.py"
+SCRIPT_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "old_verl_grpo"
+    / "scripts"
+    / "resolve_training_run_name.py"
+)
+OLD_VERL_ROOT = Path(__file__).resolve().parents[1] / "old_verl_grpo"
 
 
 def _load_module() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("resolve_training_run_name", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "resolve_training_run_name", SCRIPT_PATH
+    )
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_v4_launchers_default_to_versioned_swanlab_names() -> None:
+    for expert in ("fog", "rain", "snow", "lowlight"):
+        launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_v4.sh"
+        content = launcher.read_text(encoding="utf-8")
+        assert 'VERSION="v4"' in content
+        assert (
+            'export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"'
+            in content
+        )
+        if expert == "lowlight":
+            assert 'RUNTIME_EXPERT="low_light"' in content
+            assert '"${RUNTIME_EXPERT}"' in content
+
+
+def test_all_versioned_launchers_isolate_training_and_tool_logs() -> None:
+    expected_export = 'export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu}"'
+    expected_output_export = 'export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}/${VERSION}/2gpu}"'
+    for expert in ("fog", "rain", "snow", "lowlight"):
+        for version in ("v1", "v2", "v3", "v4"):
+            launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{version}.sh"
+            content = launcher.read_text(encoding="utf-8")
+            assert expected_export in content, launcher
+            if version != "v4":
+                assert expected_output_export in content, launcher
+            assert 'LOG_DIR="${OLD_VERL_LOG_DIR}"' in content, launcher
+            assert (
+                'MAIN_LOG="${LOG_DIR}/${EXPERT}_${VERSION}_${TIMESTAMP}.log"' in content
+            ), launcher
+
+            config = (
+                OLD_VERL_ROOT
+                / "config"
+                / expert
+                / version
+                / f"{expert}_config_2gpu.yaml"
+            )
+            config_content = config.read_text(encoding="utf-8")
+            expected_log_dir = f"/old_verl_grpo/log/{expert}/{version}/2gpu"
+            assert expected_log_dir in config_content, config
+            expected_output_dir = f"old_verl_grpo/outputs/{expert}/{version}/2gpu"
+            assert expected_output_dir in config_content, config
+
+
+def test_common_wrapper_routes_both_tool_logs_to_resolved_version_directory() -> None:
+    wrapper = (OLD_VERL_ROOT / "run_expert_old_verl_grpo_2gpu.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'LOG_DIR="${OLD_VERL_LOG_DIR:-${LOG_ROOT}/${EXPERT}/2gpu}"' in wrapper
+    assert '--output-root "${OLD_VERL_DIR}/outputs/2gpu"' in wrapper
+    assert (
+        "\"trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR='${LOG_DIR}'\""
+        in wrapper
+    )
+    assert 'export VERL_LOG_DIR="${LOG_DIR}"' in wrapper
+    assert 'TOOL_INFO_LOG="${LOG_DIR}/restoration_tool_info.log"' in wrapper
+    assert 'TOOL_DEBUG_LOG="${LOG_DIR}/restoration_tools.log"' in wrapper
+
+
+def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirectories() -> (
+    None
+):
+    for expert in ("fog", "rain", "snow", "lowlight"):
+        for version in ("v1", "v2", "v3", "v4"):
+            config = (
+                OLD_VERL_ROOT
+                / "config"
+                / expert
+                / version
+                / f"{expert}_config_2gpu.yaml"
+            )
+            content = config.read_text(encoding="utf-8")
+            assert f"old_verl_grpo/outputs/{expert}/{version}/2gpu" in content, config
+            assert (
+                f"old_verl_grpo/outputs/{expert}/{version}/2gpu/swanlab" in content
+            ), config
+            assert f"old_verl_grpo/log/{expert}/{version}/2gpu" in content, config
+            assert "/2gpu/2gpu/" not in content, config
 
 
 def test_fresh_run_uses_expert_and_current_month_day(tmp_path: Path) -> None:
@@ -54,13 +141,17 @@ def test_explicit_checkpoint_adds_continuation_suffix(tmp_path: Path) -> None:
     assert naming.resume_from_path == checkpoint.resolve()
 
 
-def test_auto_resume_uses_latest_checkpoint_and_continuation_name(tmp_path: Path) -> None:
+def test_auto_resume_uses_latest_checkpoint_and_continuation_name(
+    tmp_path: Path,
+) -> None:
     module = _load_module()
     fresh_output = tmp_path / "low_light_0720"
     (fresh_output / "global_step_5").mkdir(parents=True)
     latest_checkpoint = fresh_output / "global_step_15"
     latest_checkpoint.mkdir()
-    (fresh_output / "latest_checkpointed_iteration.txt").write_text("15\n", encoding="utf-8")
+    (fresh_output / "latest_checkpointed_iteration.txt").write_text(
+        "15\n", encoding="utf-8"
+    )
 
     naming = module.resolve_run_naming(
         expert="low_light",
@@ -90,7 +181,9 @@ def test_restart_of_continuation_prefers_its_checkpoint(tmp_path: Path) -> None:
     assert naming.resume_from_path == continuation_checkpoint.resolve()
 
 
-def test_checkpoint_output_directory_is_independent_from_swanlab_name(tmp_path: Path) -> None:
+def test_checkpoint_output_directory_is_independent_from_swanlab_name(
+    tmp_path: Path,
+) -> None:
     module = _load_module()
     configured_output = tmp_path / "rain_from_sft_lora_0718"
     checkpoint = configured_output / "global_step_60"

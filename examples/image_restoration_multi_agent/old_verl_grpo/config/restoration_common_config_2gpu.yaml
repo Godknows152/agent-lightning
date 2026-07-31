@@ -73,8 +73,8 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     name: sglang  # 使用 SGLang 作为异步 Rollout 推理后端
     load_format: auto  # 让 SGLang 根据模型与检查点自动选择权重加载格式
     dtype: bfloat16  # 使用 BF16 执行 Rollout 推理
-    temperature: 0.5  # 设置采样温度，数值越低输出越确定
-    top_p: 0.9  # 使用累计概率阈值为 0.9 的 nucleus sampling
+    temperature: 1  # 设置采样温度，数值越低输出越确定
+    top_p: 1  # 使用累计概率阈值为 0.9 的 nucleus sampling
     disable_multimodal_special_token_generation: true  # 禁止模型在回复中生成多模态占位特殊 Token
     n: 3  # 每个原始提示采样三条候选轨迹，用于组内相对优势计算
     tensor_model_parallel_size: 2  # 将 SGLang 模型张量并行切分到两张训练 GPU
@@ -114,7 +114,7 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
   experiment_name: "fog_${now:%m%d}"  # 默认按“专家名_月日”生成，各专家配置会覆盖专家名
   resume_mode: auto  # 自动检查输出目录并决定是否从已有检查点恢复
   resume_from_path: null  # 不显式指定恢复路径，由自动恢复逻辑选择检查点
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716  # 保存检查点与训练产物的默认目录
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/2gpu  # 保存检查点与训练产物的默认目录
   penalized_samples_dir: ${trainer.default_local_dir}/penalized_samples  # 每步保存受罚模型回答样本，随专家输出目录自动切换
   penalized_samples_per_step: 8  # 每个训练步骤最多确定性抽样八条受罚轨迹，并同步到 SwanLab 文本表
   log_val_generations: 10  # 每次验证记录两条生成样例
@@ -138,8 +138,8 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
           SGLANG_DISABLE_CUDNN_CHECK: "1"  # 跳过 SGLang 启动时的 cuDNN 版本检查
           RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES: "1"  # 禁止 Ray 重写仅包含 GPU0/1 的 CUDA_VISIBLE_DEVICES
           RAY_ACCEL_ENV_VAR_OVERRIDE_ON_ZERO: "0"  # 配置零 GPU 资源任务的加速器环境变量覆盖行为
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/swanlab"  # 指定 SwanLab 本地日志目录
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/2gpu/swanlab"  # 指定 SwanLab 本地日志目录
           SWANLAB_MODE: "cloud"  # 使用云端模式记录并同步 SwanLab 实验
           VERL_LOGGING_LEVEL: "WARN"  # 将 VERL 内部日志级别设为 WARNING 及以上
-          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log"  # 默认日志根目录；专家配置和启动脚本会覆盖为 log/<expert>
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/2gpu"  # 默认两卡日志根目录；专家配置和启动脚本会覆盖为版本目录下的 2gpu
           HF_HUB_DISABLE_PROGRESS_BARS: "1"  # 禁用 Transformers/Hugging Face 的 Loading weights 进度条
