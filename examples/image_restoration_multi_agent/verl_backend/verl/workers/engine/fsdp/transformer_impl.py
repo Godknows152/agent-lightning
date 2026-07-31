@@ -24,14 +24,16 @@ from typing import Callable, ContextManager, Optional
 
 import torch
 import torch.distributed
-import verl.utils.torch_functional as verl_F
 from peft import LoraConfig, TaskType, get_peft_model
 from tensordict import TensorDict
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp.api import FullStateDictConfig, ShardedStateDictConfig, StateDictType
 from torch.distributed.tensor import DTensor
+
+import verl.utils.torch_functional as verl_F
 from verl.models.transformers.monkey_patch import apply_monkey_patch
 from verl.trainer.config import CheckpointConfig
+from verl.trainer.ppo.restoration_action_entropy import action_sequence_entropies
 from verl.utils import tensordict_utils as tu
 from verl.utils.activation_offload import enable_activation_offloading
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
@@ -78,6 +80,97 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 device_name = get_device_name()
+
+
+def _build_decision_action_candidate_chunk(
+    input_ids: torch.Tensor,
+    position_ids: torch.Tensor,
+    sequence_indices: torch.Tensor,
+    action_token_ids: torch.Tensor,
+    action_token_mask: torch.Tensor,
+    flat_candidate_indices: list[int],
+    *,
+    pad_token_id: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, list[int], list[int]]:
+    """Build left-padded candidate branches ending at complete action strings."""
+
+    num_actions = action_token_ids.shape[1]
+    candidate_input_ids = []
+    candidate_position_ids = []
+    candidate_targets = []
+    action_lengths = []
+    sample_indices = []
+
+    for flat_index in flat_candidate_indices:
+        sample_index, action_index = divmod(flat_index, num_actions)
+        prefix_length = int(sequence_indices[sample_index].item())
+        sample_input_ids = input_ids[sample_index]
+        sample_position_ids = position_ids[sample_index]
+        if prefix_length < 1 or prefix_length > sample_input_ids.shape[-1]:
+            raise RuntimeError(
+                f"invalid decision prefix length {prefix_length} for sequence length {sample_input_ids.shape[-1]}"
+            )
+
+        token_count = int(action_token_mask[sample_index, action_index].sum().item())
+        if token_count < 1:
+            raise RuntimeError(f"decision action {action_index} has no tokens")
+        target_ids = action_token_ids[sample_index, action_index, :token_count]
+
+        prefix_ids = sample_input_ids[:prefix_length]
+        prefix_positions = sample_position_ids[..., :prefix_length]
+        position_delta = torch.arange(
+            1,
+            token_count + 1,
+            dtype=prefix_positions.dtype,
+            device=prefix_positions.device,
+        )
+        appended_positions = prefix_positions[..., -1:] + position_delta
+
+        candidate_input_ids.append(torch.cat((prefix_ids, target_ids), dim=-1))
+        candidate_position_ids.append(torch.cat((prefix_positions, appended_positions), dim=-1))
+        candidate_targets.append(target_ids)
+        action_lengths.append(token_count)
+        sample_indices.append(sample_index)
+
+    max_sequence_length = max(candidate.shape[-1] for candidate in candidate_input_ids)
+    max_action_length = max(action_lengths)
+    batch_size = len(candidate_input_ids)
+    padded_input_ids = input_ids.values().new_full((batch_size, max_sequence_length), pad_token_id)
+    attention_mask = torch.zeros(
+        batch_size,
+        max_sequence_length,
+        dtype=torch.int32,
+        device=padded_input_ids.device,
+    )
+
+    position_rank = candidate_position_ids[0].dim()
+    if position_rank == 1:
+        padded_position_ids = position_ids.values().new_zeros((batch_size, max_sequence_length))
+    else:
+        position_dims = candidate_position_ids[0].shape[:-1]
+        padded_position_ids = position_ids.values().new_zeros((batch_size, *position_dims, max_sequence_length))
+    padded_targets = action_token_ids.new_zeros((batch_size, max_action_length))
+
+    for row, (candidate_ids, candidate_positions, target_ids) in enumerate(
+        zip(candidate_input_ids, candidate_position_ids, candidate_targets, strict=True)
+    ):
+        sequence_length = candidate_ids.shape[-1]
+        target_length = target_ids.shape[-1]
+        padded_input_ids[row, -sequence_length:] = candidate_ids
+        attention_mask[row, -sequence_length:] = 1
+        padded_position_ids[row, ..., -sequence_length:] = candidate_positions
+        padded_targets[row, :target_length] = target_ids
+
+    if position_rank > 1:
+        padded_position_ids = padded_position_ids.transpose(0, 1)
+    return (
+        padded_input_ids,
+        attention_mask,
+        padded_position_ids,
+        padded_targets,
+        action_lengths,
+        sample_indices,
+    )
 
 
 def _cast_frozen_lora_model_to_dtype(
@@ -311,6 +404,7 @@ class FSDPEngine(BaseEngine):
         lora_adapter_path = getattr(self.model_config, "lora_adapter_path", None)
         if lora_adapter_path is not None:
             from peft import PeftModel
+
             from verl.utils.fs import copy_to_local
 
             print(f"Loading pre-trained LoRA adapter to from: {lora_adapter_path}")
@@ -365,6 +459,7 @@ class FSDPEngine(BaseEngine):
     def _build_fsdp_module(self, module):
         # TODO(ziheng): need to improve
         from torch.distributed.fsdp import CPUOffload, MixedPrecision
+
         from verl.utils.torch_dtypes import PrecisionType
 
         mixed_precision_config = self.engine_config.mixed_precision
@@ -1182,6 +1277,127 @@ class FSDPEngineWithLMHead(FSDPEngine):
 
         return model_output
 
+    def _compute_decision_action_entropies(
+        self,
+        micro_batch: TensorDict,
+        standard_log_probs: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Teacher-force all legal action strings and keep their entropy differentiable."""
+
+        if self.use_ulysses_sp:
+            raise NotImplementedError("decision action-sequence entropy does not support Ulysses sequence parallelism")
+        if tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False):
+            raise NotImplementedError("decision action-sequence entropy does not support fused model outputs")
+
+        input_ids = micro_batch["input_ids"]
+        position_ids = micro_batch["position_ids"]
+        sequence_indices = micro_batch["decision_point_sequence_index"]
+        action_token_ids = micro_batch["decision_action_token_ids"]
+        action_token_mask = micro_batch["decision_action_token_mask"]
+        found = micro_batch["decision_action_found"].to(torch.float32)
+        batch_size, num_actions, _ = action_token_ids.shape
+        if num_actions < 2:
+            raise RuntimeError(f"expected at least two legal decision actions, got {num_actions}")
+
+        global_decision_count = tu.get_non_tensor_data(
+            data=micro_batch,
+            key="batch_num_decision_points",
+            default=None,
+        )
+        if global_decision_count is None:
+            raise ValueError("batch_num_decision_points is required for decision action-sequence entropy")
+        if global_decision_count == 0:
+            zero = standard_log_probs.values().sum() * 0.0
+            raw_entropy = zero.repeat(batch_size)
+            normalized_entropy = zero.repeat(batch_size)
+        else:
+            candidate_micro_batch_size = int(
+                tu.get_non_tensor_data(
+                    data=micro_batch,
+                    key="decision_point_entropy_candidate_micro_batch_size",
+                    default=2,
+                )
+            )
+            if candidate_micro_batch_size < 1:
+                raise ValueError("decision_point_entropy_candidate_micro_batch_size must be positive")
+
+            pad_token_id = int(tu.get_non_tensor_data(data=micro_batch, key="pad_token_id", default=0))
+            multi_modal_inputs = micro_batch.get("multi_modal_inputs", [])
+            temperature = micro_batch["temperature"]
+            sequence_scores = []
+            total_candidates = batch_size * num_actions
+            for chunk_start in range(0, total_candidates, candidate_micro_batch_size):
+                flat_candidate_indices = list(
+                    range(chunk_start, min(chunk_start + candidate_micro_batch_size, total_candidates))
+                )
+                (
+                    candidate_input_ids,
+                    candidate_attention_mask,
+                    candidate_position_ids,
+                    candidate_targets,
+                    action_lengths,
+                    sample_indices,
+                ) = _build_decision_action_candidate_chunk(
+                    input_ids,
+                    position_ids,
+                    sequence_indices,
+                    action_token_ids,
+                    action_token_mask,
+                    flat_candidate_indices,
+                    pad_token_id=pad_token_id,
+                )
+
+                candidate_model_inputs = {
+                    "input_ids": candidate_input_ids,
+                    "attention_mask": candidate_attention_mask,
+                    "position_ids": candidate_position_ids,
+                }
+                candidate_model_inputs.update(extract_multi_modal_inputs(multi_modal_inputs, indices=sample_indices))
+                logits_to_keep = max(action_lengths) + 1
+                candidate_output = self.module(
+                    **candidate_model_inputs,
+                    use_cache=False,
+                    logits_to_keep=logits_to_keep,
+                )
+                candidate_logits = candidate_output.logits
+                if candidate_logits.shape[1] != logits_to_keep:
+                    raise RuntimeError(
+                        f"expected {logits_to_keep} candidate logit positions, got {candidate_logits.shape[1]}"
+                    )
+
+                if isinstance(temperature, torch.Tensor):
+                    candidate_temperatures = temperature[sample_indices].to(torch.float32)
+                else:
+                    candidate_temperatures = torch.full(
+                        (len(sample_indices),),
+                        float(temperature),
+                        dtype=torch.float32,
+                        device=candidate_logits.device,
+                    )
+                if (candidate_temperatures <= 0).any():
+                    raise ValueError("temperature must be positive for decision action-sequence entropy")
+
+                for row, action_length in enumerate(action_lengths):
+                    prediction_start = logits_to_keep - action_length - 1
+                    prediction_end = logits_to_keep - 1
+                    action_logits = candidate_logits[row, prediction_start:prediction_end].float()
+                    action_logits = action_logits / candidate_temperatures[row]
+                    action_log_probs = torch.nn.functional.log_softmax(action_logits, dim=-1)
+                    target_ids = candidate_targets[row, :action_length].long()
+                    token_log_probs = action_log_probs.gather(1, target_ids.unsqueeze(1)).squeeze(1)
+                    sequence_scores.append(token_log_probs.sum())
+
+            sequence_score_tensor = torch.stack(sequence_scores).reshape(batch_size, num_actions)
+            raw_entropy, normalized_entropy = action_sequence_entropies(sequence_score_tensor)
+            raw_entropy = raw_entropy * found
+            normalized_entropy = normalized_entropy * found
+
+        offsets = torch.arange(batch_size + 1, dtype=torch.int64, device=raw_entropy.device)
+        return (
+            torch.nested.nested_tensor_from_jagged(raw_entropy, offsets),
+            torch.nested.nested_tensor_from_jagged(normalized_entropy, offsets),
+        )
+
     def forward_step(self, micro_batch: TensorDict, loss_function, forward_only):
         device_name = get_device_name()
         # actually, we should avoid assigning like this...
@@ -1197,6 +1413,13 @@ class FSDPEngineWithLMHead(FSDPEngine):
             model_output = self.prepare_model_outputs(
                 output=raw_output, output_args=output_args, micro_batch=micro_batch, logits_processor_func=loss_function
             )
+            if "decision_action_token_ids" in micro_batch:
+                raw_action_entropy, normalized_action_entropy = self._compute_decision_action_entropies(
+                    micro_batch,
+                    model_output["log_probs"],
+                )
+                model_output["decision_action_sequence_entropy"] = raw_action_entropy
+                model_output["decision_action_normalized_entropy"] = normalized_action_entropy
 
             if loss_function is not None:
                 loss, metrics = loss_function(

@@ -6,6 +6,10 @@ The probe reports two different distributions:
   matches the entropy recomputed by the actor and used by entropy regularization.
 * ``sampling_entropy`` is entropy after temperature, multimodal-token bias,
   top-k, and top-p. This is the distribution sampled by this standalone probe.
+* ``action_sequence_entropy`` is categorical entropy over the normalized
+  probabilities of the complete first-turn legal action strings. It separates
+  actions that share their first token, such as ``turbo_rain`` and
+  ``turbo_snow``.
 
 The prompt, tool schema, image bytes, and multimodal message structure come from
 the same repository sources as ``ToolAgentLoop``. No temporary prompt/schema
@@ -17,7 +21,9 @@ snapshots are used.
 import argparse
 import hashlib
 import json
+import math
 import sys
+from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -53,6 +59,11 @@ from agents.prompts import (  # noqa: E402
 )
 from schemas import ExpertName  # noqa: E402
 from tool_registry import ToolRegistry  # noqa: E402
+from verl.trainer.ppo.restoration_action_entropy import (  # noqa: E402
+    FIRST_TURN_RESTORATION_ACTIONS as DECISION_POINT_ACTIONS,
+    SFT_THINKING_ACTION_SURFACES,
+    action_match_variants,
+)
 from verl.utils.chat_template import apply_chat_template  # noqa: E402
 from verl.workers.rollout.utils import get_multimodal_special_token_ids  # noqa: E402
 
@@ -65,29 +76,6 @@ DEFAULT_DATA_PATH = str(OLD_VERL_ROOT / "data" / "fog_train.parquet")
 DEFAULT_TOOL_REGISTRY_PATH = str(IMAGE_RESTORATION_ROOT / "config" / "tools.yaml")
 DEFAULT_OUTPUT_DIR = str(OLD_VERL_ROOT / "outputs" / "per_token_entropy_analysis_aligned")
 GRPO_STOP_TOKEN_IDS = (248046, 248044)
-
-# Keep this list byte-for-byte aligned with
-# ``ray_trainer._RESTORATION_DECISION_POINT_ACTIONS``.  ``stop`` is present in
-# the tool schema, but it is not a restoration decision point and must not be
-# matched in the thinking text.
-DECISION_POINT_ACTIONS = (
-    "real_esrgan",
-    "scunet",
-    "retinexformer_fivek",
-    "hvicidnet",
-    "lightdiff",
-    "turbo_rain",
-    "s2former",
-    "idt",
-    "ridcp",
-    "kanet",
-    "turbo_snow",
-    "snowmaster",
-    "nafnet_denoise",
-    "focalnet_dehaze",
-    "focalnet_desnow",
-    "mb_taylorformer_dehaze",
-)
 
 EXPERT_ALIASES = {
     "fog": ExpertName.FOG,
@@ -310,6 +298,199 @@ def extend_sequence_inputs_for_generated_token(generation_inputs: dict[str, torc
         )
 
 
+def build_inputs_with_visible_tokens(
+    inputs: dict[str, torch.Tensor],
+    appended_token_ids: Sequence[int],
+) -> dict[str, torch.Tensor]:
+    """Append visible response tokens while preserving Qwen multimodal metadata."""
+
+    extended_inputs = dict(inputs)
+    input_ids = extended_inputs["input_ids"]
+    if appended_token_ids:
+        appended_ids = torch.tensor(
+            [list(appended_token_ids)],
+            device=input_ids.device,
+            dtype=input_ids.dtype,
+        )
+        extended_inputs["input_ids"] = torch.cat([input_ids, appended_ids], dim=1)
+
+        append_length = appended_ids.shape[1]
+        for key, fill_value in (("attention_mask", 1), ("mm_token_type_ids", 0), ("token_type_ids", 0)):
+            if key not in extended_inputs:
+                continue
+            sequence_values = extended_inputs[key]
+            extended_inputs[key] = torch.cat(
+                [
+                    sequence_values,
+                    torch.full(
+                        (sequence_values.shape[0], append_length),
+                        fill_value,
+                        device=sequence_values.device,
+                        dtype=sequence_values.dtype,
+                    ),
+                ],
+                dim=1,
+            )
+    return extended_inputs
+
+
+def normalize_action_sequence_logprobs(sequence_logprobs: torch.Tensor) -> tuple[torch.Tensor, float]:
+    """Normalize full action-sequence scores and return their categorical entropy."""
+
+    if sequence_logprobs.ndim != 1 or sequence_logprobs.numel() == 0:
+        raise ValueError("sequence_logprobs must be a non-empty one-dimensional tensor")
+    normalized_logprobs = sequence_logprobs.float() - torch.logsumexp(sequence_logprobs.float(), dim=0)
+    probabilities = normalized_logprobs.exp()
+    entropy = float(torch.sum(-probabilities * normalized_logprobs).item())
+    return probabilities, entropy
+
+
+def score_action_sequence_distribution(
+    model: Any,
+    tokenizer: Any,
+    inputs: dict[str, torch.Tensor],
+    response_prefix_ids: Sequence[int],
+    *,
+    candidate_leading_text: str,
+    actions: Sequence[str],
+    action_surfaces: dict[str, str],
+    temperature: float,
+    selected_action: Optional[str] = None,
+) -> dict[str, Any]:
+    """Score complete legal action strings from one fixed decision prefix.
+
+    The returned entropy is categorical entropy over full action-string sequence
+    probabilities. It is not the entropy of the first token and not a sum of
+    per-token entropies.
+    """
+
+    if temperature <= 0:
+        raise ValueError(f"temperature must be positive, got {temperature}")
+    if not actions:
+        raise ValueError("actions must not be empty")
+    if set(actions) != set(action_surfaces):
+        raise ValueError("action_surfaces must cover the requested actions exactly once")
+
+    prompt_length = int(inputs["input_ids"].shape[1])
+    decision_prefix_length = prompt_length + len(response_prefix_ids)
+    action_rows: list[dict[str, Any]] = []
+
+    with torch.no_grad():
+        for action in actions:
+            surface_form = action_surfaces[action]
+            scored_text = candidate_leading_text + surface_form
+            action_token_ids = tokenizer.encode(scored_text, add_special_tokens=False)
+            if not action_token_ids:
+                raise RuntimeError(f"tokenizer produced no tokens for action {action!r}")
+
+            appended_ids = [*response_prefix_ids, *action_token_ids]
+            scoring_inputs = build_inputs_with_visible_tokens(inputs, appended_ids)
+            outputs = model(**scoring_inputs, use_cache=False)
+
+            first_prediction_position = decision_prefix_length - 1
+            final_prediction_position = first_prediction_position + len(action_token_ids)
+            candidate_logits = outputs.logits[
+                0,
+                first_prediction_position:final_prediction_position,
+                :,
+            ].float()
+            if candidate_logits.shape[0] != len(action_token_ids):
+                raise RuntimeError(
+                    f"expected {len(action_token_ids)} prediction positions for {action!r}, "
+                    f"got {candidate_logits.shape[0]}"
+                )
+
+            candidate_logprobs = torch.nn.functional.log_softmax(candidate_logits / temperature, dim=-1)
+            target_ids = torch.tensor(action_token_ids, device=candidate_logprobs.device, dtype=torch.long)
+            token_logprobs = candidate_logprobs.gather(1, target_ids.unsqueeze(1)).squeeze(1)
+            sequence_logprob = float(token_logprobs.sum().item())
+            action_rows.append(
+                {
+                    "action": action,
+                    "surface_form": surface_form,
+                    "scored_text": scored_text,
+                    "token_ids": [int(token_id) for token_id in action_token_ids],
+                    "token_texts": [tokenizer.decode([token_id]) for token_id in action_token_ids],
+                    "token_logprobs": [float(value) for value in token_logprobs.detach().cpu().tolist()],
+                    "sequence_logprob": sequence_logprob,
+                    "mean_token_logprob": sequence_logprob / len(action_token_ids),
+                    "first_token_id": int(action_token_ids[0]),
+                    "first_token_text": tokenizer.decode([action_token_ids[0]]),
+                    "first_token_logprob": float(token_logprobs[0].item()),
+                }
+            )
+            del outputs, candidate_logits, candidate_logprobs, token_logprobs
+
+    sequence_logprob_tensor = torch.tensor(
+        [row["sequence_logprob"] for row in action_rows],
+        dtype=torch.float32,
+    )
+    action_probabilities, action_entropy = normalize_action_sequence_logprobs(sequence_logprob_tensor)
+    for row, probability in zip(action_rows, action_probabilities.tolist(), strict=True):
+        row["normalized_probability"] = float(probability)
+
+    action_rows.sort(key=lambda row: row["normalized_probability"], reverse=True)
+    for rank, row in enumerate(action_rows, 1):
+        row["rank"] = rank
+
+    first_token_groups: dict[int, dict[str, Any]] = {}
+    grouped_actions: defaultdict[int, list[str]] = defaultdict(list)
+    grouped_logprobs: dict[int, float] = {}
+    for row in action_rows:
+        token_id = row["first_token_id"]
+        grouped_actions[token_id].append(row["action"])
+        grouped_logprobs[token_id] = row["first_token_logprob"]
+    unique_first_token_ids = sorted(grouped_actions)
+    first_token_logprob_tensor = torch.tensor(
+        [grouped_logprobs[token_id] for token_id in unique_first_token_ids],
+        dtype=torch.float32,
+    )
+    first_token_probabilities, first_token_group_entropy = normalize_action_sequence_logprobs(
+        first_token_logprob_tensor
+    )
+    for token_id, probability in zip(unique_first_token_ids, first_token_probabilities.tolist(), strict=True):
+        first_token_groups[token_id] = {
+            "token_id": token_id,
+            "token_text": tokenizer.decode([token_id]),
+            "actions": sorted(grouped_actions[token_id]),
+            "policy_logprob": grouped_logprobs[token_id],
+            "normalized_probability": float(probability),
+        }
+
+    action_count = len(action_rows)
+    maximum_entropy = math.log(action_count)
+    selected_row = next((row for row in action_rows if row["action"] == selected_action), None)
+    return {
+        "definition": "categorical entropy over normalized complete action-string sequence probabilities",
+        "temperature": float(temperature),
+        "surface_form_source": "0721 SFT thinking targets",
+        "candidate_leading_text": candidate_leading_text,
+        "action_count": action_count,
+        "maximum_entropy": maximum_entropy,
+        "sequence_entropy": action_entropy,
+        "normalized_sequence_entropy": action_entropy / maximum_entropy if maximum_entropy > 0 else 0.0,
+        "candidate_sequence_log_mass": float(torch.logsumexp(sequence_logprob_tensor, dim=0).item()),
+        "actions": action_rows,
+        "first_token_group_count": len(first_token_groups),
+        "first_token_group_entropy": first_token_group_entropy,
+        "first_token_groups": sorted(
+            first_token_groups.values(),
+            key=lambda group: group["normalized_probability"],
+            reverse=True,
+        ),
+        "shared_first_token_groups": [
+            group
+            for group in first_token_groups.values()
+            if len(group["actions"]) > 1
+        ],
+        "selected_action": selected_action,
+        "selected_action_probability": (
+            selected_row["normalized_probability"] if selected_row is not None else None
+        ),
+        "selected_action_rank": selected_row["rank"] if selected_row is not None else None,
+    }
+
+
 def generate_with_per_token_entropy(
     model: Any,
     processor: Any,
@@ -422,25 +603,25 @@ def find_decision_point(
     token_ids: Sequence[int],
     tokenizer: Any,
     actions: Sequence[str] = DECISION_POINT_ACTIONS,
-) -> tuple[int, Optional[str]]:
-    """Match the training heuristic and map its character offset to the exact token."""
+) -> tuple[int, Optional[str], str]:
+    """Match the training heuristic and return the token-boundary continuation prefix."""
 
     think_end = full_text.find("</think>")
     if think_end == -1:
-        return -1, None
+        return -1, None, ""
     thinking_text = full_text[:think_end]
     lower_thinking = thinking_text.lower()
 
     best: Optional[tuple[int, str]] = None
     for action in actions:
-        for variant in (action, action.replace("_", "-"), action.replace("_", " ")):
+        for variant in action_match_variants(action):
             position = lower_thinking.find(variant.lower())
             if position != -1 and (best is None or position < best[0]):
                 best = (position, action)
             if position != -1:
                 break
     if best is None:
-        return -1, None
+        return -1, None, ""
 
     encoded = tokenizer(full_text, return_offsets_mapping=True, add_special_tokens=False)
     offsets = encoded["offset_mapping"]
@@ -452,8 +633,12 @@ def find_decision_point(
     action_char_start, action_name = best
     for token_index, (char_start, char_end) in enumerate(offsets):
         if char_start <= action_char_start < char_end or char_start == action_char_start:
-            return token_index, action_name
-    return -1, None
+            # The action can start after whitespace inside the decision token.
+            # Reuse those leading characters when tokenizing every candidate so
+            # each candidate starts at exactly the same model token boundary.
+            candidate_leading_text = full_text[char_start:action_char_start]
+            return token_index, action_name, candidate_leading_text
+    return -1, None, ""
 
 
 def find_high_entropy_regions(entropies: Sequence[float], threshold: float) -> list[int]:
@@ -571,6 +756,42 @@ def save_detailed_report(
             report.write(f"  Policy 熵: {policy_entropies[decision_point]:.6f} nats\n")
             report.write(f"  Sampling 熵: {sampling_entropies[decision_point]:.6f} nats\n")
             report.write(f"  Sampling P: {result['probs'][decision_point]:.6f}\n\n")
+
+            action_analysis = result.get("action_sequence_analysis")
+            if action_analysis is not None:
+                report.write("【完整动作串分类熵】\n")
+                report.write(
+                    f"  合法动作数: {action_analysis['action_count']}\n"
+                    f"  完整动作串序列熵: {action_analysis['sequence_entropy']:.6f} nats\n"
+                    f"  理论最大熵: {action_analysis['maximum_entropy']:.6f} nats\n"
+                    f"  归一化序列熵: {action_analysis['normalized_sequence_entropy']:.6f}\n"
+                    f"  唯一首 Token 数: {action_analysis['first_token_group_count']}\n"
+                    f"  首 Token 分组熵: {action_analysis['first_token_group_entropy']:.6f} nats\n"
+                    f"  实际动作分类概率: {action_analysis['selected_action_probability']}\n"
+                    f"  实际动作分类排名: {action_analysis['selected_action_rank']}\n"
+                    f"  Token 边界前导文本: {action_analysis['candidate_leading_text']!r}\n\n"
+                )
+                report.write(
+                    f"  {'Rank':<6} {'Action':<27} {'Thinking surface':<27} {'Tokens':>8} {'logP(sequence)':>16} "
+                    f"{'P(action)':>12}\n"
+                )
+                report.write("  " + "-" * 108 + "\n")
+                for row in action_analysis["actions"]:
+                    report.write(
+                        f"  {row['rank']:<6} {row['action']:<27} {row['surface_form']:<27} "
+                        f"{len(row['token_ids']):>8} "
+                        f"{row['sequence_logprob']:>16.6f} {row['normalized_probability']:>12.6f}\n"
+                    )
+                report.write("\n  共享首 Token 的动作组:\n")
+                shared_groups = action_analysis["shared_first_token_groups"]
+                if not shared_groups:
+                    report.write("    无\n")
+                for group in shared_groups:
+                    report.write(
+                        f"    token={group['token_text']!r} id={group['token_id']}: "
+                        f"{', '.join(group['actions'])}\n"
+                    )
+                report.write("\n")
 
         report.write("【Top-10 Policy 熵位置】\n")
         report.write(f"  {'Rank':<6} {'Pos':<6} {'Token':<20} {'H_policy':>12} {'H_sample':>12}\n")
@@ -783,7 +1004,14 @@ def main() -> None:
         "max_policy_entropy": 0.0,
         "mean_policy_entropy": 0.0,
         "mean_sampling_entropy": 0.0,
+        "mean_decision_action_sequence_entropy": None,
+        "mean_normalized_decision_action_sequence_entropy": None,
+        "mean_decision_first_token_group_entropy": None,
     }
+    action_sequence_entropy_sum = 0.0
+    normalized_action_sequence_entropy_sum = 0.0
+    first_token_group_entropy_sum = 0.0
+    action_sequence_analysis_count = 0
 
     for sample_number, (df_index, row) in enumerate(samples.iterrows(), 1):
         print("\n" + "=" * 80)
@@ -814,7 +1042,7 @@ def main() -> None:
         if not result["tokens"]:
             raise RuntimeError(f"model generated no visible tokens for df_index={df_index}")
 
-        decision_point, action_name = find_decision_point(
+        decision_point, action_name, candidate_leading_text = find_decision_point(
             result["full_text"],
             result["tokens"],
             processor.tokenizer,
@@ -828,13 +1056,38 @@ def main() -> None:
         print(f"Sampling 平均熵: {np.mean(result['sampling_entropies']):.6f} nats")
         if decision_point == -1:
             print("未找到决策点")
+            result["action_sequence_analysis"] = None
         else:
             print(
                 f"决策点: pos={decision_point} token={result['token_texts'][decision_point]!r} "
                 f"action={action_name} H_policy={result['policy_entropies'][decision_point]:.6f} "
                 f"H_sample={result['sampling_entropies'][decision_point]:.6f}"
             )
+            print(f"正在计算 {len(DECISION_POINT_ACTIONS)} 个完整合法动作串的序列概率...")
+            action_sequence_analysis = score_action_sequence_distribution(
+                model,
+                processor.tokenizer,
+                inputs,
+                result["tokens"][:decision_point],
+                candidate_leading_text=candidate_leading_text,
+                actions=DECISION_POINT_ACTIONS,
+                action_surfaces=SFT_THINKING_ACTION_SURFACES,
+                temperature=args.temperature,
+                selected_action=action_name,
+            )
+            result["action_sequence_analysis"] = action_sequence_analysis
+            print(
+                "完整动作串分类熵: "
+                f"H={action_sequence_analysis['sequence_entropy']:.6f} "
+                f"H_max={action_sequence_analysis['maximum_entropy']:.6f} "
+                f"H/H_max={action_sequence_analysis['normalized_sequence_entropy']:.6f} "
+                f"首Token组数={action_sequence_analysis['first_token_group_count']}"
+            )
             summary["decision_points_found"] += 1
+            action_sequence_entropy_sum += action_sequence_analysis["sequence_entropy"]
+            normalized_action_sequence_entropy_sum += action_sequence_analysis["normalized_sequence_entropy"]
+            first_token_group_entropy_sum += action_sequence_analysis["first_token_group_entropy"]
+            action_sequence_analysis_count += 1
 
         if high_entropy_positions:
             summary["samples_with_high_entropy"] += 1
@@ -899,6 +1152,29 @@ def main() -> None:
                 "decision_sampling_entropy": (
                     result["sampling_entropies"][decision_point] if decision_point != -1 else None
                 ),
+                "decision_action_sequence_entropy": (
+                    result["action_sequence_analysis"]["sequence_entropy"] if decision_point != -1 else None
+                ),
+                "normalized_decision_action_sequence_entropy": (
+                    result["action_sequence_analysis"]["normalized_sequence_entropy"]
+                    if decision_point != -1
+                    else None
+                ),
+                "decision_first_token_group_entropy": (
+                    result["action_sequence_analysis"]["first_token_group_entropy"]
+                    if decision_point != -1
+                    else None
+                ),
+                "selected_action_sequence_probability": (
+                    result["action_sequence_analysis"]["selected_action_probability"]
+                    if decision_point != -1
+                    else None
+                ),
+                "selected_action_sequence_rank": (
+                    result["action_sequence_analysis"]["selected_action_rank"]
+                    if decision_point != -1
+                    else None
+                ),
                 "mean_policy_entropy": float(np.mean(result["policy_entropies"])),
                 "mean_sampling_entropy": float(np.mean(result["sampling_entropies"])),
             }
@@ -906,6 +1182,16 @@ def main() -> None:
 
     summary["mean_policy_entropy"] /= len(samples)
     summary["mean_sampling_entropy"] /= len(samples)
+    if action_sequence_analysis_count:
+        summary["mean_decision_action_sequence_entropy"] = (
+            action_sequence_entropy_sum / action_sequence_analysis_count
+        )
+        summary["mean_normalized_decision_action_sequence_entropy"] = (
+            normalized_action_sequence_entropy_sum / action_sequence_analysis_count
+        )
+        summary["mean_decision_first_token_group_entropy"] = (
+            first_token_group_entropy_sum / action_sequence_analysis_count
+        )
     with open(output_dir / "00_summary.txt", "w", encoding="utf-8") as summary_file:
         summary_file.write("GRPO-aligned Per-Token Entropy Analysis\n")
         summary_file.write("=" * 80 + "\n\n")

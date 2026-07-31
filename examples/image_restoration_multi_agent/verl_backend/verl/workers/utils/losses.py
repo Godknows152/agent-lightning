@@ -15,6 +15,7 @@
 
 import torch
 from tensordict import TensorDict
+
 from verl.trainer.diffusion.diffusion_algos import kl_penalty_image
 from verl.trainer.ppo.core_algos import agg_loss, compute_value_loss, get_policy_loss_fn, kl_penalty
 from verl.utils import tensordict_utils as tu
@@ -60,6 +61,8 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     entropy = model_output.get("entropy", None)
     if entropy is not None:
         entropy = no_padding_2_padding(entropy, data)
+    decision_action_sequence_entropy = model_output.get("decision_action_sequence_entropy", None)
+    decision_action_normalized_entropy = model_output.get("decision_action_normalized_entropy", None)
 
     # global batch info for loss aggregation
     config.global_batch_info["dp_size"] = data["dp_size"]
@@ -88,8 +91,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         fields.append("rollout_is_weights")
     if "ref_log_prob" in data:
         fields.append("ref_log_prob")
-    # v4: decision_point_mask for selective entropy regularization
-    has_dp_mask = "decision_point_mask" in data and config.decision_point_entropy_coeff > 0.0
+    # The mask carries the global count used to average per-decision action entropies.
+    decision_action_entropy_enabled = config.decision_point_entropy_coeff > 0.0
+    if decision_action_entropy_enabled and "decision_point_mask" not in data:
+        raise ValueError("decision_point_mask is required when decision_point_entropy_coeff is positive")
+    has_dp_mask = decision_action_entropy_enabled
     batch_num_decision_points = None
     if has_dp_mask:
         fields.append("decision_point_mask")
@@ -98,6 +104,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         )
         if batch_num_decision_points is None:
             raise ValueError("batch_num_decision_points is required when decision_point_mask is present")
+        if decision_action_sequence_entropy is None or decision_action_normalized_entropy is None:
+            raise ValueError(
+                "current-policy decision action-sequence entropies are required when "
+                "decision_point_entropy_coeff is positive"
+            )
     data = data.select(*fields).to_padded_tensor()
 
     response_mask = data["response_mask"].to(bool)
@@ -138,23 +149,23 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         policy_loss -= entropy_coeff * entropy_loss
         metrics["actor/entropy_loss"] = Metric(value=entropy_loss, aggregation=metric_aggregation)
 
-    # v4: add decision point selective entropy loss
-    if entropy is not None and has_dp_mask:
-        dp_mask = data["decision_point_mask"].to(bool)  # (bsz, response_len)
-        if dp_mask.any():
-            # Selective entropy is the mean over found decision points, independent of the PPO loss aggregation mode.
-            dp_entropy_loss = agg_loss(
-                loss_mat=entropy,
-                loss_mask=dp_mask,
-                loss_agg_mode="token-mean",
-                dp_size=config.global_batch_info["dp_size"],
-                batch_num_tokens=batch_num_decision_points,
+    # Add normalized categorical entropy over complete legal action strings.
+    if has_dp_mask:
+        if batch_num_decision_points > 0:
+            dp_size = config.global_batch_info["dp_size"]
+            dp_action_sequence_entropy = (
+                decision_action_sequence_entropy.values().sum() / batch_num_decision_points * dp_size
             )
+            dp_entropy_loss = decision_action_normalized_entropy.values().sum() / batch_num_decision_points * dp_size
             policy_loss -= config.decision_point_entropy_coeff * dp_entropy_loss
         else:
-            dp_entropy_loss = torch.tensor(0.0, device=entropy.device)
+            dp_action_sequence_entropy = log_prob.sum() * 0.0
+            dp_entropy_loss = log_prob.sum() * 0.0
         metrics["actor/decision_point_entropy"] = Metric(
             value=dp_entropy_loss, aggregation=metric_aggregation
+        )
+        metrics["actor/decision_point_action_sequence_entropy"] = Metric(
+            value=dp_action_sequence_entropy, aggregation=metric_aggregation
         )
 
     # add kl loss

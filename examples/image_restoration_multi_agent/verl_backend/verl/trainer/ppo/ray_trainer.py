@@ -18,14 +18,6 @@ PPO Trainer with Ray-based single controller.
 This trainer supports model-agonistic model initialization with huggingface
 """
 
-# v4: Valid action names for thinking decision-point detection
-_RESTORATION_DECISION_POINT_ACTIONS: tuple[str, ...] = (
-    "real_esrgan", "scunet", "retinexformer_fivek", "hvicidnet", "lightdiff",
-    "turbo_rain", "s2former", "idt", "ridcp", "kanet", "turbo_snow",
-    "snowmaster", "nafnet_denoise", "focalnet_dehaze", "focalnet_desnow",
-    "mb_taylorformer_dehaze",
-)
-
 import json
 import os
 import uuid
@@ -40,6 +32,7 @@ from omegaconf import OmegaConf, open_dict
 from torch.utils.data import Dataset, Sampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 from tqdm import tqdm
+
 from verl import DataProto
 from verl.experimental.dataset.sampler import AbstractCurriculumSampler
 from verl.protocol import pad_dataproto_to_divisor, unpad_dataproto
@@ -59,6 +52,11 @@ from verl.trainer.ppo.metric_utils import (
     compute_timing_metrics,
     compute_variance_proxy_metrics,
     process_validation_metrics,
+)
+from verl.trainer.ppo.restoration_action_entropy import (
+    FIRST_TURN_RESTORATION_ACTIONS,
+    find_first_restoration_action,
+    tokenize_action_surfaces,
 )
 from verl.trainer.ppo.reward import extract_reward
 from verl.trainer.ppo.utils import (
@@ -1512,31 +1510,28 @@ class RayPPOTrainer:
         old_log_prob = DataProto.from_tensordict(old_log_prob)
         return old_log_prob, old_log_prob_mfu
 
-    def _compute_decision_point_mask(self, batch: DataProto) -> tuple[torch.Tensor, float]:
-        """v4: Find the first token of the first action name in each response's thinking region.
+    def _compute_decision_action_metadata(self, batch: DataProto) -> tuple[dict[str, torch.Tensor], float]:
+        """Build differentiable action-string scoring metadata at the first thinking decision."""
 
-        Returns:
-            mask: (bsz, response_len) float32 tensor; 1 at decision-point positions, 0 elsewhere.
-            found_rate: fraction of samples where a decision point was found.
-        """
         responses = batch.batch["responses"]  # (bsz, response_len)
         bsz, response_len = responses.shape
         mask = torch.zeros(bsz, response_len, dtype=torch.float32, device=responses.device)
+        sequence_indices = torch.zeros(bsz, dtype=torch.long, device=responses.device)
+        found = torch.zeros(bsz, dtype=torch.bool, device=responses.device)
         found_count = 0
-
-        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+        prompt_width = batch.batch["prompts"].shape[1]
+        attention_mask = batch.batch["attention_mask"]
+        tokenized_actions_by_sample: list[list[list[int]]] = []
 
         for i in range(bsz):
-            ids = responses[i].tolist()
-            # Strip trailing padding
-            actual_len = response_len
-            for j in range(response_len - 1, -1, -1):
-                if ids[j] != pad_id:
-                    actual_len = j + 1
-                    break
+            prompt_length = int(attention_mask[i, :prompt_width].sum().item())
+            actual_len = int(attention_mask[i, prompt_width:].sum().item())
+            sequence_indices[i] = prompt_length
+            default_action_tokens = tokenize_action_surfaces(self.tokenizer, leading_text=" ")
             if actual_len == 0:
+                tokenized_actions_by_sample.append(default_action_tokens)
                 continue
-            ids_trimmed = ids[:actual_len]
+            ids_trimmed = responses[i, :actual_len].tolist()
 
             # Decode response (thinking starts at pos 0; <think> tag is in the prompt)
             response_text = self.tokenizer.decode(ids_trimmed, skip_special_tokens=False)
@@ -1544,22 +1539,13 @@ class RayPPOTrainer:
             # Thinking region ends at </think>
             think_end = response_text.find("</think>")
             if think_end == -1:
+                tokenized_actions_by_sample.append(default_action_tokens)
                 continue
             thinking_text = response_text[:think_end]
 
-            # Find first occurrence of any action name (case-insensitive, try variants)
-            lower_thinking = thinking_text.lower()
-            best = None  # (char_pos_in_thinking, action_name)
-            for action in _RESTORATION_DECISION_POINT_ACTIONS:
-                # Try underscore/hyphen/space variants (e.g. "real_esrgan" → "real-esrgan")
-                for variant in (action, action.replace("_", "-"), action.replace("_", " ")):
-                    pos = lower_thinking.find(variant.lower())
-                    if pos != -1:
-                        if best is None or pos < best[0]:
-                            best = (pos, action)
-                        break
-
+            best = find_first_restoration_action(thinking_text)
             if best is None:
+                tokenized_actions_by_sample.append(default_action_tokens)
                 continue
 
             # Map character position to token position in the response
@@ -1569,17 +1555,62 @@ class RayPPOTrainer:
             enc = self.tokenizer(response_text, return_offsets_mapping=True, add_special_tokens=False)
             offsets = enc["offset_mapping"]
 
+            decision_token_index = None
+            candidate_leading_text = ""
             for j, (char_s, char_e) in enumerate(offsets):
                 if j >= actual_len:
                     break
                 if char_s <= action_char_start < char_e or char_s == action_char_start:
-                    if j < response_len:
-                        mask[i, j] = 1.0
-                        found_count += 1
+                    decision_token_index = j
+                    candidate_leading_text = response_text[char_s:action_char_start]
                     break
 
+            if decision_token_index is None:
+                tokenized_actions_by_sample.append(default_action_tokens)
+                continue
+
+            mask[i, decision_token_index] = 1.0
+            sequence_indices[i] = prompt_length + decision_token_index
+            found[i] = True
+            found_count += 1
+            tokenized_actions_by_sample.append(
+                tokenize_action_surfaces(self.tokenizer, leading_text=candidate_leading_text)
+            )
+
+        num_actions = len(FIRST_TURN_RESTORATION_ACTIONS)
+        max_action_tokens = max(
+            len(token_ids)
+            for sample_actions in tokenized_actions_by_sample
+            for token_ids in sample_actions
+        )
+        action_token_ids = torch.zeros(
+            bsz,
+            num_actions,
+            max_action_tokens,
+            dtype=responses.dtype,
+            device=responses.device,
+        )
+        action_token_mask = torch.zeros_like(action_token_ids, dtype=torch.bool)
+        for sample_index, sample_actions in enumerate(tokenized_actions_by_sample):
+            if len(sample_actions) != num_actions:
+                raise RuntimeError(f"expected {num_actions} decision actions, got {len(sample_actions)}")
+            for action_index, token_ids in enumerate(sample_actions):
+                token_count = len(token_ids)
+                action_token_ids[sample_index, action_index, :token_count] = torch.tensor(
+                    token_ids,
+                    dtype=responses.dtype,
+                    device=responses.device,
+                )
+                action_token_mask[sample_index, action_index, :token_count] = True
+
         found_rate = found_count / max(bsz, 1)
-        return mask, found_rate
+        return {
+            "decision_point_mask": mask,
+            "decision_point_sequence_index": sequence_indices,
+            "decision_action_token_ids": action_token_ids,
+            "decision_action_token_mask": action_token_mask,
+            "decision_action_found": found,
+        }, found_rate
 
     def _update_actor(self, batch: DataProto) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
@@ -1593,7 +1624,6 @@ class RayPPOTrainer:
         calculate_entropy = (
             self.config.actor_rollout_ref.actor.calculate_entropy
             or (self.config.actor_rollout_ref.actor.entropy_coeff != 0.0)
-            or (self.config.actor_rollout_ref.actor.decision_point_entropy_coeff != 0.0)
         )
         distillation_use_topk = (
             self.distillation_config.distillation_loss.loss_settings.use_topk
@@ -1608,6 +1638,9 @@ class RayPPOTrainer:
         tu.assign_non_tensor(
             batch_td,
             calculate_entropy=calculate_entropy,
+            decision_point_entropy_candidate_micro_batch_size=(
+                self.config.actor_rollout_ref.actor.decision_point_entropy_candidate_micro_batch_size
+            ),
             distillation_use_topk=distillation_use_topk,
             global_batch_size=ppo_mini_batch_size,
             mini_batch_size=ppo_mini_batch_size,
@@ -1660,6 +1693,7 @@ class RayPPOTrainer:
         The light-weight advantage computation is done on the driver process.
         """
         from omegaconf import OmegaConf
+
         from verl.utils.tracking import Tracking
 
         logger = Tracking(
@@ -1953,10 +1987,10 @@ class RayPPOTrainer:
                         # Still in critic warmup, only update weights to wake up rollout replicas.
                         self.checkpoint_manager.update_weights(self.global_steps)
                     else:
-                        # v4: Compute decision-point mask for selective entropy regularization
+                        # Build full legal-action branches at the first thinking decision point.
                         if self.config.actor_rollout_ref.actor.decision_point_entropy_coeff > 0.0:
-                            _dp_mask, _dp_found_rate = self._compute_decision_point_mask(batch)
-                            batch.batch["decision_point_mask"] = _dp_mask
+                            decision_metadata, _dp_found_rate = self._compute_decision_action_metadata(batch)
+                            batch.batch.update(decision_metadata)
                             metrics["actor/decision_point_found_rate"] = _dp_found_rate
 
                         # update actor
