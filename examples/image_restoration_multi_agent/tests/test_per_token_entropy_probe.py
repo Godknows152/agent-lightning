@@ -38,6 +38,13 @@ def test_entropy_is_computed_in_fp32(probe) -> None:
     assert probe.entropy_from_logits(logits) == pytest.approx(expected, abs=1e-7)
 
 
+def test_probe_defaults_match_current_grpo_sampling(probe) -> None:
+    args = probe.build_argument_parser().parse_args([])
+
+    assert args.temperature == 1.0
+    assert args.top_p == 1.0
+
+
 def test_sampling_filters_apply_visual_bias_temperature_and_top_p(probe) -> None:
     logits = torch.tensor([4.0, 3.0, 2.0, 1.0, 100.0])
 

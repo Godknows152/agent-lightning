@@ -23,9 +23,10 @@ from verl.utils.metric import Metric
 from verl.workers.utils import losses
 
 
-def _make_config(*, coeff: float = 0.002):
+def _make_config(*, coeff: float = 0.002, first_token_coeff: float = 0.0):
     return SimpleNamespace(
         decision_point_entropy_coeff=coeff,
+        decision_point_first_token_entropy_coeff=first_token_coeff,
         entropy_coeff=0.0,
         global_batch_info={},
         kl_loss_coef=0.0,
@@ -188,3 +189,135 @@ def test_decision_point_entropy_backpropagates_through_action_distribution(monke
     policy_loss.backward()
 
     assert policy_loss.grad_fn is not None
+
+
+def _run_first_token_ppo_loss(
+    monkeypatch,
+    *,
+    normalized_entropies,
+    raw_entropies,
+    effective_counts,
+    legal_masses,
+    found,
+    global_trajectory_count,
+    dp_size=1,
+    coeff=0.002,
+):
+    batch_size = len(found)
+    response_mask = torch.ones((batch_size, 3), dtype=torch.float32)
+    found_tensor = torch.tensor(found, dtype=torch.bool)
+    data = TensorDict(
+        {
+            "advantages": torch.zeros_like(response_mask),
+            "decision_first_token_found": found_tensor,
+            "old_log_probs": torch.zeros_like(response_mask),
+            "response_mask": response_mask,
+        },
+        batch_size=[batch_size],
+    )
+    tu.assign_non_tensor(
+        data,
+        batch_num_decision_trajectories=global_trajectory_count,
+        batch_num_tokens=int(response_mask.sum().item()),
+        dp_size=dp_size,
+        global_batch_size=dp_size,
+    )
+
+    def fake_policy_loss(**kwargs):
+        return kwargs["log_prob"].sum() * 0.0, {}
+
+    monkeypatch.setattr(losses, "get_policy_loss_fn", lambda _: fake_policy_loss)
+    monkeypatch.setattr(losses, "no_padding_2_padding", lambda tensor, _: tensor)
+
+    return losses.ppo_loss(
+        config=_make_config(coeff=0.0, first_token_coeff=coeff),
+        model_output={
+            "log_probs": torch.zeros_like(response_mask, requires_grad=True),
+            "decision_first_token_action_entropy": torch.tensor(raw_entropies, requires_grad=True),
+            "decision_first_token_action_entropy_normalized": torch.tensor(normalized_entropies, requires_grad=True),
+            "decision_first_token_effective_action_count": torch.tensor(effective_counts),
+            "decision_first_token_legal_mass": torch.tensor(legal_masses),
+        },
+        data=data,
+    )
+
+
+def test_first_token_entropy_averages_decisions_within_each_trajectory(monkeypatch):
+    policy_loss, metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.2, 0.0, 0.0], [0.6, 0.8, 1.0]],
+        raw_entropies=[[0.4, 0.0, 0.0], [1.2, 1.6, 2.0]],
+        effective_counts=[[2.0, 0.0, 0.0], [4.0, 5.0, 6.0]],
+        legal_masses=[[0.8, 0.0, 0.0], [0.6, 0.5, 0.4]],
+        found=[[True, False, False], [True, True, True]],
+        global_trajectory_count=2,
+    )
+
+    # trajectory means are 0.2 and 0.8, so the two trajectories contribute equally.
+    assert metrics["actor/decision_point_first_token_action_entropy_normalized"].aggregate() == pytest.approx(0.5)
+    assert metrics["actor/decision_point_first_token_action_entropy"].aggregate() == pytest.approx(1.0)
+    assert metrics["actor/decision_point_first_token_effective_action_count"].aggregate() == pytest.approx(3.5)
+    assert metrics["actor/decision_point_legal_first_token_mass"].aggregate() == pytest.approx(0.65)
+    assert policy_loss.item() == pytest.approx(-0.001)
+
+
+def test_first_token_entropy_distributed_mean_uses_valid_trajectory_count(monkeypatch):
+    _, rank0_metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.2, 0.0]],
+        raw_entropies=[[0.4, 0.0]],
+        effective_counts=[[2.0, 0.0]],
+        legal_masses=[[0.8, 0.0]],
+        found=[[True, False]],
+        global_trajectory_count=2,
+        dp_size=2,
+    )
+    _, rank1_metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.6, 1.0]],
+        raw_entropies=[[1.2, 2.0]],
+        effective_counts=[[4.0, 6.0]],
+        legal_masses=[[0.6, 0.4]],
+        found=[[True, True]],
+        global_trajectory_count=2,
+        dp_size=2,
+    )
+
+    normalized = Metric.aggregate_dp(
+        [
+            rank0_metrics["actor/decision_point_first_token_action_entropy_normalized"],
+            rank1_metrics["actor/decision_point_first_token_action_entropy_normalized"],
+        ]
+    )
+    assert normalized == pytest.approx(0.5)
+
+
+def test_first_token_entropy_handles_rank_without_valid_trajectory(monkeypatch):
+    _, rank0_metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.0]],
+        raw_entropies=[[0.0]],
+        effective_counts=[[0.0]],
+        legal_masses=[[0.0]],
+        found=[[False]],
+        global_trajectory_count=1,
+        dp_size=2,
+    )
+    _, rank1_metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.7]],
+        raw_entropies=[[1.4]],
+        effective_counts=[[4.0]],
+        legal_masses=[[0.6]],
+        found=[[True]],
+        global_trajectory_count=1,
+        dp_size=2,
+    )
+
+    normalized = Metric.aggregate_dp(
+        [
+            rank0_metrics["actor/decision_point_first_token_action_entropy_normalized"],
+            rank1_metrics["actor/decision_point_first_token_action_entropy_normalized"],
+        ]
+    )
+    assert normalized == pytest.approx(0.7)

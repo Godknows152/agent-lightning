@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import math
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,11 +22,16 @@ import torch
 import yaml
 from tensordict import TensorDict
 
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.trainer.ppo.restoration_action_entropy import (
+    ALL_TURN_RESTORATION_ACTIONS,
     FIRST_TURN_RESTORATION_ACTIONS,
     SFT_THINKING_ACTION_SURFACES,
     action_sequence_entropies,
+    find_called_restoration_action,
     find_first_restoration_action,
+    find_restoration_decision_in_assistant_turn,
+    first_token_action_entropies,
 )
 from verl.utils import tensordict_utils as tu
 from verl.workers.engine.fsdp.transformer_impl import (
@@ -37,11 +43,7 @@ from verl.workers.engine.fsdp.transformer_impl import (
 def test_action_entropy_surfaces_match_shared_tool_registry() -> None:
     tools_config = Path(__file__).resolve().parents[4] / "config" / "tools.yaml"
     payload = yaml.safe_load(tools_config.read_text(encoding="utf-8"))
-    registry_surfaces = {
-        item["name"]: item["model_name"]
-        for item in payload["tools"]
-        if item.get("enabled", True)
-    }
+    registry_surfaces = {item["name"]: item["model_name"] for item in payload["tools"] if item.get("enabled", True)}
 
     assert dict(SFT_THINKING_ACTION_SURFACES) == registry_surfaces
 
@@ -70,6 +72,131 @@ def test_uniform_complete_action_distribution_has_unit_normalized_entropy():
 
     assert torch.allclose(raw_entropy, torch.full((2,), math.log(16)))
     assert torch.allclose(normalized_entropy, torch.ones(2))
+
+
+@pytest.mark.parametrize("num_actions", [16, 17])
+def test_uniform_first_token_action_distribution_has_unit_normalized_entropy(num_actions):
+    logits = torch.zeros(2, 17, requires_grad=True)
+    legal_mask = torch.zeros_like(logits, dtype=torch.bool)
+    legal_mask[:, :num_actions] = True
+
+    raw_entropy, normalized_entropy = first_token_action_entropies(logits, legal_mask)
+    (-normalized_entropy.mean()).backward()
+
+    assert torch.allclose(raw_entropy, torch.full((2,), math.log(num_actions)))
+    assert torch.allclose(normalized_entropy, torch.ones(2))
+    assert logits.grad is not None
+    assert torch.isfinite(logits.grad).all()
+
+
+def test_first_token_action_entropy_is_low_for_a_concentrated_distribution():
+    logits = torch.full((1, 16), -20.0)
+    logits[0, 3] = 20.0
+
+    raw_entropy, normalized_entropy = first_token_action_entropies(logits)
+
+    assert raw_entropy.item() < 1e-12
+    assert normalized_entropy.item() < 1e-12
+
+
+def test_turn_detector_uses_the_xml_action_to_disambiguate_thinking_text():
+    text = (
+        "I considered stop, but I will select N_focalnet_dehaze now.\n"
+        "</think>\n<tool_call><function=restore_image><parameter=action>\n"
+        "N_focalnet_dehaze\n</parameter></function></tool_call>"
+    )
+
+    assert find_called_restoration_action(text) == "focalnet_dehaze"
+    decision = find_restoration_decision_in_assistant_turn(
+        text,
+        legal_actions=ALL_TURN_RESTORATION_ACTIONS,
+    )
+    assert decision == (text.index("N_focalnet_dehaze"), "focalnet_dehaze")
+
+
+def test_stop_decision_does_not_match_stopping_as_a_substring():
+    text = (
+        "I will inspect the result before stopping. I will stop now.\n"
+        "</think><tool_call><function=restore_image><parameter=action>stop</parameter>"
+        "</function></tool_call>"
+    )
+
+    decision = find_restoration_decision_in_assistant_turn(
+        text,
+        legal_actions=ALL_TURN_RESTORATION_ACTIONS,
+    )
+
+    assert decision == (text.index("stop now"), "stop")
+
+
+def test_full_trajectory_metadata_contains_every_assistant_decision_point():
+    class BoundaryTokenizer:
+        def __init__(self):
+            self.token_to_id = {}
+            self.id_to_token = {}
+
+        @staticmethod
+        def _pieces(text):
+            pattern = r" [A-P]_[a-z_]+| stop|[\s\S]"
+            return [(match.group(), match.span()) for match in re.finditer(pattern, text)]
+
+        def encode(self, text, add_special_tokens=False):
+            assert not add_special_tokens
+            ids = []
+            for piece, _ in self._pieces(text):
+                if piece not in self.token_to_id:
+                    token_id = len(self.token_to_id) + 1
+                    self.token_to_id[piece] = token_id
+                    self.id_to_token[token_id] = piece
+                ids.append(self.token_to_id[piece])
+            return ids
+
+        def decode(self, token_ids, skip_special_tokens=False):
+            del skip_special_tokens
+            return "".join(self.id_to_token[int(token_id)] for token_id in token_ids)
+
+        def __call__(self, text, return_offsets_mapping, add_special_tokens):
+            assert return_offsets_mapping
+            return {
+                "input_ids": self.encode(text, add_special_tokens=add_special_tokens),
+                "offset_mapping": [span for _, span in self._pieces(text)],
+            }
+
+    tokenizer = BoundaryTokenizer()
+    first_turn = (
+        "I will select A_real_esrgan.\n</think>\n<tool_call><function=restore_image>"
+        "<parameter=action>A_real_esrgan</parameter></function></tool_call>"
+    )
+    tool_feedback = "\n<tool_response>result</tool_response>\n"
+    second_turn = (
+        "The result is sufficient, so I will stop.\n</think>\n<tool_call><function=restore_image>"
+        "<parameter=action>stop</parameter></function></tool_call>"
+    )
+    first_ids = tokenizer.encode(first_turn, add_special_tokens=False)
+    feedback_ids = tokenizer.encode(tool_feedback, add_special_tokens=False)
+    second_ids = tokenizer.encode(second_turn, add_special_tokens=False)
+    response_ids = first_ids + feedback_ids + second_ids
+    response_mask = [1] * len(first_ids) + [0] * len(feedback_ids) + [1] * len(second_ids)
+    batch = SimpleNamespace(
+        batch=TensorDict(
+            {
+                "attention_mask": torch.ones(1, 2 + len(response_ids), dtype=torch.long),
+                "prompts": torch.tensor([[90, 91]]),
+                "response_mask": torch.tensor([response_mask]),
+                "responses": torch.tensor([response_ids]),
+            },
+            batch_size=[1],
+        )
+    )
+    trainer = SimpleNamespace(tokenizer=tokenizer)
+
+    metadata, metrics = RayPPOTrainer._compute_decision_first_token_metadata(trainer, batch)
+
+    assert metadata["decision_first_token_found"].tolist() == [[True, True]]
+    assert metadata["decision_first_token_legal_mask"].sum(dim=-1).tolist() == [[16, 17]]
+    assert metrics["actor/decision_point_first_token_found_rate"] == pytest.approx(1.0)
+    assert metrics["actor/decision_point_first_token_count_per_valid_trajectory"] == pytest.approx(2.0)
+    assert metrics["actor/decision_point_first_token_collision_count"] == pytest.approx(0.0)
 
 
 @pytest.mark.parametrize(
@@ -168,6 +295,51 @@ def test_teacher_forced_candidate_forward_keeps_action_entropy_in_autograd_graph
     assert model.transition_logits.grad is not None
     assert model.transition_logits.grad[1, 2].abs().item() > 0.0
     assert model.transition_logits.grad[1, 3].abs().item() > 0.0
+
+
+def test_first_token_entropy_reuses_standard_forward_logits_and_backpropagates():
+    offsets = torch.tensor([0, 5], dtype=torch.int64)
+    micro_batch = TensorDict(
+        {
+            "attention_mask": torch.ones(1, 5, dtype=torch.long),
+            "decision_first_token_found": torch.tensor([[True]]),
+            "decision_first_token_ids": torch.tensor([[[1, 2, 3]]]),
+            "decision_first_token_legal_mask": torch.ones(1, 1, 3, dtype=torch.bool),
+            "decision_first_token_response_index": torch.tensor([[1]]),
+            "input_ids": torch.nested.nested_tensor_from_jagged(torch.arange(5), offsets),
+            "prompts": torch.tensor([[10, 11]]),
+        },
+        batch_size=[1],
+    )
+    tu.assign_non_tensor(
+        micro_batch,
+        batch_num_decision_trajectories=1,
+        use_fused_kernels=False,
+        use_remove_padding=False,
+    )
+    standard_log_probs = torch.nested.nested_tensor_from_jagged(
+        torch.zeros(5, requires_grad=True),
+        offsets,
+    )
+    model_logits = torch.zeros(1, 5, 6, requires_grad=True)
+    with torch.no_grad():
+        model_logits[0, 2, 1:4] = torch.tensor([3.0, 1.0, -1.0])
+    engine = SimpleNamespace(use_ulysses_sp=False)
+
+    raw, normalized, effective_count, legal_mass = FSDPEngineWithLMHead._compute_decision_first_token_entropies(
+        engine,
+        micro_batch,
+        model_logits,
+        standard_log_probs,
+    )
+    (-normalized.sum()).backward()
+
+    assert 0.0 < normalized.item() < 1.0
+    assert effective_count.item() == pytest.approx(raw.exp().item())
+    assert 0.0 < legal_mass.item() <= 1.0
+    assert model_logits.grad is not None
+    assert model_logits.grad[0, 2, 1:4].abs().sum().item() > 0.0
+    assert model_logits.grad[0, :2].abs().sum().item() == 0.0
 
 
 @pytest.mark.parametrize(("logits_to_keep", "expected_length"), [(0, 7), (3, 3)])

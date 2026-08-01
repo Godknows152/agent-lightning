@@ -1,0 +1,42 @@
+# Old-verl GRPO config for lowlight expert on 2 trainer GPUs (v4.1.1).
+# v4.1.1: Full-trajectory normalized legal-action first-token entropy regularization
+
+hydra:
+  searchpath:
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+
+defaults:
+  - restoration_common_config_2gpu
+  - _self_
+
+data:
+  train_files:
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/lowlight_train.parquet
+  val_files:
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/lowlight_val.parquet
+
+actor_rollout_ref:
+  model:
+    path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+    # Actor 从 0731 lowlight SFT LoRA 初始化并继续更新；冻结参考策略加载同一份初始 LoRA。
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/low_light
+  rollout:
+    multi_turn:
+      tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_2gpu.yaml
+  actor:
+    # v4.1.1: Average normalized first-token entropy within each trajectory.
+    decision_point_entropy_coeff: 0.0
+    decision_point_first_token_entropy_coeff: 0.002
+
+trainer:
+  experiment_name: "lowlight_v4.1.1"
+  resume_mode: auto
+  resume_from_path: null
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/lowlight/v4.1.1/2gpu
+  ray_kwargs:
+    ray_init:
+      runtime_env:
+        env_vars:
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/lowlight/v4.1.1/2gpu/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/lowlight/v4.1.1/2gpu"

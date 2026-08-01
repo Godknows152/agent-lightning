@@ -105,7 +105,11 @@ class AgentData:
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
     NO_TOOL_CALL_PENALTY = -10.0
-    MALFORMED_TOOL_CALL_PENALTY = -5.0
+    # All invalid tool attempts use the same failure penalty as the
+    # restoration tool's ``invalid_action`` response.  Keep malformed XML as
+    # a named alias because its metric/reason remains distinct.
+    INVALID_TOOL_CALL_PENALTY = -5.0
+    MALFORMED_TOOL_CALL_PENALTY = INVALID_TOOL_CALL_PENALTY
     FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = -1.0
     TOOL_CALL_START_TOKEN = "<tool_call>"
     TOOL_CALL_END_TOKEN = "</tool_call>"
@@ -1103,12 +1107,19 @@ class ToolAgentLoop(AgentLoopBase):
             )
         except KeyError:
             logger.warning(f"Error when executing tool: unknown tool '{tool_call.name}'")
+            penalty = self.INVALID_TOOL_CALL_PENALTY
+            self._record_invalid_tool_call(
+                agent_data,
+                reason="unknown_tool_name",
+                penalty=penalty,
+            )
             agent_data.extra_fields["unknown_tool_call_penalty_applied"] = True
             agent_data.extra_fields["unknown_tool_call_penalty_reason"] = "unknown_tool_name"
+            agent_data.extra_fields["unknown_tool_call_penalty"] = penalty
             self._record_penalty(
                 agent_data,
                 reason="unknown_tool_name",
-                value=-1.0,
+                value=penalty,
                 model_response=self.tokenizer.decode(agent_data.response_ids),
                 details={"tool_name": tool_call.name},
             )
@@ -1116,8 +1127,12 @@ class ToolAgentLoop(AgentLoopBase):
                 ToolResponse(
                     text=f"Error when executing tool: unknown tool '{tool_call.name}'",
                 ),
-                -1.0,
-                {"skip_tool_call_reward": True},
+                penalty,
+                {
+                    "error": "unknown_tool",
+                    "requested_tool": tool_call.name,
+                    "skip_tool_call_reward": True,
+                },
             )
         except Exception as e:
             logger.warning(f"Error when executing tool: {e}")

@@ -33,7 +33,7 @@ from torch.distributed.tensor import DTensor
 import verl.utils.torch_functional as verl_F
 from verl.models.transformers.monkey_patch import apply_monkey_patch
 from verl.trainer.config import CheckpointConfig
-from verl.trainer.ppo.restoration_action_entropy import action_sequence_entropies
+from verl.trainer.ppo.restoration_action_entropy import action_sequence_entropies, first_token_action_entropies
 from verl.utils import tensordict_utils as tu
 from verl.utils.activation_offload import enable_activation_offloading
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
@@ -352,9 +352,9 @@ class FSDPEngine(BaseEngine):
             else:
                 from verl.utils.model import load_valuehead_model
 
-                assert (
-                    self.model_config.model_type == "value_model"
-                ), f"Unsupported model type: {self.model_config.model_type}"
+                assert self.model_config.model_type == "value_model", (
+                    f"Unsupported model type: {self.model_config.model_type}"
+                )
                 self.model_config.hf_config.num_labels = 1
                 self.model_config.hf_config.classifier_dropout = 0.0
                 self.model_config.hf_config.hidden_dropout = "0"
@@ -738,6 +738,25 @@ class FSDPEngine(BaseEngine):
                 batch_num_decision_points, op=torch.distributed.ReduceOp.SUM, group=self.get_data_parallel_group()
             )
             tu.assign_non_tensor(data, batch_num_decision_points=int(batch_num_decision_points.item()))
+        if "decision_first_token_found" in data:
+            decision_first_token_found = data["decision_first_token_found"]
+            batch_num_first_token_decision_points = decision_first_token_found.sum().to(get_device_id())
+            batch_num_decision_trajectories = decision_first_token_found.any(dim=-1).sum().to(get_device_id())
+            torch.distributed.all_reduce(
+                batch_num_first_token_decision_points,
+                op=torch.distributed.ReduceOp.SUM,
+                group=self.get_data_parallel_group(),
+            )
+            torch.distributed.all_reduce(
+                batch_num_decision_trajectories,
+                op=torch.distributed.ReduceOp.SUM,
+                group=self.get_data_parallel_group(),
+            )
+            tu.assign_non_tensor(
+                data,
+                batch_num_first_token_decision_points=int(batch_num_first_token_decision_points.item()),
+                batch_num_decision_trajectories=int(batch_num_decision_trajectories.item()),
+            )
         tu.assign_non_tensor(data, dp_size=self.get_data_parallel_size())
 
         micro_batches, indices = prepare_micro_batches(
@@ -1019,9 +1038,9 @@ class FSDPEngineWithLMHead(FSDPEngine):
         temperature = micro_batch["temperature"]
         temperature_item = temperature
         if use_fused_kernels:
-            assert not isinstance(
-                temperature, torch.Tensor
-            ), "use_fused_kernels does not support per sample temperature yet"
+            assert not isinstance(temperature, torch.Tensor), (
+                "use_fused_kernels does not support per sample temperature yet"
+            )
         assert pad_mode == DatasetPadMode.NO_PADDING, f"pad_mode {pad_mode} not supported"
 
         multi_modal_inputs = extract_multi_modal_inputs(micro_batch.get("multi_modal_inputs", []))
@@ -1121,9 +1140,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
                 if position_ids.dim() == 3:
                     position_ids = torch.nested.to_padded_tensor(
                         position_ids, padding=0, output_size=(batch_size, 4, max_seq_len)
-                    ).transpose(
-                        0, 1
-                    )  # (4, batch_size, max_seq_len)
+                    ).transpose(0, 1)  # (4, batch_size, max_seq_len)
                 else:
                     position_ids = torch.nested.to_padded_tensor(
                         position_ids, padding=0, output_size=(batch_size, max_seq_len)
@@ -1159,6 +1176,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
         pad_mode = tu.get_non_tensor_data(data=micro_batch, key="pad_mode", default=DatasetPadMode.NO_PADDING)
         use_fused_kernels = tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False)
         calculate_entropy = tu.get_non_tensor_data(data=micro_batch, key="calculate_entropy", default=False)
+        calculate_decision_first_token_entropy = "decision_first_token_ids" in micro_batch
         distillation_use_topk = tu.get_non_tensor_data(data=micro_batch, key="distillation_use_topk", default=False)
 
         model_output = {}
@@ -1179,7 +1197,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
 
                 # if use_sp: ((total_nnz / sp) + pad) ; if not use_sp: (batch, seqlen)
                 inplace_backward = True
-                if calculate_entropy:
+                if calculate_entropy or calculate_decision_first_token_entropy:
                     inplace_backward = False
                 log_probs = logprobs_from_logits(
                     logits=logits_rmpad,
@@ -1261,7 +1279,11 @@ class FSDPEngineWithLMHead(FSDPEngine):
                     logits = torch.nested.narrow(logits, 1, starts, seq_lengths, layout=torch.jagged)
                     logits_rmpad = torch.cat([t for t in logits.unbind()])
                     input_ids_rmpad_rolled = output_args["input_ids_rmpad_rolled"]
-                    log_probs = logprobs_from_logits(logits=logits_rmpad, labels=input_ids_rmpad_rolled)
+                    log_probs = logprobs_from_logits(
+                        logits=logits_rmpad,
+                        labels=input_ids_rmpad_rolled,
+                        inplace_backward=not (calculate_entropy or calculate_decision_first_token_entropy),
+                    )
                     # (bsz, j1), for each sample, length of each sample: [real_prompt_length + real_response_length]
                     log_probs = torch.nested.nested_tensor_from_jagged(log_probs, cu_seqlens)
                     if calculate_entropy:
@@ -1276,6 +1298,76 @@ class FSDPEngineWithLMHead(FSDPEngine):
             model_output["entropy"] = entropy
 
         return model_output
+
+    def _compute_decision_first_token_entropies(
+        self,
+        micro_batch: TensorDict,
+        model_logits: torch.Tensor,
+        standard_log_probs: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Gather legal first-token logits from the standard actor forward."""
+
+        if self.use_ulysses_sp:
+            raise NotImplementedError("decision first-token entropy does not support Ulysses sequence parallelism")
+        if tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False):
+            raise NotImplementedError("decision first-token entropy does not support fused model outputs")
+
+        response_indices = micro_batch["decision_first_token_response_index"]
+        first_token_ids = micro_batch["decision_first_token_ids"].long()
+        legal_action_mask = micro_batch["decision_first_token_legal_mask"].bool()
+        found = micro_batch["decision_first_token_found"].bool()
+        batch_size, max_points = found.shape
+
+        global_trajectory_count = tu.get_non_tensor_data(
+            data=micro_batch,
+            key="batch_num_decision_trajectories",
+            default=None,
+        )
+        if global_trajectory_count is None:
+            raise ValueError("batch_num_decision_trajectories is required for decision first-token entropy")
+
+        zero = standard_log_probs.values().sum() * 0.0
+        empty_output = zero.repeat(batch_size * max_points).reshape(batch_size, max_points)
+        if global_trajectory_count == 0 or not found.any():
+            return empty_output, empty_output.clone(), empty_output.clone(), empty_output.clone()
+
+        sample_indices, point_indices = found.nonzero(as_tuple=True)
+        selected_response_indices = response_indices[sample_indices, point_indices]
+        input_offsets = micro_batch["input_ids"].offsets()
+        sequence_lengths = input_offsets.diff()
+        prompt_width = micro_batch["prompts"].shape[1]
+        response_lengths = micro_batch["attention_mask"][:, prompt_width:].sum(dim=-1).long()
+        within_sequence_prediction_indices = (
+            sequence_lengths[sample_indices] - response_lengths[sample_indices] - 1 + selected_response_indices
+        )
+        use_remove_padding = tu.get_non_tensor_data(data=micro_batch, key="use_remove_padding", default=True)
+        if use_remove_padding:
+            logits_rmpad = model_logits.squeeze(0)
+            prediction_indices = input_offsets[sample_indices] + within_sequence_prediction_indices
+            decision_logits = logits_rmpad[prediction_indices]
+        else:
+            decision_logits = model_logits[sample_indices, within_sequence_prediction_indices]
+
+        selected_token_ids = first_token_ids[sample_indices, point_indices]
+        selected_legal_mask = legal_action_mask[sample_indices, point_indices]
+        legal_logits = decision_logits.gather(dim=-1, index=selected_token_ids)
+        raw_entropy, normalized_entropy = first_token_action_entropies(legal_logits, selected_legal_mask)
+        effective_action_count = raw_entropy.exp()
+
+        masked_legal_logits = legal_logits.float().masked_fill(~selected_legal_mask, -torch.inf)
+        legal_first_token_mass = (
+            torch.logsumexp(masked_legal_logits, dim=-1) - torch.logsumexp(decision_logits.float(), dim=-1)
+        ).exp()
+
+        def scatter(values: torch.Tensor) -> torch.Tensor:
+            return empty_output.clone().index_put((sample_indices, point_indices), values)
+
+        return (
+            scatter(raw_entropy),
+            scatter(normalized_entropy),
+            scatter(effective_action_count),
+            scatter(legal_first_token_mass),
+        )
 
     def _compute_decision_action_entropies(
         self,
@@ -1420,6 +1512,21 @@ class FSDPEngineWithLMHead(FSDPEngine):
                 )
                 model_output["decision_action_sequence_entropy"] = raw_action_entropy
                 model_output["decision_action_normalized_entropy"] = normalized_action_entropy
+            if "decision_first_token_ids" in micro_batch:
+                (
+                    raw_first_token_entropy,
+                    normalized_first_token_entropy,
+                    effective_action_count,
+                    legal_first_token_mass,
+                ) = self._compute_decision_first_token_entropies(
+                    micro_batch,
+                    raw_output.logits,
+                    model_output["log_probs"],
+                )
+                model_output["decision_first_token_action_entropy"] = raw_first_token_entropy
+                model_output["decision_first_token_action_entropy_normalized"] = normalized_first_token_entropy
+                model_output["decision_first_token_effective_action_count"] = effective_action_count
+                model_output["decision_first_token_legal_mass"] = legal_first_token_mass
 
             if loss_function is not None:
                 loss, metrics = loss_function(

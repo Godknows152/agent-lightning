@@ -364,6 +364,35 @@ class _InvalidActionTool:
         )
 
 
+def test_unknown_tool_is_recorded_as_invalid_with_same_failure_penalty() -> None:
+    loop = _loop_with_text("")
+    loop.tools = {"restore_image": _InvalidActionTool()}
+    agent_data = _agent_data()
+
+    response, reward, metrics = asyncio.run(
+        loop._call_tool(
+            FunctionCall(name="not_registered", arguments='{"action": "scunet"}'),
+            tools_kwargs={},
+            agent_data=agent_data,
+        )
+    )
+
+    assert response.text == "Error when executing tool: unknown tool 'not_registered'"
+    assert reward == loop.INVALID_TOOL_CALL_PENALTY == -5.0
+    assert metrics == {
+        "error": "unknown_tool",
+        "requested_tool": "not_registered",
+        "skip_tool_call_reward": True,
+    }
+    assert agent_data.extra_fields["invalid_tool_call_penalty_applied"] is True
+    assert agent_data.extra_fields["invalid_tool_call_penalty_reason"] == "unknown_tool_name"
+    assert agent_data.extra_fields["invalid_tool_call_penalty"] == -5.0
+    assert agent_data.extra_fields["unknown_tool_call_penalty_applied"] is True
+    assert agent_data.extra_fields["unknown_tool_call_penalty"] == -5.0
+    assert agent_data.extra_fields["penalty_records"][0]["reason"] == "unknown_tool_name"
+    assert agent_data.extra_fields["penalty_records"][0]["value"] == -5.0
+
+
 class _SuccessfulRestorationTool:
     async def create(self, create_kwargs: dict) -> tuple[str, ToolResponse]:
         del create_kwargs

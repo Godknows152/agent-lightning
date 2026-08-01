@@ -123,6 +123,8 @@ class ActorConfig(BaseConfig):
             If None, uses response_length. Set to a constant to ensure consistent normalization.
         entropy_coeff (float): Entropy coefficient for regularization.
         decision_point_entropy_coeff (float): Coefficient for normalized legal-action sequence entropy.
+        decision_point_first_token_entropy_coeff (float): Coefficient for normalized legal-action first-token
+            entropy averaged within each trajectory.
         decision_point_entropy_candidate_micro_batch_size (int): Number of teacher-forced action branches
             evaluated together during decision-point entropy computation.
         tau_pos (float): Positive tau for SAPO smoothing (>= 1.0 keeps rewards stable).
@@ -169,6 +171,7 @@ class ActorConfig(BaseConfig):
     loss_scale_factor: Optional[int] = None
     entropy_coeff: float = 0
     decision_point_entropy_coeff: float = 0.0
+    decision_point_first_token_entropy_coeff: float = 0.0
     decision_point_entropy_candidate_micro_batch_size: int = 2
     tau_pos: float = 1.0
     tau_neg: float = 1.05
@@ -226,6 +229,12 @@ class ActorConfig(BaseConfig):
             raise ValueError(f"Invalid loss_agg_mode: {self.loss_agg_mode}")
         if self.decision_point_entropy_coeff < 0:
             raise ValueError("decision_point_entropy_coeff must be non-negative")
+        if self.decision_point_first_token_entropy_coeff < 0:
+            raise ValueError("decision_point_first_token_entropy_coeff must be non-negative")
+        if self.decision_point_entropy_coeff > 0 and self.decision_point_first_token_entropy_coeff > 0:
+            raise ValueError(
+                "complete-sequence and first-token decision entropy regularizers cannot be enabled together"
+            )
         if self.decision_point_entropy_candidate_micro_batch_size < 1:
             raise ValueError("decision_point_entropy_candidate_micro_batch_size must be positive")
 

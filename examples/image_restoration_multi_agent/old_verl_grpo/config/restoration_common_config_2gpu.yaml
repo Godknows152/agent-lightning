@@ -74,7 +74,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     load_format: auto  # 让 SGLang 根据模型与检查点自动选择权重加载格式
     dtype: bfloat16  # 使用 BF16 执行 Rollout 推理
     temperature: 1  # 设置采样温度，数值越低输出越确定
-    top_p: 1  # 使用累计概率阈值为 0.9 的 nucleus sampling
+    top_p: 1  # 不执行 nucleus 截断，保留完整采样分布
     disable_multimodal_special_token_generation: true  # 禁止模型在回复中生成多模态占位特殊 Token
     n: 3  # 每个原始提示采样三条候选轨迹，用于组内相对优势计算
     tensor_model_parallel_size: 2  # 将 SGLang 模型张量并行切分到两张训练 GPU

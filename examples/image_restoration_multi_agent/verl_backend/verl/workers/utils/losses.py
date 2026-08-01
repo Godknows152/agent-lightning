@@ -63,6 +63,10 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         entropy = no_padding_2_padding(entropy, data)
     decision_action_sequence_entropy = model_output.get("decision_action_sequence_entropy", None)
     decision_action_normalized_entropy = model_output.get("decision_action_normalized_entropy", None)
+    decision_first_token_action_entropy = model_output.get("decision_first_token_action_entropy", None)
+    decision_first_token_normalized_entropy = model_output.get("decision_first_token_action_entropy_normalized", None)
+    decision_first_token_effective_action_count = model_output.get("decision_first_token_effective_action_count", None)
+    decision_first_token_legal_mass = model_output.get("decision_first_token_legal_mass", None)
 
     # global batch info for loss aggregation
     config.global_batch_info["dp_size"] = data["dp_size"]
@@ -99,15 +103,41 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     batch_num_decision_points = None
     if has_dp_mask:
         fields.append("decision_point_mask")
-        batch_num_decision_points = tu.get_non_tensor_data(
-            data=data, key="batch_num_decision_points", default=None
-        )
+        batch_num_decision_points = tu.get_non_tensor_data(data=data, key="batch_num_decision_points", default=None)
         if batch_num_decision_points is None:
             raise ValueError("batch_num_decision_points is required when decision_point_mask is present")
         if decision_action_sequence_entropy is None or decision_action_normalized_entropy is None:
             raise ValueError(
                 "current-policy decision action-sequence entropies are required when "
                 "decision_point_entropy_coeff is positive"
+            )
+    decision_first_token_entropy_enabled = getattr(config, "decision_point_first_token_entropy_coeff", 0.0) > 0.0
+    if decision_first_token_entropy_enabled and "decision_first_token_found" not in data:
+        raise ValueError(
+            "decision_first_token_found is required when decision_point_first_token_entropy_coeff is positive"
+        )
+    batch_num_decision_trajectories = None
+    if decision_first_token_entropy_enabled:
+        fields.append("decision_first_token_found")
+        batch_num_decision_trajectories = tu.get_non_tensor_data(
+            data=data,
+            key="batch_num_decision_trajectories",
+            default=None,
+        )
+        if batch_num_decision_trajectories is None:
+            raise ValueError("batch_num_decision_trajectories is required for decision first-token entropy")
+        if any(
+            value is None
+            for value in (
+                decision_first_token_action_entropy,
+                decision_first_token_normalized_entropy,
+                decision_first_token_effective_action_count,
+                decision_first_token_legal_mass,
+            )
+        ):
+            raise ValueError(
+                "current-policy first-token action entropy outputs are required when "
+                "decision_point_first_token_entropy_coeff is positive"
             )
     data = data.select(*fields).to_padded_tensor()
 
@@ -161,11 +191,58 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         else:
             dp_action_sequence_entropy = log_prob.sum() * 0.0
             dp_entropy_loss = log_prob.sum() * 0.0
-        metrics["actor/decision_point_entropy"] = Metric(
-            value=dp_entropy_loss, aggregation=metric_aggregation
-        )
+        metrics["actor/decision_point_entropy"] = Metric(value=dp_entropy_loss, aggregation=metric_aggregation)
         metrics["actor/decision_point_action_sequence_entropy"] = Metric(
             value=dp_action_sequence_entropy, aggregation=metric_aggregation
+        )
+
+    # Average all valid decisions within each trajectory before the global trajectory mean.
+    if decision_first_token_entropy_enabled:
+        first_token_found = data["decision_first_token_found"].to(torch.bool)
+        local_decision_counts = first_token_found.sum(dim=-1)
+        local_valid_trajectories = local_decision_counts > 0
+
+        def global_trajectory_mean(values: torch.Tensor) -> torch.Tensor:
+            per_trajectory = (values * first_token_found).sum(dim=-1) / local_decision_counts.clamp(min=1)
+            return (
+                per_trajectory[local_valid_trajectories].sum()
+                / batch_num_decision_trajectories
+                * config.global_batch_info["dp_size"]
+            )
+
+        if batch_num_decision_trajectories > 0:
+            first_token_raw_entropy = global_trajectory_mean(decision_first_token_action_entropy)
+            first_token_normalized_entropy = global_trajectory_mean(decision_first_token_normalized_entropy)
+            first_token_effective_action_count = global_trajectory_mean(decision_first_token_effective_action_count)
+            first_token_legal_mass = global_trajectory_mean(decision_first_token_legal_mass)
+            policy_loss -= config.decision_point_first_token_entropy_coeff * first_token_normalized_entropy
+        else:
+            zero = log_prob.sum() * 0.0
+            first_token_raw_entropy = zero
+            first_token_normalized_entropy = zero
+            first_token_effective_action_count = zero
+            first_token_legal_mass = zero
+
+        metrics["actor/decision_point_first_token_action_entropy"] = Metric(
+            value=first_token_raw_entropy,
+            aggregation=metric_aggregation,
+        )
+        metrics["actor/decision_point_first_token_action_entropy_normalized"] = Metric(
+            value=first_token_normalized_entropy,
+            aggregation=metric_aggregation,
+        )
+        metrics["actor/decision_point_first_token_effective_action_count"] = Metric(
+            value=first_token_effective_action_count,
+            aggregation=metric_aggregation,
+        )
+        metrics["actor/decision_point_legal_first_token_mass"] = Metric(
+            value=first_token_legal_mass,
+            aggregation=metric_aggregation,
+        )
+        # Compatibility alias; v4.1.1 runs must use the explicit metric above for comparisons.
+        metrics["actor/decision_point_entropy"] = Metric(
+            value=first_token_normalized_entropy,
+            aggregation=metric_aggregation,
         )
 
     # add kl loss

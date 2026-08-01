@@ -799,7 +799,7 @@ async def execute_tool_call(
     if call.name != tool_name:
         return (
             ToolResponse(text=f"Error when executing tool: unknown tool '{call.name}'"),
-            -1.0,
+            ToolAgentLoop.INVALID_TOOL_CALL_PENALTY,
             {"error": "unknown_tool", "requested_tool": call.name, "skip_tool_call_reward": True},
         )
 

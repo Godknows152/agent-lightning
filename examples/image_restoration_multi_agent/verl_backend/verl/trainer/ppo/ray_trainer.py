@@ -54,8 +54,11 @@ from verl.trainer.ppo.metric_utils import (
     process_validation_metrics,
 )
 from verl.trainer.ppo.restoration_action_entropy import (
+    ALL_TURN_RESTORATION_ACTIONS,
     FIRST_TURN_RESTORATION_ACTIONS,
     find_first_restoration_action,
+    find_restoration_decision_in_assistant_turn,
+    tokenize_action_first_tokens,
     tokenize_action_surfaces,
 )
 from verl.trainer.ppo.reward import extract_reward
@@ -332,9 +335,9 @@ class RayPPOTrainer:
         assert self.hybrid_engine, "Currently, only support hybrid engine"
 
         if self.hybrid_engine:
-            assert (
-                Role.ActorRollout in role_worker_mapping or Role.ActorRolloutRef in role_worker_mapping
-            ), f"{role_worker_mapping.keys()=}"
+            assert Role.ActorRollout in role_worker_mapping or Role.ActorRolloutRef in role_worker_mapping, (
+                f"{role_worker_mapping.keys()=}"
+            )
 
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
@@ -1291,9 +1294,9 @@ class RayPPOTrainer:
         else:
             if self.config.trainer.resume_mode == "resume_path":
                 assert isinstance(self.config.trainer.resume_from_path, str), "resume ckpt must be str type"
-                assert (
-                    "global_step_" in self.config.trainer.resume_from_path
-                ), "resume ckpt must specify the global_steps"
+                assert "global_step_" in self.config.trainer.resume_from_path, (
+                    "resume ckpt must specify the global_steps"
+                )
                 global_step_folder = self.config.trainer.resume_from_path
                 if not os.path.isabs(global_step_folder):
                     working_dir = os.getcwd()
@@ -1579,9 +1582,7 @@ class RayPPOTrainer:
 
         num_actions = len(FIRST_TURN_RESTORATION_ACTIONS)
         max_action_tokens = max(
-            len(token_ids)
-            for sample_actions in tokenized_actions_by_sample
-            for token_ids in sample_actions
+            len(token_ids) for sample_actions in tokenized_actions_by_sample for token_ids in sample_actions
         )
         action_token_ids = torch.zeros(
             bsz,
@@ -1612,6 +1613,123 @@ class RayPPOTrainer:
             "decision_action_found": found,
         }, found_rate
 
+    def _compute_decision_first_token_metadata(
+        self,
+        batch: DataProto,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, float]]:
+        """Build context-specific legal first-token metadata for every assistant turn."""
+
+        responses = batch.batch["responses"]
+        response_masks = batch.batch["response_mask"]
+        attention_mask = batch.batch["attention_mask"]
+        prompt_width = batch.batch["prompts"].shape[1]
+        bsz, _ = responses.shape
+
+        sample_points: list[list[tuple[int, list[int], int]]] = []
+        expected_turn_count = 0
+        found_count = 0
+        collision_count = 0
+        valid_trajectory_count = 0
+
+        for sample_index in range(bsz):
+            actual_len = int(attention_mask[sample_index, prompt_width:].sum().item())
+            sample_response_ids = responses[sample_index, :actual_len].detach().cpu().tolist()
+            sample_response_mask = response_masks[sample_index, :actual_len].detach().cpu().tolist()
+
+            generated_spans: list[tuple[int, int]] = []
+            span_start = None
+            for token_index, is_model_token in enumerate(sample_response_mask):
+                if int(is_model_token) == 1 and span_start is None:
+                    span_start = token_index
+                elif int(is_model_token) != 1 and span_start is not None:
+                    generated_spans.append((span_start, token_index))
+                    span_start = None
+            if span_start is not None:
+                generated_spans.append((span_start, actual_len))
+
+            expected_turn_count += len(generated_spans)
+            points: list[tuple[int, list[int], int]] = []
+            for turn_index, (turn_start, turn_end) in enumerate(generated_spans):
+                turn_ids = sample_response_ids[turn_start:turn_end]
+                turn_text = self.tokenizer.decode(turn_ids, skip_special_tokens=False)
+                legal_actions = FIRST_TURN_RESTORATION_ACTIONS if turn_index == 0 else ALL_TURN_RESTORATION_ACTIONS
+                decision = find_restoration_decision_in_assistant_turn(
+                    turn_text,
+                    legal_actions=legal_actions,
+                )
+                if decision is None:
+                    continue
+
+                action_char_start, _ = decision
+                encoding = self.tokenizer(turn_text, return_offsets_mapping=True, add_special_tokens=False)
+                offsets = encoding["offset_mapping"]
+                decision_turn_token_index = None
+                candidate_leading_text = ""
+                for turn_token_index, (char_start, char_end) in enumerate(offsets):
+                    if char_start <= action_char_start < char_end or char_start == action_char_start:
+                        decision_turn_token_index = turn_token_index
+                        candidate_leading_text = turn_text[char_start:action_char_start]
+                        break
+                if decision_turn_token_index is None or decision_turn_token_index >= len(turn_ids):
+                    continue
+
+                first_token_ids = tokenize_action_first_tokens(
+                    self.tokenizer,
+                    leading_text=candidate_leading_text,
+                    actions=legal_actions,
+                )
+                duplicate_count = len(first_token_ids) - len(set(first_token_ids))
+                if duplicate_count:
+                    collision_count += duplicate_count
+                    continue
+
+                points.append(
+                    (
+                        turn_start + decision_turn_token_index,
+                        first_token_ids,
+                        len(legal_actions),
+                    )
+                )
+
+            if points:
+                valid_trajectory_count += 1
+            found_count += len(points)
+            sample_points.append(points)
+
+        max_points = max((len(points) for points in sample_points), default=0)
+        max_points = max(max_points, 1)
+        max_actions = len(ALL_TURN_RESTORATION_ACTIONS)
+        response_indices = torch.zeros(bsz, max_points, dtype=torch.long, device=responses.device)
+        first_token_ids = torch.zeros(bsz, max_points, max_actions, dtype=responses.dtype, device=responses.device)
+        legal_action_mask = torch.zeros_like(first_token_ids, dtype=torch.bool)
+        found = torch.zeros(bsz, max_points, dtype=torch.bool, device=responses.device)
+
+        for sample_index, points in enumerate(sample_points):
+            for point_index, (response_index, token_ids, action_count) in enumerate(points):
+                response_indices[sample_index, point_index] = response_index
+                first_token_ids[sample_index, point_index, :action_count] = torch.tensor(
+                    token_ids,
+                    dtype=responses.dtype,
+                    device=responses.device,
+                )
+                legal_action_mask[sample_index, point_index, :action_count] = True
+                found[sample_index, point_index] = True
+
+        metrics = {
+            "actor/decision_point_first_token_found_rate": found_count / max(expected_turn_count, 1),
+            "actor/decision_point_first_token_valid_trajectory_rate": valid_trajectory_count / max(bsz, 1),
+            "actor/decision_point_first_token_count_per_valid_trajectory": (
+                found_count / max(valid_trajectory_count, 1)
+            ),
+            "actor/decision_point_first_token_collision_count": float(collision_count),
+        }
+        return {
+            "decision_first_token_response_index": response_indices,
+            "decision_first_token_ids": first_token_ids,
+            "decision_first_token_legal_mask": legal_action_mask,
+            "decision_first_token_found": found,
+        }, metrics
+
     def _update_actor(self, batch: DataProto) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
@@ -1621,9 +1739,8 @@ class RayPPOTrainer:
         batch_td = batch.to_tensordict()
         # step 2: convert from padding to no-padding
         batch_td = left_right_2_no_padding(batch_td)
-        calculate_entropy = (
-            self.config.actor_rollout_ref.actor.calculate_entropy
-            or (self.config.actor_rollout_ref.actor.entropy_coeff != 0.0)
+        calculate_entropy = self.config.actor_rollout_ref.actor.calculate_entropy or (
+            self.config.actor_rollout_ref.actor.entropy_coeff != 0.0
         )
         distillation_use_topk = (
             self.distillation_config.distillation_loss.loss_settings.use_topk
@@ -1992,6 +2109,12 @@ class RayPPOTrainer:
                             decision_metadata, _dp_found_rate = self._compute_decision_action_metadata(batch)
                             batch.batch.update(decision_metadata)
                             metrics["actor/decision_point_found_rate"] = _dp_found_rate
+
+                        # Build 16/17-way first-token metadata for every thinking decision point.
+                        if self.config.actor_rollout_ref.actor.decision_point_first_token_entropy_coeff > 0.0:
+                            decision_metadata, decision_metrics = self._compute_decision_first_token_metadata(batch)
+                            batch.batch.update(decision_metadata)
+                            metrics.update(decision_metrics)
 
                         # update actor
                         with marked_timer("update_actor", timing_raw, color="red"):

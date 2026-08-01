@@ -473,6 +473,9 @@ def score_action_sequence_distribution(
         "actions": action_rows,
         "first_token_group_count": len(first_token_groups),
         "first_token_group_entropy": first_token_group_entropy,
+        "normalized_first_token_group_entropy": (
+            first_token_group_entropy / maximum_entropy if maximum_entropy > 0 else 0.0
+        ),
         "first_token_groups": sorted(
             first_token_groups.values(),
             key=lambda group: group["normalized_probability"],
@@ -497,8 +500,8 @@ def generate_with_per_token_entropy(
     inputs: dict[str, torch.Tensor],
     *,
     max_new_tokens: int = 2500,
-    temperature: float = 0.5,
-    top_p: float = 0.9,
+    temperature: float = 1.0,
+    top_p: float = 1.0,
     top_k: int = -1,
     blocked_token_ids: Sequence[int] = (),
     stop_token_ids: Sequence[int] = GRPO_STOP_TOKEN_IDS,
@@ -766,7 +769,9 @@ def save_detailed_report(
                     f"  理论最大熵: {action_analysis['maximum_entropy']:.6f} nats\n"
                     f"  归一化序列熵: {action_analysis['normalized_sequence_entropy']:.6f}\n"
                     f"  唯一首 Token 数: {action_analysis['first_token_group_count']}\n"
-                    f"  首 Token 分组熵: {action_analysis['first_token_group_entropy']:.6f} nats\n"
+                    f"  有效首 Token 熵: {action_analysis['first_token_group_entropy']:.6f} nats\n"
+                    f"  归一化有效首 Token 熵: "
+                    f"{action_analysis['normalized_first_token_group_entropy']:.6f}\n"
                     f"  实际动作分类概率: {action_analysis['selected_action_probability']}\n"
                     f"  实际动作分类排名: {action_analysis['selected_action_rank']}\n"
                     f"  Token 边界前导文本: {action_analysis['candidate_leading_text']!r}\n\n"
@@ -911,8 +916,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output_dir", default=DEFAULT_OUTPUT_DIR, help="Output directory")
     parser.add_argument("--max_new_tokens", type=int, default=2500, help="First-turn GRPO token budget")
     parser.add_argument("--max_image_pixels", type=int, default=589824, help="Match data.max_image_pixels")
-    parser.add_argument("--temperature", type=float, default=0.5, help="Match rollout.temperature")
-    parser.add_argument("--top_p", type=float, default=0.9, help="Match rollout.top_p")
+    parser.add_argument("--temperature", type=float, default=1.0, help="Match rollout.temperature")
+    parser.add_argument("--top_p", type=float, default=1.0, help="Match rollout.top_p")
     parser.add_argument("--top_k", type=int, default=-1, help="Match rollout.top_k")
     parser.add_argument("--seed", type=int, default=42, help="Standalone sampling seed")
     parser.add_argument(
@@ -1007,10 +1012,12 @@ def main() -> None:
         "mean_decision_action_sequence_entropy": None,
         "mean_normalized_decision_action_sequence_entropy": None,
         "mean_decision_first_token_group_entropy": None,
+        "mean_normalized_decision_first_token_group_entropy": None,
     }
     action_sequence_entropy_sum = 0.0
     normalized_action_sequence_entropy_sum = 0.0
     first_token_group_entropy_sum = 0.0
+    normalized_first_token_group_entropy_sum = 0.0
     action_sequence_analysis_count = 0
 
     for sample_number, (df_index, row) in enumerate(samples.iterrows(), 1):
@@ -1081,12 +1088,16 @@ def main() -> None:
                 f"H={action_sequence_analysis['sequence_entropy']:.6f} "
                 f"H_max={action_sequence_analysis['maximum_entropy']:.6f} "
                 f"H/H_max={action_sequence_analysis['normalized_sequence_entropy']:.6f} "
+                f"H_first/H_max={action_sequence_analysis['normalized_first_token_group_entropy']:.6f} "
                 f"首Token组数={action_sequence_analysis['first_token_group_count']}"
             )
             summary["decision_points_found"] += 1
             action_sequence_entropy_sum += action_sequence_analysis["sequence_entropy"]
             normalized_action_sequence_entropy_sum += action_sequence_analysis["normalized_sequence_entropy"]
             first_token_group_entropy_sum += action_sequence_analysis["first_token_group_entropy"]
+            normalized_first_token_group_entropy_sum += action_sequence_analysis[
+                "normalized_first_token_group_entropy"
+            ]
             action_sequence_analysis_count += 1
 
         if high_entropy_positions:
@@ -1165,6 +1176,11 @@ def main() -> None:
                     if decision_point != -1
                     else None
                 ),
+                "normalized_decision_first_token_group_entropy": (
+                    result["action_sequence_analysis"]["normalized_first_token_group_entropy"]
+                    if decision_point != -1
+                    else None
+                ),
                 "selected_action_sequence_probability": (
                     result["action_sequence_analysis"]["selected_action_probability"]
                     if decision_point != -1
@@ -1191,6 +1207,9 @@ def main() -> None:
         )
         summary["mean_decision_first_token_group_entropy"] = (
             first_token_group_entropy_sum / action_sequence_analysis_count
+        )
+        summary["mean_normalized_decision_first_token_group_entropy"] = (
+            normalized_first_token_group_entropy_sum / action_sequence_analysis_count
         )
     with open(output_dir / "00_summary.txt", "w", encoding="utf-8") as summary_file:
         summary_file.write("GRPO-aligned Per-Token Entropy Analysis\n")
