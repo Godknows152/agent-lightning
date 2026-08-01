@@ -1717,11 +1717,6 @@ class RayPPOTrainer:
 
         metrics = {
             "actor/decision_point_first_token_found_rate": found_count / max(expected_turn_count, 1),
-            "actor/decision_point_first_token_valid_trajectory_rate": valid_trajectory_count / max(bsz, 1),
-            "actor/decision_point_first_token_count_per_valid_trajectory": (
-                found_count / max(valid_trajectory_count, 1)
-            ),
-            "actor/decision_point_first_token_collision_count": float(collision_count),
         }
         return {
             "decision_first_token_response_index": response_indices,

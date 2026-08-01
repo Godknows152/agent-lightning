@@ -29,7 +29,8 @@ actor_rollout_ref:
     decision_point_entropy_coeff: 0.002
 
 trainer:
-  experiment_name: "fog_v4_4gpu"
+  project_name: FogRL
+  experiment_name: "fog_v4"
   resume_mode: auto
   resume_from_path: null
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4/4gpu

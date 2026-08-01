@@ -223,24 +223,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             first_token_effective_action_count = zero
             first_token_legal_mass = zero
 
-        metrics["actor/decision_point_first_token_action_entropy"] = Metric(
-            value=first_token_raw_entropy,
-            aggregation=metric_aggregation,
-        )
         metrics["actor/decision_point_first_token_action_entropy_normalized"] = Metric(
-            value=first_token_normalized_entropy,
-            aggregation=metric_aggregation,
-        )
-        metrics["actor/decision_point_first_token_effective_action_count"] = Metric(
-            value=first_token_effective_action_count,
-            aggregation=metric_aggregation,
-        )
-        metrics["actor/decision_point_legal_first_token_mass"] = Metric(
-            value=first_token_legal_mass,
-            aggregation=metric_aggregation,
-        )
-        # Compatibility alias; v4.1.1 runs must use the explicit metric above for comparisons.
-        metrics["actor/decision_point_entropy"] = Metric(
             value=first_token_normalized_entropy,
             aggregation=metric_aggregation,
         )

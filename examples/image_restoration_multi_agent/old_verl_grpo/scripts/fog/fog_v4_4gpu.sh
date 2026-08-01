@@ -5,7 +5,7 @@ set -euo pipefail
 
 EXPERT="fog"
 VERSION="v4"
-export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}_4gpu}"
+export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 OLD_VERL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

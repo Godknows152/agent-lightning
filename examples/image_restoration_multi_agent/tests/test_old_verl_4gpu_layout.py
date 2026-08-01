@@ -7,7 +7,13 @@ import yaml
 
 OLD_VERL_ROOT = Path(__file__).resolve().parents[1] / "old_verl_grpo"
 EXPERTS = ("fog", "rain", "snow", "lowlight")
-VERSIONS = ("v1", "v2", "v3", "v4")
+VERSIONS = ("v1", "v2", "v3", "v4", "v4.1.1")
+PROJECT_NAMES = {
+    "fog": "FogRL",
+    "rain": "RainRL",
+    "snow": "SnowRL",
+    "lowlight": "LowLightRL",
+}
 DEVICES = ["cuda:0", "cuda:1", "cuda:2", "cuda:3"]
 
 
@@ -79,7 +85,8 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
             ]
             assert tool_config.endswith("_4gpu.yaml"), config_path
             trainer = config["trainer"]
-            assert trainer["experiment_name"] == f"{expert}_{version}_4gpu", config_path
+            assert trainer["project_name"] == PROJECT_NAMES[expert], config_path
+            assert trainer["experiment_name"] == f"{expert}_{version}", config_path
             assert trainer["default_local_dir"].endswith(
                 f"outputs/{expert}/{version}/4gpu"
             ), config_path
@@ -91,14 +98,16 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
                 config_path
             )
 
-            launcher = (
-                OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{version}_4gpu.sh"
-            )
+            script_version = "v4_1_1" if version == "v4.1.1" else version
+            launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{script_version}_4gpu.sh"
             content = launcher.read_text(encoding="utf-8")
             assert "run_expert_old_verl_grpo_4gpu.sh" in content, launcher
             assert "${EXPERT}_config_4gpu" in content, launcher
             assert "/${EXPERT}/${VERSION}/4gpu}" in content, launcher
-            assert "${EXPERT}_${VERSION}_4gpu" in content, launcher
+            assert (
+                'OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"'
+                in content
+            ), launcher
 
 
 def test_runtime_pool_binds_each_replica_to_one_restoration_and_iqa_device() -> None:

@@ -195,8 +195,7 @@ def test_full_trajectory_metadata_contains_every_assistant_decision_point():
     assert metadata["decision_first_token_found"].tolist() == [[True, True]]
     assert metadata["decision_first_token_legal_mask"].sum(dim=-1).tolist() == [[16, 17]]
     assert metrics["actor/decision_point_first_token_found_rate"] == pytest.approx(1.0)
-    assert metrics["actor/decision_point_first_token_count_per_valid_trajectory"] == pytest.approx(2.0)
-    assert metrics["actor/decision_point_first_token_collision_count"] == pytest.approx(0.0)
+    assert set(metrics) == {"actor/decision_point_first_token_found_rate"}
 
 
 @pytest.mark.parametrize(

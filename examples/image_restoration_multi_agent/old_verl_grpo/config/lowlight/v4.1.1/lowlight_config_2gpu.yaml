@@ -30,6 +30,7 @@ actor_rollout_ref:
     decision_point_first_token_entropy_coeff: 0.002
 
 trainer:
+  project_name: LowLightRL
   experiment_name: "lowlight_v4.1.1"
   resume_mode: auto
   resume_from_path: null

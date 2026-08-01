@@ -14,6 +14,12 @@ SCRIPT_PATH = (
     / "resolve_training_run_name.py"
 )
 OLD_VERL_ROOT = Path(__file__).resolve().parents[1] / "old_verl_grpo"
+PROJECT_NAMES = {
+    "fog": "FogRL",
+    "rain": "RainRL",
+    "snow": "SnowRL",
+    "lowlight": "LowLightRL",
+}
 
 
 def _load_module() -> ModuleType:
@@ -46,11 +52,12 @@ def test_all_versioned_launchers_isolate_training_and_tool_logs() -> None:
     expected_export = 'export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu}"'
     expected_output_export = 'export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}/${VERSION}/2gpu}"'
     for expert in ("fog", "rain", "snow", "lowlight"):
-        for version in ("v1", "v2", "v3", "v4"):
-            launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{version}.sh"
+        for version in ("v1", "v2", "v3", "v4", "v4.1.1"):
+            script_version = "v4_1_1" if version == "v4.1.1" else version
+            launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{script_version}.sh"
             content = launcher.read_text(encoding="utf-8")
             assert expected_export in content, launcher
-            if version != "v4":
+            if version not in {"v4", "v4.1.1"}:
                 assert expected_output_export in content, launcher
             assert 'LOG_DIR="${OLD_VERL_LOG_DIR}"' in content, launcher
             assert (
@@ -90,7 +97,7 @@ def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirector
     None
 ):
     for expert in ("fog", "rain", "snow", "lowlight"):
-        for version in ("v1", "v2", "v3", "v4"):
+        for version in ("v1", "v2", "v3", "v4", "v4.1.1"):
             config = (
                 OLD_VERL_ROOT
                 / "config"
@@ -99,6 +106,8 @@ def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirector
                 / f"{expert}_config_2gpu.yaml"
             )
             content = config.read_text(encoding="utf-8")
+            assert f"project_name: {PROJECT_NAMES[expert]}" in content, config
+            assert f'experiment_name: "{expert}_{version}"' in content, config
             assert f"old_verl_grpo/outputs/{expert}/{version}/2gpu" in content, config
             assert (
                 f"old_verl_grpo/outputs/{expert}/{version}/2gpu/swanlab" in content

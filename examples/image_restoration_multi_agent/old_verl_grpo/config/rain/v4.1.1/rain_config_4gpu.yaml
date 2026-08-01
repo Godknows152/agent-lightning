@@ -30,7 +30,8 @@ actor_rollout_ref:
     decision_point_first_token_entropy_coeff: 0.002
 
 trainer:
-  experiment_name: "rain_v4.1.1_4gpu"
+  project_name: RainRL
+  experiment_name: "rain_v4.1.1"
   resume_mode: auto
   resume_from_path: null
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4.1.1/4gpu

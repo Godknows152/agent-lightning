@@ -28,7 +28,7 @@ Environment overrides:
   OLD_VERL_SHOW_KNOWN_WARNINGS=1  # show otherwise-suppressed third-party warning spam
   OLD_VERL_RESUME_MODE=auto|disable|resume_path
   OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N  # adds the "_续" suffix
-  OLD_VERL_EXPERIMENT_NAME=custom-name  # optional; standard name is <expert>_4gpu_MMDD[_续]
+  OLD_VERL_EXPERIMENT_NAME=custom-name  # optional; defaults to the version config name, with [_续] on resume
   OLD_VERL_LOG_DIR=/path/to/log-dir  # optional main/tool log directory override
   OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional checkpoint output override; YAML wins when unset
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
@@ -144,7 +144,7 @@ VAL_LIMIT_ARGS=()
 CONFIG_OVERRIDES=()
 HYDRA_OVERRIDES=()
 PROJECT_NAME_OVERRIDE="${OLD_VERL_PROJECT_NAME:-}"
-EXPERIMENT_NAME_OVERRIDE="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_4gpu_$(date +%m%d)}"
+EXPERIMENT_NAME_OVERRIDE="${OLD_VERL_EXPERIMENT_NAME:-}"
 OUTPUT_DIR_OVERRIDE="${OLD_VERL_OUTPUT_DIR:-}"
 SWANLAB_LOG_DIR_OVERRIDE="${OLD_VERL_SWANLAB_LOG_DIR:-}"
 SWANLAB_MODE_OVERRIDE=""
@@ -230,6 +230,7 @@ fi
 IFS=$'\t' read -r \
   CONFIG_RESUME_MODE \
   CONFIG_RESUME_FROM_PATH \
+  CONFIG_EXPERIMENT_NAME \
   CONFIG_OUTPUT_DIR \
   CONFIG_SWANLAB_LOG_DIR \
   < <(
@@ -246,6 +247,7 @@ resume_from_path = config.trainer.resume_from_path
 fields = (
     str(config.trainer.resume_mode),
     str(resume_from_path) if resume_from_path is not None else "-",
+    str(config.trainer.experiment_name),
     str(config.trainer.default_local_dir),
     str(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR),
 )
@@ -257,6 +259,9 @@ if [[ "${RESUME_MODE_WAS_EXPLICIT}" != "1" ]]; then
 fi
 if [[ "${RESUME_PATH_WAS_EXPLICIT}" != "1" && "${CONFIG_RESUME_FROM_PATH}" != "-" ]]; then
   RESUME_FROM_PATH_OVERRIDE="${CONFIG_RESUME_FROM_PATH}"
+fi
+if [[ -z "${EXPERIMENT_NAME_OVERRIDE}" ]]; then
+  EXPERIMENT_NAME_OVERRIDE="${CONFIG_EXPERIMENT_NAME}"
 fi
 if [[ -z "${OUTPUT_DIR_OVERRIDE}" ]]; then
   OUTPUT_DIR_OVERRIDE="${CONFIG_OUTPUT_DIR}"

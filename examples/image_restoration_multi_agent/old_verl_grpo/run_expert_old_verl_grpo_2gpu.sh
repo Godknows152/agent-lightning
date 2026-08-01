@@ -230,6 +230,7 @@ fi
 IFS=$'\t' read -r \
   CONFIG_RESUME_MODE \
   CONFIG_RESUME_FROM_PATH \
+  CONFIG_EXPERIMENT_NAME \
   CONFIG_OUTPUT_DIR \
   CONFIG_SWANLAB_LOG_DIR \
   < <(
@@ -246,6 +247,7 @@ resume_from_path = config.trainer.resume_from_path
 fields = (
     str(config.trainer.resume_mode),
     str(resume_from_path) if resume_from_path is not None else "-",
+    str(config.trainer.experiment_name),
     str(config.trainer.default_local_dir),
     str(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR),
 )
@@ -257,6 +259,9 @@ if [[ "${RESUME_MODE_WAS_EXPLICIT}" != "1" ]]; then
 fi
 if [[ "${RESUME_PATH_WAS_EXPLICIT}" != "1" && "${CONFIG_RESUME_FROM_PATH}" != "-" ]]; then
   RESUME_FROM_PATH_OVERRIDE="${CONFIG_RESUME_FROM_PATH}"
+fi
+if [[ -z "${EXPERIMENT_NAME_OVERRIDE}" ]]; then
+  EXPERIMENT_NAME_OVERRIDE="${CONFIG_EXPERIMENT_NAME}"
 fi
 if [[ -z "${OUTPUT_DIR_OVERRIDE}" ]]; then
   OUTPUT_DIR_OVERRIDE="${CONFIG_OUTPUT_DIR}"

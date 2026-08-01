@@ -255,9 +255,8 @@ def test_first_token_entropy_averages_decisions_within_each_trajectory(monkeypat
 
     # trajectory means are 0.2 and 0.8, so the two trajectories contribute equally.
     assert metrics["actor/decision_point_first_token_action_entropy_normalized"].aggregate() == pytest.approx(0.5)
-    assert metrics["actor/decision_point_first_token_action_entropy"].aggregate() == pytest.approx(1.0)
-    assert metrics["actor/decision_point_first_token_effective_action_count"].aggregate() == pytest.approx(3.5)
-    assert metrics["actor/decision_point_legal_first_token_mass"].aggregate() == pytest.approx(0.65)
+    first_token_metric_keys = {key for key in metrics if "decision_point_first_token" in key}
+    assert first_token_metric_keys == {"actor/decision_point_first_token_action_entropy_normalized"}
     assert policy_loss.item() == pytest.approx(-0.001)
 
 
