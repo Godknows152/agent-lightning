@@ -105,11 +105,8 @@ class AgentData:
 @register("tool_agent")
 class ToolAgentLoop(AgentLoopBase):
     NO_TOOL_CALL_PENALTY = -10.0
-    # All invalid tool attempts use the same failure penalty as the
-    # restoration tool's ``invalid_action`` response.  Keep malformed XML as
-    # a named alias because its metric/reason remains distinct.
-    INVALID_TOOL_CALL_PENALTY = -5.0
-    MALFORMED_TOOL_CALL_PENALTY = INVALID_TOOL_CALL_PENALTY
+    INVALID_TOOL_CALL_PENALTY = -10.0
+    MALFORMED_TOOL_CALL_PENALTY = -5.0
     FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = -1.0
     TOOL_CALL_START_TOKEN = "<tool_call>"
     TOOL_CALL_END_TOKEN = "</tool_call>"
@@ -118,8 +115,8 @@ class ToolAgentLoop(AgentLoopBase):
         r"(?im)(?:^|\n|<\|im_end\|>)\s*(?:<\|im_start\|>\s*)?" r"(?:user|assistant)\s*(?::|(?=\n|$)|(?=<\|channel\|>))"
     )
     # Per-occurrence penalty for choosing the same tool more than once in a trajectory.
-    # E.g. scale=0.5 → using scunet 3 times costs -0.5*(3-1) = -1.0 total.
-    TRAJECTORY_REPEAT_PENALTY_SCALE = 0.5
+    # E.g. scale=1.0 → using scunet 3 times costs -1.0*(3-1) = -2.0 total.
+    TRAJECTORY_REPEAT_PENALTY_SCALE = 1.0
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

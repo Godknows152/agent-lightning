@@ -359,7 +359,7 @@ class _InvalidActionTool:
         action = parameters["action"]
         return (
             ToolResponse(text=f"Invalid action '{action}'"),
-            -5.0,
+            -10.0,
             {"error": "invalid_action", "skip_tool_call_reward": True},
         )
 
@@ -378,7 +378,7 @@ def test_unknown_tool_is_recorded_as_invalid_with_same_failure_penalty() -> None
     )
 
     assert response.text == "Error when executing tool: unknown tool 'not_registered'"
-    assert reward == loop.INVALID_TOOL_CALL_PENALTY == -5.0
+    assert reward == loop.INVALID_TOOL_CALL_PENALTY == -10.0
     assert metrics == {
         "error": "unknown_tool",
         "requested_tool": "not_registered",
@@ -386,11 +386,11 @@ def test_unknown_tool_is_recorded_as_invalid_with_same_failure_penalty() -> None
     }
     assert agent_data.extra_fields["invalid_tool_call_penalty_applied"] is True
     assert agent_data.extra_fields["invalid_tool_call_penalty_reason"] == "unknown_tool_name"
-    assert agent_data.extra_fields["invalid_tool_call_penalty"] == -5.0
+    assert agent_data.extra_fields["invalid_tool_call_penalty"] == -10.0
     assert agent_data.extra_fields["unknown_tool_call_penalty_applied"] is True
-    assert agent_data.extra_fields["unknown_tool_call_penalty"] == -5.0
+    assert agent_data.extra_fields["unknown_tool_call_penalty"] == -10.0
     assert agent_data.extra_fields["penalty_records"][0]["reason"] == "unknown_tool_name"
-    assert agent_data.extra_fields["penalty_records"][0]["value"] == -5.0
+    assert agent_data.extra_fields["penalty_records"][0]["value"] == -10.0
 
 
 class _SuccessfulRestorationTool:
@@ -438,11 +438,11 @@ def test_tool_reported_invalid_action_sets_invalid_flag() -> None:
         )
     )
 
-    assert reward == -5.0
+    assert reward == -10.0
     assert metrics["error"] == "invalid_action"
     assert agent_data.extra_fields["invalid_tool_call_penalty_applied"] is True
     assert agent_data.extra_fields["invalid_tool_call_penalty_reason"] == "invalid_action"
-    assert agent_data.extra_fields["invalid_tool_call_penalty"] == -5.0
+    assert agent_data.extra_fields["invalid_tool_call_penalty"] == -10.0
     assert agent_data.extra_fields["invalid_tool_call_action"] == "scun"
     assert "no_tool_call_penalty_applied" not in agent_data.extra_fields
     assert agent_data.extra_fields["penalty_records"][0]["reason"] == "invalid_restoration_action"

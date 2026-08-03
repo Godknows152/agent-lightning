@@ -183,6 +183,7 @@ SCORE_WEIGHT_MAP: dict[str, list[float]] = {
 }
 DEFAULT_WEIGHT: list[float] = [0.2, 0.2, 0.2, 0.2, 0.2]
 FAILURE_REWARD = -5.0
+INVALID_ACTION_REWARD = -10.0
 REPEAT_ACTION_PENALTY = 0.2
 REPEAT_LOW_GAIN_PENALTY = 0.8
 REPEAT_LOW_GAIN_THRESHOLD = 0.05
@@ -1712,13 +1713,13 @@ class RestorationTool(BaseTool):
                     model_action,
                     status="error",
                     restoration_step=int(instance.get("step", 0)),
-                    reward=FAILURE_REWARD,
+                    reward=INVALID_ACTION_REWARD,
                     error="invalid_action",
                 )
             logger.warning(error_msg)
             return (
                 ToolResponse(text=error_msg),
-                FAILURE_REWARD,
+                INVALID_ACTION_REWARD,
                 {
                     "model_action": model_action,
                     "error": "invalid_action",

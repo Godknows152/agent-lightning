@@ -1,0 +1,73 @@
+# Old-verl RestorationTool config for a dedicated physical GPU2.
+# CUDA_VISIBLE_DEVICES=0,1,2 maps physical GPU2 to logical cuda:2.
+# Models stay resident across GRPO sampling and Actor-update phases because
+# Actor, reference policy, and SGLang only use logical cuda:0/1.
+
+tools:
+  - class_name: "verl.tools.restoration_tool.RestorationTool"
+    config:
+      type: native
+      device: cuda:2
+      worker_devices: [cuda:2]
+      model_devices: [cuda:2]
+      output_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_3gpu
+      enable_tool_result_cache: true
+      tool_result_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_3gpu/.tool_result_cache
+      tool_result_cache_max_entries: 5000
+      tool_result_cache_max_size_gb: 20
+      tool_result_cache_ttl_hours: 24
+      tool_result_cache_cleanup_interval: 256
+      preload: true
+      auto_unload: false
+      # GPU2 is isolated from training, so keep restoration and IQA models resident.
+      keep_models_loaded_between_sampling_steps: true
+      tool_registry_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/tools.yaml
+      external_tools_root: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools
+      restoration_entrypoint: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/tool_runtime/restoration_entrypoint.py
+      prompt_min_stop_tool_calls: 1
+
+      use_iqa: true
+      iqa_devices: [cuda:2]
+      iqa_device: cuda:2
+      normalize_iqa_scores: true
+      iqa_metric_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
+      iqa_weight_map_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json
+
+      reward_mode: marginal_efficiency_v1
+      reward_scale: 4.0
+      tool_call_cost: 0.12
+      affinity_bonus_scale: 0.0
+      repeat_action_penalty: 0.75
+      repeat_low_gain_penalty: 2.0
+      repeat_low_gain_threshold: 0.03
+    tool_schema:
+      type: "function"
+      function:
+        name: "restore_image"
+        description: "Apply one registered restoration action or stop the trajectory."
+        parameters:
+          type: "object"
+          properties:
+            action:
+              type: "string"
+              enum:
+                - A_real_esrgan
+                - B_scunet
+                - C_retinexformer_fivek
+                - D_hvicidnet
+                - E_lightdiff
+                - F_turbo_rain
+                - G_s2former
+                - H_idt
+                - I_ridcp
+                - J_kanet
+                - K_turbo_snow
+                - L_snowmaster
+                - M_nafnet_denoise
+                - N_focalnet_dehaze
+                - O_focalnet_desnow
+                - P_mb_taylorformer_dehaze
+                - stop
+          required:
+            - action
+          additionalProperties: false

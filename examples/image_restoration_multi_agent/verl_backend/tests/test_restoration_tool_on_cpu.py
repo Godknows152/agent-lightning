@@ -51,7 +51,7 @@ def test_model_action_alias_is_translated_before_runtime_validation_on_cpu() -> 
     assert tool.model_to_runtime_actions["B_scunet"] == "scunet"
     assert alias_reward == pytest.approx(-5.0)
     assert alias_metrics["error"] == "instance_not_found"
-    assert canonical_reward == pytest.approx(-5.0)
+    assert canonical_reward == pytest.approx(-10.0)
     assert canonical_metrics == {
         "model_action": "scunet",
         "error": "invalid_action",
