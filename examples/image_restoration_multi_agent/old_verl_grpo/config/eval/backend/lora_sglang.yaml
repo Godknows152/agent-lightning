@@ -1,0 +1,23 @@
+name: lora_sglang
+python: /home/LXJ/anaconda3/envs/verl/bin/python
+base_model: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+adapter_path: ???
+
+source_config:
+  dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config/fog/v4.1.1
+  name: fog_config_3gpu
+
+tool_config: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_3gpu.yaml
+
+sampling:
+  temperature: 0.7
+  top_p: 1.0
+  top_k: -1
+  do_sample: true
+  n: 1
+
+gpu:
+  visible_devices: "0,1,2"
+  trainer_gpu_count: 2
+  tensor_parallel_size: 2
+  tool_device: cuda:2

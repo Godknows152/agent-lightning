@@ -1,0 +1,34 @@
+defaults:
+  - backend: lora_sglang
+  - _self_
+
+command: run                 # run | preflight
+
+run:
+  name: ???                  # LoRA 显式名称；JarvisIR 强制为 JarvisIR
+  resume: true
+  overwrite: false
+
+paths:
+  project_root: /home/LXJ/Python_Projects/Agent_Lightning
+  output_root: ${paths.project_root}/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval
+  log_root: ${paths.project_root}/examples/image_restoration_multi_agent/old_verl_grpo/log/eval
+  state_root: ${paths.log_root}/state
+
+data:
+  parquet_path: ${paths.project_root}/examples/image_restoration_multi_agent/old_verl_grpo/data/fog_val.parquet
+  expected_total_samples: 200
+  offset: 0
+  max_samples: 100
+
+runtime:
+  progress_interval_seconds: 30
+  fail_on_missing_output: true
+  fail_on_duplicate_sample: true
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

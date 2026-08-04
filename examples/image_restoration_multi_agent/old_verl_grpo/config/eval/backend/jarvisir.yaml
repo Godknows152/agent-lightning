@@ -1,0 +1,34 @@
+name: jarvisir
+python: /home/LXJ/anaconda3/envs/vLLM/bin/python
+repo_root: /home/LXJ/Python_Projects/JarvisIR_Latest
+entrypoint: /home/LXJ/Python_Projects/JarvisIR_Latest/JarvisIR_inference.py
+model_path: /home/LXJ/Python_Projects/JarvisIR_Latest/checkpoints/pretrained
+
+runtime:
+  execution_mode: split
+  strategy: vlm
+  vlm_backend: vllm
+  resume: true
+  copy_on_no_tool: false
+  write_logs: true
+
+model:
+  policy_gpus: [0, 1]
+  policy_batch_size: 256
+  policy_image_size: 512
+  max_new_tokens: 400
+  torch_dtype: float16
+  vllm:
+    tensor_parallel_size: 2
+    pipeline_parallel_size: 1
+    gpu_memory_utilization: 0.55
+    max_model_len: null
+    max_num_seqs: 256
+
+tool:
+  gpus: [2]
+  enable_iqa: true
+  preload_models: true
+  allowed_tools: []
+  fallback_tools: []
+  force_tools: []

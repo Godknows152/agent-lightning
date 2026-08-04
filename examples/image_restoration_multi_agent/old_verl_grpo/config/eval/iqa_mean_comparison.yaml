@@ -1,0 +1,32 @@
+command: run                 # run | preflight | score-worker
+
+comparison:
+  name: v4.1.1_0803_vs_JarvisIR
+  output_csv: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_0803_vs_JarvisIR_iqa_means.csv
+  require_identical_sample_ids: true
+  expected_samples: 100
+
+sets:
+  - name: v4.1.1_0803
+    output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_0803
+  - name: JarvisIR
+    output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/JarvisIR
+
+iqa:
+  python: /home/LXJ/anaconda3/envs/verl/bin/python
+  repo: /home/LXJ/Python_Projects/Agent_Lightning/External_Tools/iqa_repos/IQA-PyTorch
+  device: cuda:0
+  physical_gpu: 2
+  seed: 42
+  metrics: [musiq, maniqa, clipiqa, liqe]
+  progress_interval: 5
+
+paths:
+  state_root: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/eval/state/iqa
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null
