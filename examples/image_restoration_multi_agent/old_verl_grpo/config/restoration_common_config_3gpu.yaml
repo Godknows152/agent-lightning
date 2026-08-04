@@ -11,6 +11,8 @@ actor_rollout_ref:
       # AgentLoop 不向 Ray 申请 GPU；它通过工具配置直接使用第三张可见卡（逻辑 cuda:2）。
       num_gpus_per_worker: 0.0
     multi_turn:
+      # 三卡训练的工具独占逻辑 cuda:2，无需与 GPU0/1 上的 SGLang 分阶段。
+      phase_separated_tool_execution: false
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_3gpu.yaml
 
 trainer:

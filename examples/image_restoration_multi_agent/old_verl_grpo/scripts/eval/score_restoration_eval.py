@@ -130,7 +130,17 @@ def main(config: DictConfig) -> int:
         seed = int(cfg["iqa"]["seed"])
         progress_interval = int(cfg["iqa"]["progress_interval"])
         results = _score_worker(manifest, metrics, device, seed, progress_interval)
-        print(json.dumps({"status": "ok", "results": results}, ensure_ascii=False))
+        worker_output = {"status": "ok", "results": results}
+        result_path_raw = cfg["iqa"].get("result_path")
+        if result_path_raw:
+            result_path = Path(str(result_path_raw)).resolve()
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = result_path.with_name(f".{result_path.name}.{uuid4().hex}.tmp")
+            tmp_path.write_text(json.dumps(worker_output, ensure_ascii=False), encoding="utf-8")
+            tmp_path.replace(result_path)
+            print(f"IQA score worker complete: {len(results)} images", flush=True)
+        else:
+            print(json.dumps(worker_output, ensure_ascii=False), flush=True)
         return 0
 
     # ---- main orchestrator ----
@@ -191,6 +201,7 @@ def main(config: DictConfig) -> int:
     manifest_path = state_dir / "score_manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
     result_path = state_dir / "score_result.json"
+    result_path.unlink(missing_ok=True)
 
     python = str(cfg["iqa"]["python"])
     physical_gpu = int(cfg["iqa"]["physical_gpu"])
@@ -203,6 +214,7 @@ def main(config: DictConfig) -> int:
         str(SCRIPT_PATH),
         f"command=score-worker",
         f"iqa.manifest_path={manifest_path}",
+        f"iqa.result_path={result_path}",
         f"iqa.metrics={metrics}",
         f"iqa.device=cuda:0",
         f"iqa.seed={seed}",
@@ -211,17 +223,15 @@ def main(config: DictConfig) -> int:
     print(f"Launching IQA score worker on physical GPU {physical_gpu}", flush=True)
     proc = subprocess.run(
         worker_cmd, cwd=PROJECT_ROOT, env=worker_env,
-        capture_output=True, text=True, timeout=3600,
+        timeout=3600,
     )
     if proc.returncode != 0:
-        raise RuntimeError(
-            f"IQA score worker failed (exit {proc.returncode}):\n"
-            f"stdout: {proc.stdout[-2000:]}\nstderr: {proc.stderr[-2000:]}"
-        )
-    worker_output = json.loads(proc.stdout)
+        raise RuntimeError(f"IQA score worker failed (exit {proc.returncode})")
+    if not result_path.is_file():
+        raise FileNotFoundError(f"IQA score worker did not write result file: {result_path}")
+    worker_output = json.loads(result_path.read_text(encoding="utf-8"))
     if worker_output.get("status") != "ok":
         raise RuntimeError(f"IQA score worker error: {worker_output}")
-    result_path.write_text(proc.stdout, encoding="utf-8")
 
     # Parse results back into per-model dicts
     all_scores: dict[str, list[dict[str, Any]]] = {name: [] for name in loaded}

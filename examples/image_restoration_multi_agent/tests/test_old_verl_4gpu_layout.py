@@ -56,8 +56,39 @@ def test_four_gpu_tool_configs_create_one_restoration_and_iqa_worker_per_card() 
         assert runtime["output_dir"].endswith(
             "agent_lightning_old_verl_restoration_4gpu"
         ), path
-        assert runtime["tool_result_cache_dir"].startswith(runtime["output_dir"]), path
+        assert runtime["tool_result_cache_dir"] == (
+            "/home/LXJ/tmp/agent_lightning_old_verl_cache/tool_results"
+        ), path
+        assert runtime["identity_iqa_cache_dir"] == (
+            "/home/LXJ/tmp/agent_lightning_old_verl_cache/identity_iqa"
+        ), path
         assert runtime["keep_models_loaded_between_sampling_steps"] is keep_models_loaded, path
+
+
+def test_all_tool_configs_use_persistent_shared_caches() -> None:
+    tool_config_root = OLD_VERL_ROOT / "config" / "tool_config"
+    for path in tool_config_root.rglob("*.yaml"):
+        runtime = _read_yaml(path)["tools"][0]["config"]
+        assert runtime["enable_tool_result_cache"] is True, path
+        assert runtime["tool_result_cache_dir"] == (
+            "/home/LXJ/tmp/agent_lightning_old_verl_cache/tool_results"
+        ), path
+        assert runtime["tool_result_cache_ttl_hours"] == 0, path
+        assert runtime["enable_identity_iqa_cache"] is True, path
+        assert runtime["identity_iqa_cache_dir"] == (
+            "/home/LXJ/tmp/agent_lightning_old_verl_cache/identity_iqa"
+        ), path
+        assert runtime["identity_iqa_cache_ttl_hours"] == 0, path
+
+
+def test_strict_phase_scheduling_is_enabled_only_for_two_gpu_training() -> None:
+    two_gpu = _read_yaml(OLD_VERL_ROOT / "config" / "restoration_common_config_2gpu.yaml")
+    three_gpu = _read_yaml(OLD_VERL_ROOT / "config" / "restoration_common_config_3gpu.yaml")
+    four_gpu = _read_yaml(OLD_VERL_ROOT / "config" / "restoration_common_config_4gpu.yaml")
+
+    assert two_gpu["actor_rollout_ref"]["rollout"]["multi_turn"]["phase_separated_tool_execution"] is True
+    assert three_gpu["actor_rollout_ref"]["rollout"]["multi_turn"]["phase_separated_tool_execution"] is False
+    assert four_gpu["actor_rollout_ref"]["rollout"]["multi_turn"]["phase_separated_tool_execution"] is False
 
 
 def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> None:
@@ -74,11 +105,14 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
             config = _read_yaml(config_path)
             defaults = config["defaults"]
             assert "restoration_common_config_4gpu" in defaults, config_path
+            data_root = "data"
+            if not (expert == "fog" and version == "v4.1.1"):
+                data_root = "data/4gpu"
             assert config["data"]["train_files"] == [
-                f"examples/image_restoration_multi_agent/old_verl_grpo/data/4gpu/{runtime_expert}_train.parquet"
+                f"examples/image_restoration_multi_agent/old_verl_grpo/{data_root}/{runtime_expert}_train.parquet"
             ], config_path
             assert config["data"]["val_files"] == [
-                f"examples/image_restoration_multi_agent/old_verl_grpo/data/4gpu/{runtime_expert}_val.parquet"
+                f"examples/image_restoration_multi_agent/old_verl_grpo/{data_root}/{runtime_expert}_val.parquet"
             ], config_path
             tool_config = config["actor_rollout_ref"]["rollout"]["multi_turn"][
                 "tool_config_path"

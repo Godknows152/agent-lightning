@@ -186,6 +186,10 @@ multi_turn:
   # max parallel call for tools in single turn
   max_parallel_calls: 1
 
+  # Strictly alternate batch-wide generation and tool phases. This is useful
+  # when rollout and GPU tools share the same devices.
+  phase_separated_tool_execution: False
+
   # max length of tool response
   max_tool_response_length: 1024
 

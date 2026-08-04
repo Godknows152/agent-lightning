@@ -97,6 +97,10 @@ class MultiTurnConfig(BaseConfig):
     # Set to 0 to disable (default), or a positive integer to enable with that
     # many trajectories as the barrier group size (0 = auto = all trajectories).
     round_barrier_size: int = 0
+    # Strictly separate model generation from restoration/IQA execution for the
+    # whole AgentLoopWorker batch. Intended for two-GPU colocated training where
+    # SGLang and the tools must time-share the same devices.
+    phase_separated_tool_execution: bool = False
 
 
 @dataclass

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image
 from verl.tools import restoration_tool as restoration_tool_module
 from verl.tools.restoration_tool import RestorationTool
 from verl.tools.schemas import (
@@ -478,3 +479,93 @@ def test_final_iqa_v2_feedback_calls_out_regression_on_cpu():
 
     assert "This action fell below the trajectory-best IQA" in feedback
     assert "did not improve the trajectory-best IQA" in feedback
+
+
+def test_original_image_iqa_cache_single_flight_and_persists_on_cpu(tmp_path):
+    image_path = tmp_path / "input.png"
+    Image.new("RGB", (4, 4), color=(32, 64, 96)).save(image_path)
+    cache_dir = tmp_path / "identity-cache"
+    output_dir = tmp_path / "outputs"
+    calls = 0
+
+    async def run_test():
+        nonlocal calls
+        tool_a = _build_tool(
+            output_dir=str(output_dir),
+            enable_identity_iqa_cache=True,
+            identity_iqa_cache_dir=str(cache_dir),
+        )
+        tool_b = _build_tool(
+            output_dir=str(output_dir),
+            enable_identity_iqa_cache=True,
+            identity_iqa_cache_dir=str(cache_dir),
+        )
+
+        async def fake_iqa(_image_path):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.02)
+            return [0.1, 0.2, 0.3, 0.4, 0.5]
+
+        tool_a._aget_iqa_scores = fake_iqa
+        tool_b._aget_iqa_scores = fake_iqa
+        await asyncio.gather(
+            tool_a.create(instance_id="a", original_image=str(image_path)),
+            tool_b.create(instance_id="b", original_image=str(image_path)),
+        )
+        assert tool_a._instance_dict["a"]["identity_scores"] == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5])
+        assert tool_b._instance_dict["b"]["identity_scores"] == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5])
+
+        tool_c = _build_tool(
+            output_dir=str(output_dir),
+            enable_identity_iqa_cache=True,
+            identity_iqa_cache_dir=str(cache_dir),
+        )
+        tool_c._aget_iqa_scores = fake_iqa
+        await tool_c.create(instance_id="c", original_image=str(image_path))
+
+    asyncio.run(run_test())
+    assert calls == 1
+    assert list(cache_dir.glob("*/*.json"))
+
+
+def test_tool_result_cache_single_flight_executes_identical_action_once_on_cpu(tmp_path):
+    tools_config = Path(__file__).resolve().parents[2] / "config" / "tools.yaml"
+    image_path = tmp_path / "input.png"
+    Image.new("RGB", (4, 4), color=(32, 64, 96)).save(image_path)
+    cache_dir = tmp_path / "tool-cache"
+    calls = 0
+
+    async def run_test():
+        nonlocal calls
+        common = {
+            "tool_registry_path": str(tools_config),
+            "use_iqa": False,
+            "enable_identity_iqa_cache": False,
+            "enable_tool_result_cache": True,
+            "tool_result_cache_dir": str(cache_dir),
+        }
+        tool_a = _build_tool(output_dir=str(tmp_path / "out-a"), **common)
+        tool_b = _build_tool(output_dir=str(tmp_path / "out-b"), **common)
+        await tool_a.create(instance_id="a", original_image=str(image_path))
+        await tool_b.create(instance_id="b", original_image=str(image_path))
+
+        async def fake_action(action, current_image, output_dir, instance_id):
+            nonlocal calls
+            calls += 1
+            await asyncio.sleep(0.02)
+            output_path = Path(output_dir) / f"{instance_id}_{action}.png"
+            Image.open(current_image).save(output_path)
+            return {"output_path": str(output_path)}, [1.0] * 5
+
+        tool_a._run_action_and_score = fake_action
+        tool_b._run_action_and_score = fake_action
+        results = await asyncio.gather(
+            tool_a.execute("a", {"action": "B_scunet"}),
+            tool_b.execute("b", {"action": "B_scunet"}),
+        )
+        return [result[2]["tool_result_cache_hit"] for result in results]
+
+    cache_hits = asyncio.run(run_test())
+    assert calls == 1
+    assert sorted(cache_hits) == [False, True]

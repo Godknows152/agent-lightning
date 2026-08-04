@@ -36,7 +36,6 @@ def test_lora_sglang_hydra_config_composes():
     """Compose the full lora_sglang config and verify key fields."""
     from hydra import compose, initialize_config_dir
     from hydra.core.global_hydra import GlobalHydra
-    from omegaconf import MissingMandatoryValue
     if GlobalHydra.instance().is_initialized():
         GlobalHydra.instance().clear()
     config_dir = str((OLD_VERL_DIR / "config/eval").resolve())
@@ -45,8 +44,8 @@ def test_lora_sglang_hydra_config_composes():
     assert cfg.backend.name == "lora_sglang"
     assert cfg.data.max_samples == 100
     assert cfg.data.offset == 0
-    with pytest.raises(MissingMandatoryValue):
-        _ = cfg.run.name
+    assert cfg.run.name == "v2"
+    assert cfg.backend.adapter_path.endswith("outputs/fog/LoRA/v2")
 
 
 def test_jarvisir_hydra_config_composes():

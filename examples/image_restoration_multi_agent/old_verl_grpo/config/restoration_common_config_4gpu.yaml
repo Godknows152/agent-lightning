@@ -80,7 +80,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
     tensor_model_parallel_size: 2  # 四张卡自动形成两个 TP2 Rollout 副本：GPU0-1 与 GPU2-3
     gpu_memory_utilization: 0.2  # SGLang 静态权重和缓存池可使用的单卡显存比例
     force_full_sleep_for_lora: true  # Actor 更新阶段让 LoRA Rollout 引擎完全休眠并释放权重与缓存显存
-    max_num_seqs: 16  # 限制 SGLang 同时运行的生成请求数；当前被注释，因此继承 VERL 默认值
+    max_num_seqs: 1024  # 对当前 rollout 规模等价于无实际限制，并保持 VERL 并发计算兼容
     # max_model_len: 9728  # 单次 SGLang 请求允许的提示与生成内容总 Token 上限
     enforce_eager: true  # 强制使用 eager 执行并禁用 CUDA Graph，以提高动态多轮场景兼容性
     log_prob_micro_batch_size_per_gpu: 2  # 每张 GPU 计算 Rollout Token 对数概率时的微批次大小
@@ -96,6 +96,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
       max_assistant_turns: 6  # 单条轨迹允许的最大模型回复轮数
       max_generated_response_length: 2500  # 单条多轮轨迹中模型累计生成的最大 Token 数
       round_barrier_size: 0  # 关闭轮次同步屏障，让各轨迹异步进入下一轮生成
+      phase_separated_tool_execution: false  # 四卡训练保持原有异步调度，不启用双卡专用分阶段方案
       format: qwen3_coder  # 使用与 Qwen3 工具调用兼容的多轮消息格式
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/restoration_tool_config_current_iqa_4gpu.yaml  # 指定四卡图像修复与 IQA 工具配置文件
 

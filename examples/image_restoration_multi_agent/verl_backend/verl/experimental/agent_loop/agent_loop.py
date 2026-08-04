@@ -16,7 +16,7 @@ import logging
 import os
 import random
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from uuid import uuid4
 
 import hydra
@@ -140,6 +140,83 @@ class _RoundBarrier:
         return self._generation
 
 
+class _GenerationToolPhaseCoordinator:
+    """Strictly alternate batch-wide generation and tool execution phases."""
+
+    def __init__(
+        self,
+        num_parties: int,
+        *,
+        on_tool_phase_start: Callable[[], Awaitable[None]] | None = None,
+        on_generation_phase_start: Callable[[], Awaitable[None]] | None = None,
+    ):
+        self._num_parties = num_parties
+        self._phase = "generation"
+        self._generation_arrived = 0
+        self._tool_arrived = 0
+        self._cycle = 0
+        self._condition = asyncio.Condition()
+        self._on_tool_phase_start = on_tool_phase_start
+        self._on_generation_phase_start = on_generation_phase_start
+
+    async def _transition_to_tool_phase(self) -> None:
+        if self._on_tool_phase_start is not None:
+            try:
+                await self._on_tool_phase_start()
+            except Exception as e:
+                logger.warning("Failed to prepare SGLang for restoration tool phase: %s", e)
+        self._phase = "tool"
+        logger.info("Strict phase scheduling: generation cycle %d complete; starting tool phase", self._cycle)
+        self._condition.notify_all()
+
+    async def _transition_to_generation_phase(self) -> None:
+        if self._on_generation_phase_start is not None:
+            try:
+                await self._on_generation_phase_start()
+            except Exception as e:
+                logger.warning("Failed to prepare SGLang for generation phase: %s", e)
+        self._phase = "generation"
+        self._generation_arrived = 0
+        self._tool_arrived = 0
+        self._cycle += 1
+        logger.info("Strict phase scheduling: tool cycle %d complete; starting generation phase", self._cycle - 1)
+        self._condition.notify_all()
+
+    async def after_generation(self) -> None:
+        async with self._condition:
+            cycle = self._cycle
+            self._generation_arrived += 1
+            if self._generation_arrived >= self._num_parties:
+                await self._transition_to_tool_phase()
+            else:
+                await self._condition.wait_for(lambda: self._phase != "generation" or self._cycle != cycle)
+
+    async def after_tool(self) -> None:
+        async with self._condition:
+            cycle = self._cycle
+            self._tool_arrived += 1
+            if self._tool_arrived >= self._num_parties:
+                await self._transition_to_generation_phase()
+            else:
+                await self._condition.wait_for(lambda: self._phase != "tool" or self._cycle != cycle)
+
+    async def depart(self) -> None:
+        """Remove one terminated trajectory and release any now-complete phase."""
+        async with self._condition:
+            if self._num_parties <= 0:
+                return
+            self._num_parties -= 1
+            if self._num_parties == 0:
+                if self._phase == "tool":
+                    await self._transition_to_generation_phase()
+                else:
+                    self._condition.notify_all()
+            elif self._phase == "generation" and self._generation_arrived >= self._num_parties:
+                await self._transition_to_tool_phase()
+            elif self._phase == "tool" and self._tool_arrived >= self._num_parties:
+                await self._transition_to_generation_phase()
+
+
 @ray.remote
 class GlobalRequestLoadBalancer:
     """Global sticky-session + in-flight load balancer shared by all AgentLoopWorkers."""
@@ -217,6 +294,14 @@ class AsyncLLMServerManager:
         # Fire-and-forget: release is just a counter decrement, no need to await.
         # Awaiting here risks blocking the finally clause if the LB actor is unresponsive.
         self._load_balancer.release_server.remote(server_id=server_id)
+
+    async def sleep_for_tool_phase(self) -> None:
+        await asyncio.gather(*(server.sleep_for_tool_phase.remote() for server in self._server_id_to_handle.values()))
+
+    async def wake_up_after_tool_phase(self) -> None:
+        await asyncio.gather(
+            *(server.wake_up_after_tool_phase.remote() for server in self._server_id_to_handle.values())
+        )
 
     @rollout_trace_op
     async def generate(
@@ -742,6 +827,21 @@ class AgentLoopWorker:
         else:
             round_barrier = None
 
+        phase_separated_tool_execution = bool(
+            config.multi_turn.phase_separated_tool_execution if config.multi_turn else False
+        )
+        if phase_separated_tool_execution and len(batch) > 1:
+            if round_barrier is not None:
+                logger.warning("Strict phase scheduling supersedes round_barrier_size; disabling the round barrier")
+                round_barrier = None
+            phase_coordinator = _GenerationToolPhaseCoordinator(
+                len(batch),
+                on_tool_phase_start=self.server_manager.sleep_for_tool_phase,
+                on_generation_phase_start=self.server_manager.wake_up_after_tool_phase,
+            )
+        else:
+            phase_coordinator = None
+
         try:
             tasks = []
             for i in range(len(batch)):
@@ -754,6 +854,7 @@ class AgentLoopWorker:
                             trajectory_info[i],
                             trace=trace_this_sample,
                             round_barrier=round_barrier,
+                            phase_coordinator=phase_coordinator,
                             **kwargs,
                         )
                     )
@@ -781,6 +882,7 @@ class AgentLoopWorker:
         agent_name: str,
         trace: bool = True,
         round_barrier: Optional[_RoundBarrier] = None,
+        phase_coordinator: Optional[_GenerationToolPhaseCoordinator] = None,
         **kwargs,
     ) -> _InternalAgentLoopOutput:
         with rollout_trace_attr(
@@ -805,7 +907,12 @@ class AgentLoopWorker:
                 dataset_cls=self.dataset_cls,
                 data_config=DictConfigWrap(self.config.data),
             )
-            output: AgentLoopOutput = await agent_loop.run(sampling_params, round_barrier=round_barrier, **kwargs)
+            output: AgentLoopOutput = await agent_loop.run(
+                sampling_params,
+                round_barrier=round_barrier,
+                phase_coordinator=phase_coordinator,
+                **kwargs,
+            )
             return await self._agent_loop_postprocess(output, trajectory["validate"], **kwargs)
 
     async def _agent_loop_postprocess(self, output, validate, **kwargs) -> _InternalAgentLoopOutput:

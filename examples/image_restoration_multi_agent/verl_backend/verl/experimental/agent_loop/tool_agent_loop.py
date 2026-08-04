@@ -611,7 +611,13 @@ class ToolAgentLoop(AgentLoopBase):
         agent_data.tool_instances.clear()
 
     @rollout_trace_op
-    async def run(self, sampling_params: dict[str, Any], round_barrier=None, **kwargs) -> AgentLoopOutput:
+    async def run(
+        self,
+        sampling_params: dict[str, Any],
+        round_barrier=None,
+        phase_coordinator=None,
+        **kwargs,
+    ) -> AgentLoopOutput:
         messages = list(kwargs["raw_prompt"])
 
         # extract images and videos from messages
@@ -648,6 +654,7 @@ class ToolAgentLoop(AgentLoopBase):
             agent_data._active_tools = self.tools
             agent_data._active_tool_schemas = self.tool_schemas
 
+        phase_coordinator_departed = False
         try:
             # State machine loop
             state = AgentState.PENDING
@@ -665,8 +672,18 @@ class ToolAgentLoop(AgentLoopBase):
                         await round_barrier.wait_for_next_round()
                     generation_round += 1
                     state = await self._handle_generating_state(agent_data, sampling_params)
+                    if phase_coordinator is not None:
+                        await phase_coordinator.after_generation()
+                        if state == AgentState.TERMINATED:
+                            await phase_coordinator.depart()
+                            phase_coordinator_departed = True
                 elif state == AgentState.PROCESSING_TOOLS:
                     state = await self._handle_processing_tools_state(agent_data)
+                    if phase_coordinator is not None:
+                        await phase_coordinator.after_tool()
+                        if state == AgentState.TERMINATED:
+                            await phase_coordinator.depart()
+                            phase_coordinator_departed = True
                 else:
                     logger.error(f"Invalid state: {state}")
                     state = AgentState.TERMINATED
@@ -770,6 +787,8 @@ class ToolAgentLoop(AgentLoopBase):
             # departed trajectory that never arrives at the barrier.
             if round_barrier is not None:
                 round_barrier.depart()
+            if phase_coordinator is not None and not phase_coordinator_departed:
+                await phase_coordinator.depart()
             await self._release_tool_instances(agent_data)
 
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:

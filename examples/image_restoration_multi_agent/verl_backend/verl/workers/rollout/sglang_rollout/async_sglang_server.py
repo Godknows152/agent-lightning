@@ -365,6 +365,23 @@ class SGLangHttpServer:
             obj = ReleaseMemoryOccupationReqInput(tags=["kv_cache"])
             await self.tokenizer_manager.release_memory_occupation(obj, None)
 
+    async def sleep_for_tool_phase(self):
+        """Release only KV-cache memory while restoration tools own the GPUs."""
+        if self.node_rank != 0 or not self.config.free_cache_engine or getattr(self, "_tool_phase_sleeping", False):
+            return
+        obj = ReleaseMemoryOccupationReqInput(tags=["kv_cache"])
+        await self.tokenizer_manager.release_memory_occupation(obj, None)
+        self._tool_phase_sleeping = True
+
+    async def wake_up_after_tool_phase(self):
+        """Restore KV-cache allocation before the next strict generation phase."""
+        if self.node_rank != 0 or not self.config.free_cache_engine or not getattr(self, "_tool_phase_sleeping", False):
+            return
+        obj = ResumeMemoryOccupationReqInput(tags=["kv_cache"])
+        await self.tokenizer_manager.resume_memory_occupation(obj, None)
+        self._tool_phase_sleeping = False
+        await self.tokenizer_manager.flush_cache()
+
     async def clear_kv_cache(self):
         if self.node_rank == 0:
             await self.tokenizer_manager.flush_cache()

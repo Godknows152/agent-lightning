@@ -12,11 +12,16 @@ tools:
       model_devices: [cuda:2]
       output_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_3gpu
       enable_tool_result_cache: true
-      tool_result_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_3gpu/.tool_result_cache
+      tool_result_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_cache/tool_results
       tool_result_cache_max_entries: 5000
       tool_result_cache_max_size_gb: 20
-      tool_result_cache_ttl_hours: 24
+      tool_result_cache_ttl_hours: 0
       tool_result_cache_cleanup_interval: 256
+      enable_identity_iqa_cache: true
+      identity_iqa_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_cache/identity_iqa
+      identity_iqa_cache_max_entries: 20000
+      identity_iqa_cache_ttl_hours: 0
+      identity_iqa_cache_cleanup_interval: 256
       preload: true
       auto_unload: false
       # The dedicated tool GPU is isolated from training, so keep models resident.
