@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calibrate the four-metric IQA reward from sampled training images.
+"""Calibrate a configurable multi-metric IQA reward from sampled training images.
 
 Run from the Agent_Lightning repository root:
 
@@ -48,7 +48,7 @@ IQA_REPO = DEFAULT_EXTERNAL_TOOLS / "iqa_repos/IQA-PyTorch"
 
 LABELS = ("fog", "snow", "rain", "low_light")
 CLASS_DIRECTORIES = {"fog": "fog", "snow": "snow", "rain": "rain", "low_light": "low_light"}
-METRICS = ("maniqa", "niqe", "clipiqa", "topiq_nr")
+DEFAULT_METRICS = ("maniqa", "niqe", "clipiqa", "topiq_nr")
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 TARGETED_ACTIONS = {
     "fog": {"ridcp", "kanet", "focalnet_dehaze", "mb_taylorformer_dehaze"},
@@ -70,12 +70,31 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples-per-class", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-pixels", type=int, default=262_144)
+    parser.add_argument(
+        "--metrics",
+        default=",".join(DEFAULT_METRICS),
+        help="Comma-separated pyiqa metric names. All metrics are assumed higher-is-better except NIQE.",
+    )
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--action")
     parser.add_argument("--gpu")
     parser.add_argument("--rank", type=int)
     parser.add_argument("--world-size", type=int)
     return parser.parse_args()
+
+
+def parse_metric_names(value: str) -> tuple[str, ...]:
+    metrics = tuple(item.strip().lower() for item in value.split(",") if item.strip())
+    if not metrics:
+        raise ValueError("At least one IQA metric is required.")
+    duplicates = sorted({name for name in metrics if metrics.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"Duplicate IQA metrics: {', '.join(duplicates)}")
+    return metrics
+
+
+def orient_metric_score(metric: str, value: float) -> float:
+    return -value if metric == "niqe" else value
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -230,8 +249,9 @@ def run_candidate_batch(
 
 
 def prepare_toolkit_imports(external_tools_root: Path, model_name: str) -> None:
-    bundle = external_tools_root / "verl_bundle"
-    agent_tools_dir = bundle / "agent_tools"
+    del external_tools_root
+    backend_root = EXAMPLE_DIR / "verl_backend"
+    agent_tools_dir = backend_root / "restoration_tools/agent_tools"
     source_directories = {
         "retinexformer_fivek": "Retinexformer",
         "lightdiff": "LightenDiffusion",
@@ -240,7 +260,7 @@ def prepare_toolkit_imports(external_tools_root: Path, model_name: str) -> None:
         "turbo_rain": "img2img_turbo",
         "turbo_snow": "img2img_turbo",
     }
-    sys.path.insert(0, str(bundle))
+    sys.path.insert(0, str(backend_root))
     selected_source = source_directories.get(model_name)
     if selected_source:
         source_dir = agent_tools_dir / selected_source
@@ -257,7 +277,7 @@ def run_toolkit_batch(
     runtime = tool["runtime"]
     model_name = runtime["model"]
     prepare_toolkit_imports(args.external_tools_root, model_name)
-    toolkit_module = importlib.import_module("agent_tools.restoration_toolkit")
+    toolkit_module = importlib.import_module("restoration_tools.agent_tools.restoration_toolkit")
     toolkit = toolkit_module.RestorationToolkit(
         models=[model_name],
         device="cuda:0",
@@ -378,7 +398,7 @@ def score_worker(args: argparse.Namespace) -> int:
         if args.resume
         else set()
     )
-    metrics = {name: pyiqa.create_metric(name, device="cuda:0") for name in METRICS}
+    metrics = {name: pyiqa.create_metric(name, device="cuda:0").eval() for name in args.metrics}
     for index, record in enumerate(records, start=1):
         if record["image_id"] in completed:
             continue
@@ -391,7 +411,7 @@ def score_worker(args: argparse.Namespace) -> int:
                 value = float(metric(record["image_path"]).reshape(-1)[0].item())
             torch.cuda.synchronize()
             raw_scores[name] = value
-            oriented_scores[name] = -value if name == "niqe" else value
+            oriented_scores[name] = orient_metric_score(name, value)
             metric_seconds[name] = time.perf_counter() - started
         append_jsonl(
             progress_path,
@@ -426,7 +446,67 @@ def cap_and_normalize(weights: np.ndarray, cap: float) -> np.ndarray:
     return result / result.sum()
 
 
+def _safe_pearson(left: np.ndarray, right: np.ndarray) -> float:
+    if left.size < 2 or right.size < 2 or float(left.std()) <= 1e-12 or float(right.std()) <= 1e-12:
+        return 0.0
+    value = float(np.corrcoef(left, right)[0, 1])
+    return value if math.isfinite(value) else 0.0
+
+
+def derive_metric_weight_components(
+    metrics: tuple[str, ...], signals: list[float], delta_matrix: np.ndarray
+) -> dict[str, Any]:
+    """Derive dynamic-size calibration weights from discriminability and consensus signals."""
+    metric_count = len(metrics)
+    if metric_count == 0:
+        raise ValueError("At least one IQA metric is required.")
+    if delta_matrix.ndim != 2 or delta_matrix.shape[1] != metric_count:
+        raise ValueError(f"Expected delta matrix with {metric_count} columns, got {delta_matrix.shape}.")
+
+    uniform = np.full(metric_count, 1.0 / metric_count, dtype=np.float64)
+    signal_array = np.asarray(signals, dtype=np.float64)
+    discriminability_weight = signal_array / signal_array.sum() if signal_array.sum() > 1e-12 else uniform.copy()
+
+    consensus_correlations = []
+    for metric_index in range(metric_count):
+        if metric_count == 1:
+            correlation = 1.0
+        else:
+            leave_one_out = np.delete(delta_matrix, metric_index, axis=1).mean(axis=1)
+            correlation = _safe_pearson(delta_matrix[:, metric_index], leave_one_out)
+        consensus_correlations.append(correlation)
+    nonnegative_consensus = np.maximum(np.asarray(consensus_correlations, dtype=np.float64), 0.0)
+    consensus_weight = (
+        nonnegative_consensus / nonnegative_consensus.sum()
+        if nonnegative_consensus.sum() > 1e-12
+        else uniform.copy()
+    )
+    data_weight = 0.5 * discriminability_weight + 0.5 * consensus_weight
+    shrinkage = 0.5
+    pre_cap = (1.0 - shrinkage) * data_weight + shrinkage * uniform
+    final_weight = cap_and_normalize(pre_cap, cap=0.35) if metric_count > 1 else uniform.copy()
+
+    delta_correlation = np.eye(metric_count, dtype=np.float64)
+    for row_index in range(metric_count):
+        for column_index in range(row_index + 1, metric_count):
+            correlation = _safe_pearson(delta_matrix[:, row_index], delta_matrix[:, column_index])
+            delta_correlation[row_index, column_index] = correlation
+            delta_correlation[column_index, row_index] = correlation
+
+    return {
+        "discriminability_weight": discriminability_weight,
+        "consensus_correlations": consensus_correlations,
+        "consensus_weight": consensus_weight,
+        "data_weight": data_weight,
+        "uniform_shrinkage": shrinkage,
+        "pre_cap_weight": pre_cap,
+        "final_weight": final_weight,
+        "delta_correlation": delta_correlation,
+    }
+
+
 def summarize(args: argparse.Namespace) -> None:
+    metrics = args.metrics
     score_rows = []
     for path in sorted((args.output_dir / "progress/iqa").glob("rank*.jsonl")):
         score_rows.extend(read_jsonl(path))
@@ -435,7 +515,7 @@ def summarize(args: argparse.Namespace) -> None:
         raise RuntimeError(f"Expected {expected} IQA rows, found {len(score_rows)}.")
     score_rows.sort(key=lambda row: row["image_id"])
 
-    values = {metric: np.array([row["oriented_scores"][metric] for row in score_rows]) for metric in METRICS}
+    values = {metric: np.array([row["oriented_scores"][metric] for row in score_rows]) for metric in metrics}
     stats = {
         metric: {
             "mean": float(metric_values.mean()),
@@ -453,7 +533,7 @@ def summarize(args: argparse.Namespace) -> None:
     for row in score_rows:
         z_scores = {
             metric: (row["oriented_scores"][metric] - stats[metric]["mean"]) / stats[metric]["std"]
-            for metric in METRICS
+            for metric in metrics
         }
         enriched = {**row, "z_scores": z_scores}
         z_rows.append(enriched)
@@ -462,11 +542,11 @@ def summarize(args: argparse.Namespace) -> None:
     grouped_values: dict[tuple[str, str], dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
     for row in z_rows:
         group = grouped_values[(row["degradation_type"], row["action"])]
-        for metric in METRICS:
+        for metric in metrics:
             group[metric].append(row["oriented_scores"][metric])
     distribution_rows = []
     for (label, action), group in sorted(grouped_values.items()):
-        for metric in METRICS:
+        for metric in metrics:
             metric_values = np.asarray(group[metric], dtype=np.float64)
             distribution_rows.append(
                 {
@@ -500,10 +580,10 @@ def summarize(args: argparse.Namespace) -> None:
             for action, action_z in action_scores.items():
                 if action == "original":
                     continue
-                all_delta_vectors.append([action_z[metric] - original[metric] for metric in METRICS])
+                all_delta_vectors.append([action_z[metric] - original[metric] for metric in metrics])
                 destination = class_targeted if action in TARGETED_ACTIONS[label] else class_other
                 global_destination = targeted_deltas if action in TARGETED_ACTIONS[label] else other_deltas
-                for metric in METRICS:
+                for metric in metrics:
                     delta = action_z[metric] - original[metric]
                     destination[metric].append(delta)
                     global_destination[metric].append(delta)
@@ -513,12 +593,12 @@ def summarize(args: argparse.Namespace) -> None:
                 "other_mean_delta_z": float(np.mean(class_other[metric])),
                 "discriminability": float(np.mean(class_targeted[metric]) - np.mean(class_other[metric])),
             }
-            for metric in METRICS
+            for metric in metrics
         }
 
     diagnostics = {}
     signals = []
-    for metric in METRICS:
+    for metric in metrics:
         targeted = np.asarray(targeted_deltas[metric], dtype=np.float64)
         other = np.asarray(other_deltas[metric], dtype=np.float64)
         targeted_mean = float(targeted.mean())
@@ -535,27 +615,21 @@ def summarize(args: argparse.Namespace) -> None:
         }
         signals.append(signal)
 
-    signal_array = np.asarray(signals, dtype=np.float64)
-    discriminability_weight = signal_array / signal_array.sum() if signal_array.sum() > 1e-12 else np.full(4, 0.25)
     delta_matrix = np.asarray(all_delta_vectors, dtype=np.float64)
-    delta_correlation = np.corrcoef(delta_matrix.T)
-    consensus_correlations = []
-    for metric_index in range(len(METRICS)):
-        leave_one_out = np.delete(delta_matrix, metric_index, axis=1).mean(axis=1)
-        correlation = float(np.corrcoef(delta_matrix[:, metric_index], leave_one_out)[0, 1])
-        consensus_correlations.append(max(0.0, correlation))
-        diagnostics[METRICS[metric_index]]["leave_one_out_consensus_correlation"] = correlation
-    consensus_array = np.asarray(consensus_correlations, dtype=np.float64)
-    consensus_weight = consensus_array / consensus_array.sum() if consensus_array.sum() > 1e-12 else np.full(4, 0.25)
-    data_weight = 0.5 * discriminability_weight + 0.5 * consensus_weight
-    shrinkage = 0.5
-    prior_weight = np.full(4, 0.25)
-    pre_cap = (1.0 - shrinkage) * data_weight + shrinkage * prior_weight
-    final_weight = cap_and_normalize(pre_cap, cap=0.35)
+    components = derive_metric_weight_components(metrics, signals, delta_matrix)
+    for metric, correlation in zip(metrics, components["consensus_correlations"], strict=True):
+        diagnostics[metric]["leave_one_out_consensus_correlation"] = correlation
+    discriminability_weight = components["discriminability_weight"]
+    consensus_weight = components["consensus_weight"]
+    data_weight = components["data_weight"]
+    shrinkage = components["uniform_shrinkage"]
+    pre_cap = components["pre_cap_weight"]
+    final_weight = components["final_weight"]
+    delta_correlation = components["delta_correlation"]
     weight_payload = {
         "version": 1,
-        "metrics": list(METRICS),
-        "niqe_transform": "niqe_quality = -raw_niqe",
+        "metrics": list(metrics),
+        "raw_transforms": {metric: "negate" if metric == "niqe" else "identity" for metric in metrics},
         "normalization": "zscore over balanced original and all single-step restoration outputs",
         "weight_method": (
             "50% targeted-vs-other discriminability + 50% leave-one-out metric consensus, "
@@ -567,15 +641,15 @@ def summarize(args: argparse.Namespace) -> None:
         },
         "uniform_shrinkage": shrinkage,
         "max_weight": 0.35,
-        "discriminability_weight": dict(zip(METRICS, map(float, discriminability_weight))),
-        "consensus_weight": dict(zip(METRICS, map(float, consensus_weight))),
-        "data_weight": dict(zip(METRICS, map(float, data_weight))),
-        "pre_cap_weight": dict(zip(METRICS, map(float, pre_cap))),
-        "weights": dict(zip(METRICS, map(float, final_weight))),
+        "discriminability_weight": dict(zip(metrics, map(float, discriminability_weight))),
+        "consensus_weight": dict(zip(metrics, map(float, consensus_weight))),
+        "data_weight": dict(zip(metrics, map(float, data_weight))),
+        "pre_cap_weight": dict(zip(metrics, map(float, pre_cap))),
+        "weights": dict(zip(metrics, map(float, final_weight))),
         "diagnostics": diagnostics,
         "delta_correlation_matrix": {
-            row_metric: dict(zip(METRICS, map(float, delta_correlation[row_index])))
-            for row_index, row_metric in enumerate(METRICS)
+            row_metric: dict(zip(metrics, map(float, delta_correlation[row_index])))
+            for row_index, row_metric in enumerate(metrics)
         },
         "per_class_diagnostics": per_class,
         "caveat": "Initial weakly supervised calibration; targeted tool families are semantic proxies, not human MOS labels.",
@@ -591,13 +665,13 @@ def summarize(args: argparse.Namespace) -> None:
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
     with (args.output_dir / "iqa_scores.csv").open("w", encoding="utf-8", newline="") as file:
         fieldnames = ["sample_id", "degradation_type", "action", "image_path"]
-        for metric in METRICS:
+        for metric in metrics:
             fieldnames.extend([f"{metric}_raw", f"{metric}_oriented", f"{metric}_z"])
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         for row in z_rows:
             flat = {key: row[key] for key in ("sample_id", "degradation_type", "action", "image_path")}
-            for metric in METRICS:
+            for metric in metrics:
                 flat[f"{metric}_raw"] = row["raw_scores"][metric]
                 flat[f"{metric}_oriented"] = row["oriented_scores"][metric]
                 flat[f"{metric}_z"] = row["z_scores"][metric]
@@ -613,8 +687,10 @@ def summarize(args: argparse.Namespace) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    figure, axes = plt.subplots(2, 2, figsize=(12, 8))
-    for metric, axis in zip(METRICS, axes.flat):
+    column_count = min(2, len(metrics))
+    row_count = math.ceil(len(metrics) / column_count)
+    figure, axes = plt.subplots(row_count, column_count, figsize=(6 * column_count, 4 * row_count), squeeze=False)
+    for metric, axis in zip(metrics, axes.flat):
         original_values = [row["oriented_scores"][metric] for row in z_rows if row["action"] == "original"]
         restored_values = [row["oriented_scores"][metric] for row in z_rows if row["action"] != "original"]
         axis.hist(original_values, bins=16, alpha=0.7, density=True, label="original")
@@ -623,6 +699,8 @@ def summarize(args: argparse.Namespace) -> None:
         axis.set_xlabel("higher-is-better score")
         axis.set_ylabel("density")
         axis.legend()
+    for axis in axes.flat[len(metrics) :]:
+        axis.set_visible(False)
     figure.suptitle("IQA score distributions on calibration images")
     figure.tight_layout()
     figure.savefig(args.output_dir / "iqa_score_distributions.png", dpi=180)
@@ -632,7 +710,7 @@ def summarize(args: argparse.Namespace) -> None:
     action_delta_matrix = []
     for action in actions:
         action_deltas = []
-        for metric in METRICS:
+        for metric in metrics:
             metric_deltas = []
             for action_scores in by_sample.values():
                 metric_deltas.append(action_scores[action][metric] - action_scores["original"][metric])
@@ -640,7 +718,7 @@ def summarize(args: argparse.Namespace) -> None:
         action_delta_matrix.append(action_deltas)
     figure, axis = plt.subplots(figsize=(8, 10))
     image = axis.imshow(action_delta_matrix, cmap="RdBu_r", vmin=-1.5, vmax=1.5, aspect="auto")
-    axis.set_xticks(range(len(METRICS)), METRICS, rotation=30, ha="right")
+    axis.set_xticks(range(len(metrics)), metrics, rotation=30, ha="right")
     axis.set_yticks(range(len(actions)), actions)
     axis.set_title("Mean single-step IQA delta in z-score space")
     for row_index, row in enumerate(action_delta_matrix):
@@ -652,20 +730,22 @@ def summarize(args: argparse.Namespace) -> None:
     plt.close(figure)
 
     lines = [
-        "# Four-metric IQA reward calibration",
+        "# Multi-metric IQA reward calibration",
         "",
         f"- Original training images: {args.samples_per_class * len(LABELS)}",
         f"- Samples per class: {args.samples_per_class}",
         f"- Restoration actions: {len(load_tools(args.tools_config))}",
         f"- Total scored images: {len(score_rows)}",
-        "- NIQE conversion: `niqe_quality = -raw_niqe`",
+        f"- Metrics: {', '.join(metrics)}",
         "",
         "## Normalization",
         "",
         "| Metric | Mean | Std | Min | Max |",
         "|---|---:|---:|---:|---:|",
     ]
-    for metric in METRICS:
+    if "niqe" in metrics:
+        lines.insert(6, "- NIQE conversion: `niqe_quality = -raw_niqe`")
+    for metric in metrics:
         item = stats[metric]
         lines.append(
             f"| {metric} | {item['mean']:.6f} | {item['std']:.6f} | " f"{item['minimum']:.6f} | {item['maximum']:.6f} |"
@@ -747,6 +827,8 @@ def coordinator(args: argparse.Namespace) -> int:
             str(args.tools_config),
             "--external-tools-root",
             str(args.external_tools_root),
+            "--metrics",
+            ",".join(args.metrics),
         ]
         if args.resume:
             command.append("--resume")
@@ -773,6 +855,8 @@ def coordinator(args: argparse.Namespace) -> int:
             str(args.tools_config),
             "--external-tools-root",
             str(args.external_tools_root),
+            "--metrics",
+            ",".join(args.metrics),
         ]
         if args.resume:
             command.append("--resume")
@@ -788,6 +872,7 @@ def coordinator(args: argparse.Namespace) -> int:
 
 def main() -> int:
     args = parse_args()
+    args.metrics = parse_metric_names(args.metrics)
     args.output_dir = args.output_dir.expanduser().resolve()
     args.tools_config = args.tools_config.expanduser().resolve()
     args.external_tools_root = args.external_tools_root.expanduser().resolve()

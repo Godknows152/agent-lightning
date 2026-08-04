@@ -8,13 +8,13 @@ Usage:
 
 Physical GPU topology:
   GPU0/1: Actor, frozen reference policy, TP2 SGLang rollout
-  GPU2:   persistent image-restoration models and IQA scoring only
+  GPU2 or GPU3: persistent image-restoration models and IQA scoring only
 
-The launcher exposes physical devices as CUDA_VISIBLE_DEVICES=0,1,2. Inside
-the process, physical GPU2 is logical cuda:2. Ray registers only two GPU
-resources, so FSDP and SGLang cannot allocate the dedicated tool GPU.
+The launcher exposes physical devices as CUDA_VISIBLE_DEVICES=0,1,<tool GPU>.
+Inside the process, the third visible device is logical cuda:2. Ray registers
+only two GPU resources, so FSDP and SGLang cannot allocate the dedicated tool GPU.
 
-Use the versioned expert launchers for v4.1.1, for example:
+Use a versioned expert launcher, for example:
   bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v4_1_1_3gpu.sh
 
 The dedicated-GPU topology fields are fixed and cannot be changed with Hydra
@@ -46,8 +46,9 @@ else
 fi
 
 VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2}"
-if [[ "${VISIBLE_DEVICES}" != "0,1,2" ]]; then
-  echo "The 3-GPU topology requires OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,2; got '${VISIBLE_DEVICES}'." >&2
+IFS=',' read -r -a VISIBLE_DEVICE_LIST <<<"${VISIBLE_DEVICES}"
+if [[ "${#VISIBLE_DEVICE_LIST[@]}" != "3" || "${VISIBLE_DEVICE_LIST[0]}" != "0" || "${VISIBLE_DEVICE_LIST[1]}" != "1" || ! "${VISIBLE_DEVICE_LIST[2]}" =~ ^[0-9]+$ || "${VISIBLE_DEVICE_LIST[2]}" == "0" || "${VISIBLE_DEVICE_LIST[2]}" == "1" ]]; then
+  echo "The 3-GPU topology requires OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,<dedicated-tool-GPU>; got '${VISIBLE_DEVICES}'." >&2
   exit 2
 fi
 
@@ -126,7 +127,7 @@ for arg in "$@"; do
 done
 
 PYTHON_BIN="${PYTHON_BIN:-/home/LXJ/anaconda3/envs/verl/bin/python}"
-"${PYTHON_BIN}" - "${ROOT}" "${CONFIG_PATH}" "${CONFIG_NAME}" "${HYDRA_OVERRIDES[@]}" <<'PY'
+"${PYTHON_BIN}" - "${ROOT}" "${CONFIG_PATH}" "${CONFIG_NAME}" "${VISIBLE_DEVICES}" "${HYDRA_OVERRIDES[@]}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -136,7 +137,8 @@ from hydra import compose, initialize_config_dir
 root = Path(sys.argv[1]).resolve()
 config_dir = Path(sys.argv[2]).resolve()
 config_name = sys.argv[3]
-overrides = sys.argv[4:]
+visible_devices = sys.argv[4]
+overrides = sys.argv[5:]
 with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
     config = compose(config_name=config_name, overrides=overrides)
 
@@ -163,8 +165,8 @@ if config.actor_rollout_ref.rollout.agent.num_gpus_per_worker != 0.0:
 
 runtime_env_vars = config.trainer.ray_kwargs.ray_init.runtime_env.env_vars
 configured_visible = runtime_env_vars.get("CUDA_VISIBLE_DEVICES")
-if configured_visible != "0,1,2":
-    errors.append(f"runtime CUDA_VISIBLE_DEVICES={configured_visible!r}, expected '0,1,2'")
+if configured_visible != visible_devices:
+    errors.append(f"runtime CUDA_VISIBLE_DEVICES={configured_visible!r}, expected {visible_devices!r}")
 if str(runtime_env_vars.get("RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES")) != "1":
     errors.append("runtime RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES must be '1'")
 
@@ -192,7 +194,7 @@ if errors:
     raise SystemExit("Invalid dedicated-tool-GPU topology:\n- " + "\n- ".join(errors))
 print(
     "Validated 3-GPU topology: physical GPU0/1=train+TP2, "
-    "physical GPU2=logical cuda:2 persistent restoration+IQA"
+    f"physical GPU{visible_devices.split(',')[2]}=logical cuda:2 persistent restoration+IQA"
 )
 PY
 

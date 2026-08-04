@@ -1,0 +1,24 @@
+images_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/JarvisIR/Images
+reference_scores_csv: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_0802_vs_0803_100/iqa_scores.csv
+output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/JarvisIR
+
+model_name: JarvisIR
+reference_model: v4.1.1_0803
+expected_samples: 100
+sample_id_pattern: '.*__(fog-[0-9]{6})__.*'
+device: cuda:0
+seed: 42
+progress_interval: 5
+
+metrics:
+  - musiq
+  - maniqa
+  - clipiqa
+  - liqe
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

@@ -1,5 +1,5 @@
-# 三物理 GPU 拓扑：GPU0/1 用于 Actor、参考策略和 TP2 SGLang，GPU2 专用于图像修复与 IQA。
-# 启动器设置 CUDA_VISIBLE_DEVICES=0,1,2，因此进程内 cuda:2 对应物理 GPU2。
+# 三物理 GPU 拓扑：GPU0/1 用于 Actor、参考策略和 TP2 SGLang，第三张可见卡专用于图像修复与 IQA。
+# 默认 CUDA_VISIBLE_DEVICES=0,1,2；版本配置可将第三张卡改为 GPU3，进程内仍固定为逻辑 cuda:2。
 
 defaults:
   - restoration_common_config_2gpu
@@ -8,7 +8,7 @@ defaults:
 actor_rollout_ref:
   rollout:
     agent:
-      # AgentLoop 不向 Ray 申请 GPU；它通过工具配置直接使用逻辑 cuda:2（物理 GPU2）。
+      # AgentLoop 不向 Ray 申请 GPU；它通过工具配置直接使用第三张可见卡（逻辑 cuda:2）。
       num_gpus_per_worker: 0.0
     multi_turn:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_3gpu.yaml
@@ -18,6 +18,7 @@ trainer:
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog_merged_sft_0716/3gpu
   # 只向 Ray 注册两个训练 GPU。第三个可见 CUDA 设备保留给零 GPU 资源的工具进程。
   n_gpus_per_node: 2
+  total_training_steps: null # 不固定总步骤数，由数据量和 total_epochs 推导
   ray_kwargs:
     ray_init:
       num_gpus: 2

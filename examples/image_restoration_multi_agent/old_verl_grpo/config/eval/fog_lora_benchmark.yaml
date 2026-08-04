@@ -1,0 +1,69 @@
+command: run
+resume: true
+
+python: /home/LXJ/anaconda3/envs/verl/bin/python
+base_model: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+dataset: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/data/fog_val.parquet
+expected_dataset_samples: 200
+max_samples: 100
+dataset_selection:
+  # With val_max_samples=100, VERL selects np.arange(100) only when shuffle is false.
+  shuffle: false
+  validation_shuffle: false
+
+models:
+  - name: v2
+    adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v2
+  - name: v4.1.1_0803
+    adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.1/0803
+
+source_config:
+  dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config/fog/v4.1.1
+  name: fog_config_3gpu
+tool_config: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_3gpu.yaml
+
+output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_vs_v2
+work_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/eval/state/
+
+sampling:
+  temperature: 0.7
+  top_p: 1.0
+  top_k: -1
+  do_sample: true
+  n: 1
+
+iqa_metrics:
+  - musiq
+  - maniqa
+  - clipiqa
+  - liqe
+
+formal_topology:
+  visible_devices: "0,1,2"
+  trainer_gpu_count: 2
+  tensor_parallel_size: 2
+  tool_device: cuda:2
+  label: gpu0_1_sampling_gpu2_tools
+  sampling_gpus: [0, 1]
+  scoring_gpu: 2
+
+smoke:
+  model: v4.1.1_0803
+  max_samples: 1
+  topology:
+    visible_devices: "3"
+    trainer_gpu_count: 1
+    tensor_parallel_size: 1
+    tool_device: cuda:0
+    label: gpu3_development_smoke
+
+# Internal fields used only by the isolated IQA subprocess.
+score_manifest: null
+score_progress: null
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

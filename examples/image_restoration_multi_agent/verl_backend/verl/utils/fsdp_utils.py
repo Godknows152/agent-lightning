@@ -152,6 +152,10 @@ def offload_fsdp_model_to_cpu(model: FSDP, empty_cache: bool = True):
     # lazy init FSDP model
     _lazy_init(model, model)
     assert model._is_root, "Only support root model offloading to CPU"
+    # Large non-blocking D2H copies can fail with cudaErrorInvalidValue on some
+    # PyTorch/CUDA combinations. Keep the upstream default, but allow inference
+    # jobs to request the more conservative synchronous transfer path.
+    non_blocking = os.environ.get("VERL_FSDP_SYNC_CPU_OFFLOAD", "0") != "1"
     for handle in model._all_handles:
         if handle._offload_params:
             continue
@@ -161,7 +165,7 @@ def offload_fsdp_model_to_cpu(model: FSDP, empty_cache: bool = True):
             and id(flat_param.data) != id(flat_param._local_shard)
             and flat_param.data.size() == flat_param._local_shard.size()
         )
-        handle.flat_param_to(torch.device("cpu"), non_blocking=True)
+        handle.flat_param_to(torch.device("cpu"), non_blocking=non_blocking)
         # the following still keeps id(._local_shard) != id(.data)
         flat_param._local_shard = flat_param.data
         assert id(flat_param._local_shard) != id(flat_param.data)

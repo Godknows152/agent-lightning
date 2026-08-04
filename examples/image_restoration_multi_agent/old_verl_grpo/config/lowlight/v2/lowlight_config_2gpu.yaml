@@ -23,6 +23,8 @@ actor_rollout_ref:
   rollout:
     multi_turn:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_2gpu.yaml
+  actor:
+    entropy_coeff: 0.001
 
 trainer:
   project_name: LowLightRL

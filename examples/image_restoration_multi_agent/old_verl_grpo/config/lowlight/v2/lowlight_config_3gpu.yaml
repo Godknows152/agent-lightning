@@ -1,4 +1,4 @@
-# Lowlight v4.1.1: GPU0/1 train and sample; physical GPU2 serves persistent restoration/IQA.
+# Old-verl GRPO config for lowlight expert on GPU0/1 with persistent tools on physical GPU2 (v2).
 
 hydra:
   searchpath:
@@ -24,18 +24,17 @@ actor_rollout_ref:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_3gpu.yaml
   actor:
     entropy_coeff: 0.001
-    decision_point_entropy_coeff: 0.0
-    decision_point_first_token_entropy_coeff: 0.002
 
 trainer:
   project_name: LowLightRL
-  experiment_name: "lowlight_v4.1.1"
+  experiment_name: "lowlight_v2"
   resume_mode: auto
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/lowlight/v4.1.1/3gpu
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/lowlight/v2/3gpu
   ray_kwargs:
     ray_init:
       runtime_env:
         env_vars:
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/lowlight/v4.1.1/3gpu/swanlab"
-          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/lowlight/v4.1.1/3gpu"
+          CUDA_VISIBLE_DEVICES: "0,1,2"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/lowlight/v2/3gpu/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/lowlight/v2/3gpu"
