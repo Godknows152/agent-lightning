@@ -94,7 +94,7 @@ def test_repeat_penalty_discourages_low_gain_repeats_on_cpu():
 
 
 @pytest.mark.parametrize("reward_mode", ["step_mixed_v1", "final_iqa_v2", "marginal_efficiency_v1"])
-def test_repeat_penalty_does_not_discourage_high_gain_same_type_actions_on_cpu(reward_mode):
+def test_repeat_penalty_does_not_discourage_high_gain_different_actions_on_cpu(reward_mode):
     tool = _build_tool(
         reward_mode=reward_mode,
         repeat_action_penalty=0.75,
@@ -113,10 +113,10 @@ def test_repeat_penalty_does_not_discourage_high_gain_same_type_actions_on_cpu(r
 
     assert reward["marginal"] > tool.repeat_low_gain_threshold
     assert reward["repeat_penalty"] == pytest.approx(0.0)
-    assert reward["same_type_action_count"] == pytest.approx(2.0)
+    assert reward["same_type_action_count"] == pytest.approx(1.0)
 
 
-def test_repeat_penalty_groups_restoration_tool_types_on_cpu():
+def test_repeat_penalty_only_applies_to_the_exact_same_action_on_cpu():
     tool = _build_tool(
         alpha=0.9,
         reward_scale=5.0,
@@ -130,34 +130,29 @@ def test_repeat_penalty_groups_restoration_tool_types_on_cpu():
         "weights": [0.2, 0.2, 0.2, 0.2, 0.2],
     }
 
-    dehaze_reward = tool._calculate_reward(
+    different_dehaze_tool_reward = tool._calculate_reward(
         **reward_kwargs,
         action="kanet",
         actions_history=["ridcp", "real_esrgan", "focalnet_dehaze"],
     )
-    desnow_reward = tool._calculate_reward(
+    exact_repeat_reward = tool._calculate_reward(
+        **reward_kwargs,
+        action="kanet",
+        actions_history=["ridcp", "kanet", "real_esrgan"],
+    )
+    different_desnow_tool_reward = tool._calculate_reward(
         **reward_kwargs,
         action="turbo_snow",
         actions_history=["s2former"],
     )
-    derain_reward = tool._calculate_reward(
-        **reward_kwargs,
-        action="idt",
-        actions_history=["turbo_rain", "s2former"],
-    )
-    generic_reward = tool._calculate_reward(
-        **reward_kwargs,
-        action="scunet",
-        actions_history=["real_esrgan", "nafnet_denoise"],
-    )
 
-    assert dehaze_reward["repeat_tool_type_key"] == "dehaze"
-    assert dehaze_reward["repeat_penalty"] == pytest.approx(0.4)
-    assert dehaze_reward["same_type_action_count"] == pytest.approx(3.0)
-    assert desnow_reward["repeat_tool_type_key"] == "desnow"
-    assert desnow_reward["repeat_penalty"] == pytest.approx(0.2)
-    assert derain_reward["repeat_penalty"] == pytest.approx(0.0)
-    assert generic_reward["repeat_penalty"] == pytest.approx(0.0)
+    assert different_dehaze_tool_reward["repeat_tool_type_key"] == "kanet"
+    assert different_dehaze_tool_reward["repeat_penalty"] == pytest.approx(0.0)
+    assert different_dehaze_tool_reward["same_type_action_count"] == pytest.approx(1.0)
+    assert exact_repeat_reward["repeat_tool_type_key"] == "kanet"
+    assert exact_repeat_reward["repeat_penalty"] == pytest.approx(0.2)
+    assert exact_repeat_reward["same_type_action_count"] == pytest.approx(2.0)
+    assert different_desnow_tool_reward["repeat_penalty"] == pytest.approx(0.0)
 
 
 def test_final_iqa_v2_rewards_only_new_best_iqa_on_cpu():
@@ -433,7 +428,8 @@ def test_feedback_calls_out_repeated_low_gain_pattern_on_cpu():
         repeat_tool_type_key="dehaze",
     )
 
-    assert "Trajectory uses of dehaze tools: 4" in feedback
+    assert "Trajectory uses of 'I_ridcp': 4" in feedback
+    assert "same tool without clear gains" in feedback
     assert "Recent gains are small" in feedback
 
 

@@ -3,7 +3,7 @@
 # The reward for each successful restoration call is:
 #   4.0 * (weighted IQA after - weighted IQA before)
 #   - 0.12 tool-call cost
-#   - applicable low-gain same-type repeat penalty
+#   - applicable low-gain exact-tool repeat penalty
 #
 # Stop is reward-neutral in this reward mode. Its prompt availability is
 # configured independently below.
@@ -52,7 +52,7 @@ tools:
       affinity_bonus_scale: 0.0
       repeat_action_penalty: 0.75
       repeat_low_gain_penalty: 2.0
-      # Penalize same-type repeats only when raw normalized IQA marginal gain is <= 0.03.
+      # Penalize exact-tool repeats only when raw normalized IQA marginal gain is <= 0.03.
       repeat_low_gain_threshold: 0.03
     tool_schema:
       type: "function"

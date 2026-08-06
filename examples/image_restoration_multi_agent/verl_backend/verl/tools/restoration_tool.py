@@ -159,17 +159,6 @@ DEGRADATION_ACTION_AFFINITY: dict[str, dict[str, float]] = {
     "snow": {"turbo_snow": 1.0, "snowmaster": 1.0},
 }
 
-# Action groups that share the repeat penalty within a trajectory. Derain and
-# generic restoration tools intentionally fall back to their individual actions.
-TOOL_REPEAT_TYPE_GROUPS: dict[str, tuple[str, ...]] = {
-    "dehaze": ("ridcp", "kanet", "focalnet_dehaze", "mb_taylorformer_dehaze"),
-    "desnow": ("focalnet_desnow", "s2former", "turbo_snow"),
-    "low_light": ("retinexformer_fivek", "hvicidnet", "lightdiff"),
-}
-TOOL_REPEAT_TYPE_BY_ACTION: dict[str, str] = {
-    action: group_name for group_name, actions in TOOL_REPEAT_TYPE_GROUPS.items() for action in actions
-}
-
 # Legacy IQA metric weights per degradation type (QAlign, MANIQA, MUSIQ, CLIPIQA, NIQE).
 # Prefer loading a data-driven map from local training data via ``iqa_weight_map_path``.
 SCORE_WEIGHT_MAP: dict[str, list[float]] = {
@@ -1487,18 +1476,19 @@ class RestorationTool(BaseTool):
         return result, curr_scores
 
     def _repeat_type_key(self, action: str) -> str:
-        """Return the repeat-penalty grouping key for an action."""
-        return TOOL_REPEAT_TYPE_BY_ACTION.get(action, action)
+        """Return the exact action key used for repeat penalties.
+
+        Different restoration actions may target the same degradation class,
+        but they remain distinct tools and should not penalize one another.
+        """
+        return action
 
     def _count_trajectory_type_repeats(self, actions_history: list[str], action: str) -> int:
-        """Count prior actions in the trajectory that share the current action's repeat type."""
-        repeat_type_key = self._repeat_type_key(action)
-        return sum(
-            1 for previous_action in actions_history if self._repeat_type_key(previous_action) == repeat_type_key
-        )
+        """Count prior uses of the exact same restoration action."""
+        return sum(1 for previous_action in actions_history if previous_action == action)
 
     def _calculate_repeat_penalty(self, marginal: float, repeat_count: int) -> float:
-        """Penalize same-type repeats only when their marginal IQA gain is low."""
+        """Penalize exact-tool repeats only when their marginal IQA gain is low."""
         if repeat_count <= 0 or marginal > self.repeat_low_gain_threshold:
             return 0.0
         return (self.repeat_action_penalty + self.repeat_low_gain_penalty) * repeat_count
@@ -1578,6 +1568,8 @@ class RestorationTool(BaseTool):
             "repeat_penalty": float(repeat_penalty),
             "affinity_bonus": float(affinity_bonus),
             "consecutive_action_count": float(repeat_count + 1),
+            # Kept for trajectory-schema compatibility; this now counts the
+            # exact action rather than a broader restoration-tool category.
             "same_type_action_count": float(repeat_count + 1),
             "repeat_tool_type_key": repeat_tool_type_key,
             "best_identity_delta": float(max(best_identity_delta, identity)),
@@ -1632,6 +1624,8 @@ class RestorationTool(BaseTool):
             "repeat_penalty": float(repeat_penalty),
             "affinity_bonus": 0.0,
             "consecutive_action_count": float(repeat_count + 1),
+            # Kept for trajectory-schema compatibility; this now counts the
+            # exact action rather than a broader restoration-tool category.
             "same_type_action_count": float(repeat_count + 1),
             "repeat_tool_type_key": repeat_tool_type_key,
             "best_identity_delta": float(max(best_identity_delta, identity)),
@@ -1689,6 +1683,8 @@ class RestorationTool(BaseTool):
             "repeat_penalty": float(repeat_penalty),
             "affinity_bonus": 0.0,
             "consecutive_action_count": float(repeat_count + 1),
+            # Kept for trajectory-schema compatibility; this now counts the
+            # exact action rather than a broader restoration-tool category.
             "same_type_action_count": float(repeat_count + 1),
             "repeat_tool_type_key": repeat_tool_type_key,
             "best_identity_delta": float(max(best_identity_delta, identity)),
@@ -1834,14 +1830,11 @@ class RestorationTool(BaseTool):
         repeat_tool_type_key = repeat_tool_type_key or action
 
         def _repeat_feedback_line(final_iqa_mode: bool) -> str:
-            if repeat_tool_type_key == action:
-                prefix = f"Trajectory uses of '{model_action}': {same_type_action_count}."
-            else:
-                prefix = f"Trajectory uses of {repeat_tool_type_key} tools: {same_type_action_count}."
+            prefix = f"Trajectory uses of '{model_action}': {same_type_action_count}."
             suffix = (
-                " Reusing the same tool type without a new best IQA is discouraged."
+                " Reusing the same tool without a new best IQA is discouraged."
                 if final_iqa_mode
-                else " Reusing the same tool type without clear gains is discouraged."
+                else " Reusing the same tool without clear gains is discouraged."
             )
             return prefix + suffix
 
@@ -1893,7 +1886,7 @@ class RestorationTool(BaseTool):
             elif step >= self.stop_min_step:
                 lines.append(
                     "This action did not improve the trajectory-best IQA. Prefer stopping "
-                    "or switching to a different targeted operation instead of repeating it."
+                    "or switching to a different targeted operation instead of repeating the same tool."
                 )
             else:
                 lines.append(
@@ -1915,7 +1908,7 @@ class RestorationTool(BaseTool):
         # choose appropriate tools on its own — revealing the degradation type or
         # recommending specific actions would shortcut that learning process.
         if step >= self.stop_min_step and marginal <= self.repeat_low_gain_threshold:
-            lines.append("Recent gains are small. Consider stopping now or switch to a different targeted operation.")
+            lines.append("Recent gains are small. Consider stopping now or switching to a different targeted operation.")
         elif step >= self.stop_min_step:
             lines.append(
                 "You have completed several restoration steps. "
