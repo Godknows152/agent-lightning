@@ -28,7 +28,7 @@ actor_rollout_ref:
     entropy_coeff: 0.001
     # v4.1.1: Average normalized first-token entropy within each trajectory.
     decision_point_entropy_coeff: 0.0
-    decision_point_first_token_entropy_coeff: 0.02
+    decision_point_first_token_entropy_coeff: 0.006
 
 trainer:
   project_name: FogRL

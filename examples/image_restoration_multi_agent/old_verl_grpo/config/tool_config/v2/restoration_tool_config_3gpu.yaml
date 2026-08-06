@@ -1,15 +1,15 @@
-# Old-verl RestorationTool config for a dedicated third visible GPU.
-# CUDA_VISIBLE_DEVICES=0,1,<tool GPU> maps that physical tool GPU to logical cuda:2.
-# Models stay resident across GRPO sampling and Actor-update phases because
-# Actor, reference policy, and SGLang only use logical cuda:0/1.
+# Old-verl RestorationTool config for two dedicated visible GPUs.
+# CUDA_VISIBLE_DEVICES=0,1,2,3 maps physical GPU2/3 to logical cuda:2/3.
+# Each runtime replica keeps one full restoration-model set and one IQA set
+# resident on its own dedicated device.
 
 tools:
   - class_name: "verl.tools.restoration_tool.RestorationTool"
     config:
       type: native
       device: cuda:2
-      worker_devices: [cuda:2]
-      model_devices: [cuda:2]
+      worker_devices: [cuda:2, cuda:3]
+      model_devices: [cuda:2, cuda:3]
       output_dir: /home/LXJ/tmp/agent_lightning_old_verl_restoration_3gpu
       enable_tool_result_cache: true
       tool_result_cache_dir: /home/LXJ/tmp/agent_lightning_old_verl_cache/tool_results
@@ -32,7 +32,7 @@ tools:
       prompt_min_stop_tool_calls: 1
 
       use_iqa: true
-      iqa_devices: [cuda:2]
+      iqa_devices: [cuda:2, cuda:3]
       iqa_device: cuda:2
       normalize_iqa_scores: true
       iqa_metric_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/config/iqa_reward_v1.json

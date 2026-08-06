@@ -8,11 +8,12 @@ Usage:
 
 Physical GPU topology:
   GPU0/1: Actor, frozen reference policy, TP2 SGLang rollout
-  GPU2 or GPU3: persistent image-restoration models and IQA scoring only
+  GPU2: persistent image-restoration models and IQA scoring (replica 0)
+  GPU3: persistent image-restoration models and IQA scoring (replica 1)
 
-The launcher exposes physical devices as CUDA_VISIBLE_DEVICES=0,1,<tool GPU>.
-Inside the process, the third visible device is logical cuda:2. Ray registers
-only two GPU resources, so FSDP and SGLang cannot allocate the dedicated tool GPU.
+The launcher exposes physical devices as CUDA_VISIBLE_DEVICES=0,1,2,3.
+Inside the process, physical GPU2/3 are logical cuda:2/3. Ray registers only
+two GPU resources, so FSDP and SGLang cannot allocate either dedicated tool GPU.
 
 Use a versioned expert launcher, for example:
   bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v4_1_1_3gpu.sh
@@ -45,10 +46,10 @@ else
   CONFIG_EXPERT="${EXPERT}"
 fi
 
-VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2}"
+VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2,3}"
 IFS=',' read -r -a VISIBLE_DEVICE_LIST <<<"${VISIBLE_DEVICES}"
-if [[ "${#VISIBLE_DEVICE_LIST[@]}" != "3" || "${VISIBLE_DEVICE_LIST[0]}" != "0" || "${VISIBLE_DEVICE_LIST[1]}" != "1" || ! "${VISIBLE_DEVICE_LIST[2]}" =~ ^[0-9]+$ || "${VISIBLE_DEVICE_LIST[2]}" == "0" || "${VISIBLE_DEVICE_LIST[2]}" == "1" ]]; then
-  echo "The 3-GPU topology requires OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,<dedicated-tool-GPU>; got '${VISIBLE_DEVICES}'." >&2
+if [[ "${#VISIBLE_DEVICE_LIST[@]}" != "4" || "${VISIBLE_DEVICE_LIST[0]}" != "0" || "${VISIBLE_DEVICE_LIST[1]}" != "1" || "${VISIBLE_DEVICE_LIST[2]}" != "2" || "${VISIBLE_DEVICE_LIST[3]}" != "3" ]]; then
+  echo "The 3-GPU launcher requires OLD_VERL_CUDA_VISIBLE_DEVICES=0,1,2,3; got '${VISIBLE_DEVICES}'." >&2
   exit 2
 fi
 
@@ -177,9 +178,9 @@ tool_data = yaml.safe_load(tool_path.read_text(encoding="utf-8"))
 tool = tool_data["tools"][0]["config"]
 expected_tool_values = {
     "device": "cuda:2",
-    "worker_devices": ["cuda:2"],
-    "model_devices": ["cuda:2"],
-    "iqa_devices": ["cuda:2"],
+    "worker_devices": ["cuda:2", "cuda:3"],
+    "model_devices": ["cuda:2", "cuda:3"],
+    "iqa_devices": ["cuda:2", "cuda:3"],
     "iqa_device": "cuda:2",
     "preload": True,
     "auto_unload": False,
@@ -193,8 +194,8 @@ for key, expected in expected_tool_values.items():
 if errors:
     raise SystemExit("Invalid dedicated-tool-GPU topology:\n- " + "\n- ".join(errors))
 print(
-    "Validated 3-GPU topology: physical GPU0/1=train+TP2, "
-    f"physical GPU{visible_devices.split(',')[2]}=logical cuda:2 persistent restoration+IQA"
+    "Validated 3-GPU launcher topology: physical GPU0/1=train+TP2, "
+    "physical GPU2/3=logical cuda:2/3 persistent restoration+IQA replicas"
 )
 PY
 

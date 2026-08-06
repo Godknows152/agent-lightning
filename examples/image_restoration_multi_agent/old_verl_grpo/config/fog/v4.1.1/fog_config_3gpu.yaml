@@ -1,4 +1,6 @@
-# Fog v4.1.1: GPU0/1 train and sample; physical GPU2 serves persistent restoration/IQA.
+# Fog v4.1.1 3GPU launcher: GPU0/1 train and sample; physical GPU2/3 each serve
+# one persistent restoration-model set plus IQA. The launcher name is retained
+# for compatibility with existing jobs.
 
 hydra:
   searchpath:
@@ -25,13 +27,13 @@ actor_rollout_ref:
   actor:
     entropy_coeff: 0.001
     decision_point_entropy_coeff: 0.0
-    decision_point_first_token_entropy_coeff: 0.02
+    decision_point_first_token_entropy_coeff: 0.006
 
 trainer:
   project_name: FogRL
   experiment_name: "fog_v4.1.1"
-  resume_mode: auto
-  resume_from_path: null
+  resume_mode: resume_path
+  resume_from_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.1/2gpu/global_step_40
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.1/3gpu
   ray_kwargs:
     ray_init:

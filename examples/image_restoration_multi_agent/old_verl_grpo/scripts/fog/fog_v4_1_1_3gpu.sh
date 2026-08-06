@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fog v4.1.1: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
+# Fog v4.1.1 3GPU launcher: GPU0/1 train and sample; physical GPU2/3 each
+# provide one persistent restoration-model set plus IQA.
 set -euo pipefail
 
 EXPERT="fog"
