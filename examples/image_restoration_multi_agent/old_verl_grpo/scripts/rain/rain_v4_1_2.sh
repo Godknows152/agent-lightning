@@ -5,20 +5,20 @@ set -euo pipefail
 
 EXPERT="rain"
 VERSION="v4.1.2"
-CONFIG_VERSION="v4.1.1"
+CONFIG_VERSION="v4.1.2"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 OLD_VERL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}/${EXPERT}_config_4gpu.yaml"
-export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/4gpu}"
+CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}/${EXPERT}_config_2gpu.yaml"
+export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu}"
 LOG_DIR="${OLD_VERL_LOG_DIR}"
 
 mkdir -p "${LOG_DIR}"
 
 if [[ "${OLD_VERL_BACKGROUND_CHILD:-0}" != "1" && "${1:-}" != "--preflight" ]]; then
   TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-  MAIN_LOG="${LOG_DIR}/${EXPERT}_${VERSION}_4gpu_${TIMESTAMP}.log"
+  MAIN_LOG="${LOG_DIR}/${EXPERT}_${VERSION}_${TIMESTAMP}.log"
   nohup env \
     OLD_VERL_BACKGROUND_CHILD=1 \
     OLD_VERL_MAIN_LOG="${MAIN_LOG}" \
@@ -41,8 +41,8 @@ echo "PID: $$"
 echo "Config: ${CONFIG_PATH}"
 
 export OLD_VERL_RUN_IN_FOREGROUND=1
-exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_4gpu.sh" \
+exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_2gpu.sh" \
   "${EXPERT}" \
   "$@" \
   "--config-path=${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}" \
-  "--config-name=${EXPERT}_config_4gpu"
+  "--config-name=${EXPERT}_config_2gpu"

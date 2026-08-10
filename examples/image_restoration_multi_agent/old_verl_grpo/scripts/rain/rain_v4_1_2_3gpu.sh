@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Lowlight v4.1.2: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
+# Rain v4.1.2: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
 set -euo pipefail
 
-EXPERT="lowlight"
-RUNTIME_EXPERT="low_light"
+EXPERT="rain"
 VERSION="v4.1.2"
-CONFIG_VERSION="v4.1.1"
+CONFIG_VERSION="v4.1.2"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -33,6 +32,6 @@ fi
 
 export OLD_VERL_RUN_IN_FOREGROUND=1
 exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_3gpu.sh" \
-  "${RUNTIME_EXPERT}" "$@" \
+  "${EXPERT}" "$@" \
   "--config-path=${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}" \
   "--config-name=${EXPERT}_config_3gpu"

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Old-verl GRPO launcher for snow expert (v4.1.2)
+# Old-verl GRPO launcher for fog expert (v4.1.2)
 # v4.1.2: Full-trajectory normalized legal-action first-token entropy regularization
 set -euo pipefail
 
-EXPERT="snow"
+EXPERT="fog"
 VERSION="v4.1.2"
-CONFIG_VERSION="v4.1.1"
+CONFIG_VERSION="v4.1.2"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"

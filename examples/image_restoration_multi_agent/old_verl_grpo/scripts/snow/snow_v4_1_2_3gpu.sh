@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Rain v4.1.2: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
+# Snow v4.1.2: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
 set -euo pipefail
 
-EXPERT="rain"
+EXPERT="snow"
 VERSION="v4.1.2"
-CONFIG_VERSION="v4.1.1"
+CONFIG_VERSION="v4.1.2"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"

@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Old-verl GRPO launcher for lowlight expert (v4.1.2)
+# Old-verl GRPO launcher for rain expert (v4.1.2)
 # v4.1.2: Full-trajectory normalized legal-action first-token entropy regularization
 set -euo pipefail
 
-EXPERT="lowlight"
-RUNTIME_EXPERT="low_light"
+EXPERT="rain"
 VERSION="v4.1.2"
-CONFIG_VERSION="v4.1.1"
+CONFIG_VERSION="v4.1.2"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -43,7 +42,7 @@ echo "Config: ${CONFIG_PATH}"
 
 export OLD_VERL_RUN_IN_FOREGROUND=1
 exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_4gpu.sh" \
-  "${RUNTIME_EXPERT}" \
+  "${EXPERT}" \
   "$@" \
   "--config-path=${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}" \
   "--config-name=${EXPERT}_config_4gpu"

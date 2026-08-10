@@ -7,7 +7,7 @@ import yaml
 
 OLD_VERL_ROOT = Path(__file__).resolve().parents[1] / "old_verl_grpo"
 EXPERTS = ("fog", "rain", "snow", "lowlight")
-VERSIONS = ("v1", "v2", "v3", "v4", "v4.1.1")
+VERSIONS = ("v1", "v2", "v3", "v4", "v4.1.2")
 PROJECT_NAMES = {
     "fog": "FogRL",
     "rain": "RainRL",
@@ -95,6 +95,7 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
     for expert in EXPERTS:
         runtime_expert = "low_light" if expert == "lowlight" else expert
         for version in VERSIONS:
+            output_version = version
             config_path = (
                 OLD_VERL_ROOT
                 / "config"
@@ -103,11 +104,10 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
                 / f"{expert}_config_4gpu.yaml"
             )
             config = _read_yaml(config_path)
-            output_version = "v4.1.2" if version == "v4.1.1" else version
             defaults = config["defaults"]
             assert "restoration_common_config_4gpu" in defaults, config_path
             data_root = "data"
-            if not (expert == "fog" and version == "v4.1.1"):
+            if not (expert == "fog" and version == "v4.1.2"):
                 data_root = "data/4gpu"
             assert config["data"]["train_files"] == [
                 f"examples/image_restoration_multi_agent/old_verl_grpo/{data_root}/{runtime_expert}_train.parquet"
@@ -133,7 +133,7 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
                 config_path
             )
 
-            script_version = "v4_1_1" if version == "v4.1.1" else version
+            script_version = "v4_1_2" if version == "v4.1.2" else version
             launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{script_version}_4gpu.sh"
             content = launcher.read_text(encoding="utf-8")
             assert "run_expert_old_verl_grpo_4gpu.sh" in content, launcher

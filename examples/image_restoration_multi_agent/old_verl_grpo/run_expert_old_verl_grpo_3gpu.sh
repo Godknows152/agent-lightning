@@ -16,7 +16,7 @@ Inside the process, physical GPU2/3 are logical cuda:2/3. Ray registers only
 two GPU resources, so FSDP and SGLang cannot allocate either dedicated tool GPU.
 
 Use a versioned expert launcher, for example:
-  bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v4_1_1_3gpu.sh
+  bash examples/image_restoration_multi_agent/old_verl_grpo/scripts/fog/fog_v4_1_2_3gpu.sh
 
 The dedicated-GPU topology fields are fixed and cannot be changed with Hydra
 overrides. Other training hyperparameters can still be overridden normally.
@@ -45,7 +45,7 @@ if [[ "${EXPERT}" == "low_light" ]]; then
 else
   CONFIG_EXPERT="${EXPERT}"
 fi
-CONFIG_VERSION="v4.1.1"
+CONFIG_VERSION="v4.1.2"
 OUTPUT_VERSION="v4.1.2"
 
 VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2,3}"
