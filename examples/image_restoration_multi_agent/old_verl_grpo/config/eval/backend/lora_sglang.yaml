@@ -1,7 +1,7 @@
 name: lora_sglang
 python: /home/LXJ/anaconda3/envs/verl/bin/python
 base_model: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
-adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.1/0.006_186步
+adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.2/0.006_186步
 
 source_config:
   dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config/fog/v4.1.1

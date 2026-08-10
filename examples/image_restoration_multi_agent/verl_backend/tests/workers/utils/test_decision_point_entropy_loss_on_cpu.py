@@ -202,6 +202,7 @@ def _run_first_token_ppo_loss(
     global_trajectory_count,
     dp_size=1,
     coeff=0.002,
+    scheduled_coeff=None,
 ):
     batch_size = len(found)
     response_mask = torch.ones((batch_size, 3), dtype=torch.float32)
@@ -222,6 +223,8 @@ def _run_first_token_ppo_loss(
         dp_size=dp_size,
         global_batch_size=dp_size,
     )
+    if scheduled_coeff is not None:
+        tu.assign_non_tensor(data, decision_point_first_token_entropy_coeff=scheduled_coeff)
 
     def fake_policy_loss(**kwargs):
         return kwargs["log_prob"].sum() * 0.0, {}
@@ -258,6 +261,22 @@ def test_first_token_entropy_averages_decisions_within_each_trajectory(monkeypat
     first_token_metric_keys = {key for key in metrics if "decision_point_first_token" in key}
     assert first_token_metric_keys == {"actor/decision_point_first_token_action_entropy_normalized"}
     assert policy_loss.item() == pytest.approx(-0.001)
+
+
+def test_first_token_entropy_uses_batch_schedule_coefficient(monkeypatch):
+    policy_loss, _ = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.5]],
+        raw_entropies=[[1.0]],
+        effective_counts=[[4.0]],
+        legal_masses=[[0.9]],
+        found=[[True]],
+        global_trajectory_count=1,
+        coeff=0.002,
+        scheduled_coeff=0.0005,
+    )
+
+    assert policy_loss.item() == pytest.approx(-0.00025)
 
 
 def test_first_token_entropy_distributed_mean_uses_valid_trajectory_count(monkeypatch):

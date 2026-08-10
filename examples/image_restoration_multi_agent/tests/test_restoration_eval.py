@@ -44,8 +44,8 @@ def test_lora_sglang_hydra_config_composes():
     assert cfg.backend.name == "lora_sglang"
     assert cfg.data.max_samples == 100
     assert cfg.data.offset == 0
-    assert cfg.run.name == "v2"
-    assert cfg.backend.adapter_path.endswith("outputs/fog/LoRA/v2")
+    assert cfg.run.name == "v4.1.2_0.006_186步"
+    assert cfg.backend.adapter_path.endswith("outputs/fog/LoRA/v4.1.2/0.006_186步")
 
 
 def test_jarvisir_hydra_config_composes():
@@ -247,11 +247,11 @@ def test_tool_calls_csv_has_correct_columns(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_run_name_rejects_path_traversal():
-    with pytest.raises(ValueError, match="alphanumeric"):
+    with pytest.raises(ValueError, match="invalid characters"):
         runner.validate_run_name("../../etc/passwd")
 
 def test_run_name_rejects_slashes():
-    with pytest.raises(ValueError, match="alphanumeric"):
+    with pytest.raises(ValueError, match="invalid characters"):
         runner.validate_run_name("v4.1.1/0803")
 
 

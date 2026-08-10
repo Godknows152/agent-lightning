@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Snow v4.1.1: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
+# Snow v4.1.2: GPU0/1 train and sample; physical GPU2 provides persistent tools and IQA.
 set -euo pipefail
 
 EXPERT="snow"
-VERSION="v4.1.1"
+VERSION="v4.1.2"
+CONFIG_VERSION="v4.1.1"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
 
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 OLD_VERL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${VERSION}/${EXPERT}_config_3gpu.yaml"
+CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}/${EXPERT}_config_3gpu.yaml"
 export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/3gpu}"
 LOG_DIR="${OLD_VERL_LOG_DIR}"
 
@@ -32,5 +33,5 @@ fi
 export OLD_VERL_RUN_IN_FOREGROUND=1
 exec "${OLD_VERL_DIR}/run_expert_old_verl_grpo_3gpu.sh" \
   "${EXPERT}" "$@" \
-  "--config-path=${OLD_VERL_DIR}/config/${EXPERT}/${VERSION}" \
+  "--config-path=${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}" \
   "--config-name=${EXPERT}_config_3gpu"

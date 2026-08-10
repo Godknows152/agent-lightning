@@ -125,6 +125,13 @@ class ActorConfig(BaseConfig):
         decision_point_entropy_coeff (float): Coefficient for normalized legal-action sequence entropy.
         decision_point_first_token_entropy_coeff (float): Coefficient for normalized legal-action first-token
             entropy averaged within each trajectory.
+        decision_point_first_token_entropy_schedule (str): Schedule for the first-token entropy coefficient.
+            ``constant`` preserves fixed-coefficient behavior; ``wsd_cosine`` provides a warmup-stable-decay schedule.
+        decision_point_first_token_entropy_coeff_end (Optional[float]): Final coefficient for ``wsd_cosine``.
+            If None, the schedule ends at its starting coefficient.
+        decision_point_first_token_entropy_ramp_ratio (float): Fraction of training used to ramp up the coefficient.
+        decision_point_first_token_entropy_stable_end_ratio (float): Progress at which the stable phase ends.
+        decision_point_first_token_entropy_decay_end_ratio (float): Progress at which cosine decay ends.
         decision_point_entropy_candidate_micro_batch_size (int): Number of teacher-forced action branches
             evaluated together during decision-point entropy computation.
         tau_pos (float): Positive tau for SAPO smoothing (>= 1.0 keeps rewards stable).
@@ -172,6 +179,11 @@ class ActorConfig(BaseConfig):
     entropy_coeff: float = 0
     decision_point_entropy_coeff: float = 0.0
     decision_point_first_token_entropy_coeff: float = 0.0
+    decision_point_first_token_entropy_schedule: str = "constant"
+    decision_point_first_token_entropy_coeff_end: Optional[float] = None
+    decision_point_first_token_entropy_ramp_ratio: float = 0.05
+    decision_point_first_token_entropy_stable_end_ratio: float = 0.20
+    decision_point_first_token_entropy_decay_end_ratio: float = 0.85
     decision_point_entropy_candidate_micro_batch_size: int = 2
     tau_pos: float = 1.0
     tau_neg: float = 1.05
@@ -231,6 +243,32 @@ class ActorConfig(BaseConfig):
             raise ValueError("decision_point_entropy_coeff must be non-negative")
         if self.decision_point_first_token_entropy_coeff < 0:
             raise ValueError("decision_point_first_token_entropy_coeff must be non-negative")
+        if self.decision_point_first_token_entropy_schedule not in {"constant", "wsd_cosine"}:
+            raise ValueError(
+                "decision_point_first_token_entropy_schedule must be 'constant' or 'wsd_cosine'"
+            )
+        if self.decision_point_first_token_entropy_coeff_end is not None:
+            if self.decision_point_first_token_entropy_coeff_end < 0:
+                raise ValueError("decision_point_first_token_entropy_coeff_end must be non-negative")
+            if (
+                self.decision_point_first_token_entropy_schedule == "wsd_cosine"
+                and self.decision_point_first_token_entropy_coeff_end
+                > self.decision_point_first_token_entropy_coeff
+            ):
+                raise ValueError(
+                    "decision_point_first_token_entropy_coeff_end must not exceed the starting coefficient"
+                )
+        if not (
+            0.0
+            <= self.decision_point_first_token_entropy_ramp_ratio
+            <= self.decision_point_first_token_entropy_stable_end_ratio
+            <= self.decision_point_first_token_entropy_decay_end_ratio
+            <= 1.0
+        ):
+            raise ValueError(
+                "first-token entropy schedule ratios must satisfy "
+                "0 <= ramp <= stable_end <= decay_end <= 1"
+            )
         if self.decision_point_entropy_coeff > 0 and self.decision_point_first_token_entropy_coeff > 0:
             raise ValueError(
                 "complete-sequence and first-token decision entropy regularizers cannot be enabled together"

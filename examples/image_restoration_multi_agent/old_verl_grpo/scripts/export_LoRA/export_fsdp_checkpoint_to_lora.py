@@ -5,8 +5,8 @@ Typical usage from the repository root:
 
     /home/LXJ/anaconda3/envs/verl/bin/python \
       examples/image_restoration_multi_agent/old_verl_grpo/scripts/export_LoRA/export_fsdp_checkpoint_to_lora.py \
-      examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.1/4gpu/0802/global_step_130 \
-      examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.1/0802_step130
+      examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.2/4gpu/0802/global_step_130 \
+      examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.2/0802_step130
 
 The checkpoint argument may point either to ``global_step_N`` or directly to
 its ``actor`` directory. Only LoRA tensors are materialized, so the script does

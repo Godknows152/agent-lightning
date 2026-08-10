@@ -42,6 +42,7 @@ from verl.trainer.config import AlgoConfig
 from verl.trainer.distillation.losses import is_distillation_enabled
 from verl.trainer.ppo import core_algos
 from verl.trainer.ppo.core_algos import AdvantageEstimator, agg_loss
+from verl.trainer.ppo.first_token_entropy_schedule import get_first_token_entropy_coeff
 from verl.trainer.ppo.metric_utils import (
     apply_restoration_action_rarity_reward,
     compute_data_metrics,
@@ -1725,6 +1726,25 @@ class RayPPOTrainer:
             "decision_first_token_found": found,
         }, metrics
 
+    def _get_first_token_entropy_coeff(self) -> float:
+        """Resolve the first-token entropy coefficient for the current global step."""
+
+        actor_config = self.config.actor_rollout_ref.actor
+        return get_first_token_entropy_coeff(
+            step=int(self.global_steps),
+            total_steps=int(self.total_training_steps),
+            start=float(actor_config.decision_point_first_token_entropy_coeff),
+            end=getattr(actor_config, "decision_point_first_token_entropy_coeff_end", None),
+            schedule=getattr(actor_config, "decision_point_first_token_entropy_schedule", "constant"),
+            ramp_ratio=float(getattr(actor_config, "decision_point_first_token_entropy_ramp_ratio", 0.05)),
+            stable_end_ratio=float(
+                getattr(actor_config, "decision_point_first_token_entropy_stable_end_ratio", 0.20)
+            ),
+            decay_end_ratio=float(
+                getattr(actor_config, "decision_point_first_token_entropy_decay_end_ratio", 0.85)
+            ),
+        )
+
     def _update_actor(self, batch: DataProto) -> DataProto:
         rollout_config = self.config.actor_rollout_ref.rollout
         batch.meta_info["multi_turn"] = rollout_config.multi_turn.enable
@@ -1747,9 +1767,14 @@ class RayPPOTrainer:
         ppo_epochs = self.config.actor_rollout_ref.actor.ppo_epochs
         seed = self.config.actor_rollout_ref.actor.data_loader_seed
         shuffle = self.config.actor_rollout_ref.actor.shuffle
+        scheduled_first_token_entropy_coeff = batch.meta_info.get(
+            "decision_point_first_token_entropy_coeff",
+            self.config.actor_rollout_ref.actor.decision_point_first_token_entropy_coeff,
+        )
         tu.assign_non_tensor(
             batch_td,
             calculate_entropy=calculate_entropy,
+            decision_point_first_token_entropy_coeff=float(scheduled_first_token_entropy_coeff),
             decision_point_entropy_candidate_micro_batch_size=(
                 self.config.actor_rollout_ref.actor.decision_point_entropy_candidate_micro_batch_size
             ),
@@ -2099,6 +2124,10 @@ class RayPPOTrainer:
                         # Still in critic warmup, only update weights to wake up rollout replicas.
                         self.checkpoint_manager.update_weights(self.global_steps)
                     else:
+                        first_token_entropy_coeff = self._get_first_token_entropy_coeff()
+                        batch.meta_info["decision_point_first_token_entropy_coeff"] = first_token_entropy_coeff
+                        metrics["actor/decision_point_first_token_entropy_coeff"] = first_token_entropy_coeff
+
                         # Build full legal-action branches at the first thinking decision point.
                         if self.config.actor_rollout_ref.actor.decision_point_entropy_coeff > 0.0:
                             decision_metadata, _dp_found_rate = self._compute_decision_action_metadata(batch)

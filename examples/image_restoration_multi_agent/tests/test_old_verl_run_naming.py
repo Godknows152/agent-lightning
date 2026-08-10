@@ -53,6 +53,7 @@ def test_all_versioned_launchers_isolate_training_and_tool_logs() -> None:
     expected_output_export = 'export OLD_VERL_OUTPUT_DIR="${OLD_VERL_OUTPUT_DIR:-${OLD_VERL_DIR}/outputs/${EXPERT}/${VERSION}/2gpu}"'
     for expert in ("fog", "rain", "snow", "lowlight"):
         for version in ("v1", "v2", "v3", "v4", "v4.1.1"):
+            output_version = "v4.1.2" if version == "v4.1.1" else version
             script_version = "v4_1_1" if version == "v4.1.1" else version
             launcher = OLD_VERL_ROOT / "scripts" / expert / f"{expert}_{script_version}.sh"
             content = launcher.read_text(encoding="utf-8")
@@ -72,10 +73,13 @@ def test_all_versioned_launchers_isolate_training_and_tool_logs() -> None:
                 / f"{expert}_config_2gpu.yaml"
             )
             config_content = config.read_text(encoding="utf-8")
-            expected_log_dir = f"/old_verl_grpo/log/{expert}/{version}/2gpu"
+            expected_log_dir = f"/old_verl_grpo/log/{expert}/{output_version}/2gpu"
             assert expected_log_dir in config_content, config
-            expected_output_dir = f"old_verl_grpo/outputs/{expert}/{version}/2gpu"
+            expected_output_dir = f"old_verl_grpo/outputs/{expert}/{output_version}/2gpu"
             assert expected_output_dir in config_content, config
+            if version == "v4.1.1":
+                assert 'VERSION="v4.1.2"' in content, launcher
+                assert 'CONFIG_VERSION="v4.1.1"' in content, launcher
 
 
 def test_common_wrapper_routes_both_tool_logs_to_resolved_version_directory() -> None:
@@ -98,6 +102,7 @@ def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirector
 ):
     for expert in ("fog", "rain", "snow", "lowlight"):
         for version in ("v1", "v2", "v3", "v4", "v4.1.1"):
+            output_version = "v4.1.2" if version == "v4.1.1" else version
             config = (
                 OLD_VERL_ROOT
                 / "config"
@@ -107,12 +112,12 @@ def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirector
             )
             content = config.read_text(encoding="utf-8")
             assert f"project_name: {PROJECT_NAMES[expert]}" in content, config
-            assert f'experiment_name: "{expert}_{version}"' in content, config
-            assert f"old_verl_grpo/outputs/{expert}/{version}/2gpu" in content, config
+            assert f'experiment_name: "{expert}_{output_version}"' in content, config
+            assert f"old_verl_grpo/outputs/{expert}/{output_version}/2gpu" in content, config
             assert (
-                f"old_verl_grpo/outputs/{expert}/{version}/2gpu/swanlab" in content
+                f"old_verl_grpo/outputs/{expert}/{output_version}/2gpu/swanlab" in content
             ), config
-            assert f"old_verl_grpo/log/{expert}/{version}/2gpu" in content, config
+            assert f"old_verl_grpo/log/{expert}/{output_version}/2gpu" in content, config
             assert "/2gpu/2gpu/" not in content, config
 
 

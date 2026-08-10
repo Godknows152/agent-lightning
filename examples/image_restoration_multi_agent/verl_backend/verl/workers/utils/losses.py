@@ -13,6 +13,8 @@
 # limitations under the License.
 
 
+import math
+
 import torch
 from tensordict import TensorDict
 
@@ -67,6 +69,15 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     decision_first_token_normalized_entropy = model_output.get("decision_first_token_action_entropy_normalized", None)
     decision_first_token_effective_action_count = model_output.get("decision_first_token_effective_action_count", None)
     decision_first_token_legal_mass = model_output.get("decision_first_token_legal_mass", None)
+    first_token_entropy_coeff = float(
+        tu.get_non_tensor_data(
+            data=data,
+            key="decision_point_first_token_entropy_coeff",
+            default=getattr(config, "decision_point_first_token_entropy_coeff", 0.0),
+        )
+    )
+    if not math.isfinite(first_token_entropy_coeff) or first_token_entropy_coeff < 0.0:
+        raise ValueError("decision_point_first_token_entropy_coeff must be finite and non-negative")
 
     # global batch info for loss aggregation
     config.global_batch_info["dp_size"] = data["dp_size"]
@@ -215,7 +226,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             first_token_normalized_entropy = global_trajectory_mean(decision_first_token_normalized_entropy)
             first_token_effective_action_count = global_trajectory_mean(decision_first_token_effective_action_count)
             first_token_legal_mass = global_trajectory_mean(decision_first_token_legal_mass)
-            policy_loss -= config.decision_point_first_token_entropy_coeff * first_token_normalized_entropy
+            policy_loss -= first_token_entropy_coeff * first_token_normalized_entropy
         else:
             zero = log_prob.sum() * 0.0
             first_token_raw_entropy = zero

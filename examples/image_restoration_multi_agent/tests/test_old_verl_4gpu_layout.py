@@ -103,6 +103,7 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
                 / f"{expert}_config_4gpu.yaml"
             )
             config = _read_yaml(config_path)
+            output_version = "v4.1.2" if version == "v4.1.1" else version
             defaults = config["defaults"]
             assert "restoration_common_config_4gpu" in defaults, config_path
             data_root = "data"
@@ -120,15 +121,15 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
             assert tool_config.endswith("_4gpu.yaml"), config_path
             trainer = config["trainer"]
             assert trainer["project_name"] == PROJECT_NAMES[expert], config_path
-            assert trainer["experiment_name"] == f"{expert}_{version}", config_path
+            assert trainer["experiment_name"] == f"{expert}_{output_version}", config_path
             assert trainer["default_local_dir"].endswith(
-                f"outputs/{expert}/{version}/4gpu"
+                f"outputs/{expert}/{output_version}/4gpu"
             ), config_path
             env_vars = trainer["ray_kwargs"]["ray_init"]["runtime_env"]["env_vars"]
             assert env_vars["SWANLAB_LOG_DIR"].endswith(
-                f"outputs/{expert}/{version}/4gpu/swanlab"
+                f"outputs/{expert}/{output_version}/4gpu/swanlab"
             ), config_path
-            assert env_vars["VERL_LOG_DIR"].endswith(f"log/{expert}/{version}/4gpu"), (
+            assert env_vars["VERL_LOG_DIR"].endswith(f"log/{expert}/{output_version}/4gpu"), (
                 config_path
             )
 
