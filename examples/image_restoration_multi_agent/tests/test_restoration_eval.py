@@ -44,8 +44,8 @@ def test_lora_sglang_hydra_config_composes():
     assert cfg.backend.name == "lora_sglang"
     assert cfg.data.max_samples == 100
     assert cfg.data.offset == 0
-    assert cfg.run.name == "v4.1.2_0.006_186步"
-    assert cfg.backend.adapter_path.endswith("outputs/fog/LoRA/v4.1.2/0.006_186步")
+    assert cfg.run.name == "v4.1.2_0.008_186步"
+    assert cfg.backend.adapter_path.endswith("outputs/fog/LoRA/v4.1.2/0.008_186步")
 
 
 def test_jarvisir_hydra_config_composes():

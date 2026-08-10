@@ -77,6 +77,8 @@ def test_all_versioned_launchers_isolate_training_and_tool_logs() -> None:
             expected_output_dir = f"old_verl_grpo/outputs/{expert}/{version}/2gpu"
             assert expected_output_dir in config_content, config
             if version == "v4.1.2":
+                assert "decision_point_first_token_entropy_coeff: 0.008" in config_content, config
+                assert "decision_point_first_token_entropy_coeff_end: 0.0024" in config_content, config
                 assert 'VERSION="v4.1.2"' in content, launcher
                 assert 'CONFIG_VERSION="v4.1.2"' in content, launcher
 
@@ -111,6 +113,9 @@ def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirector
             content = config.read_text(encoding="utf-8")
             assert f"project_name: {PROJECT_NAMES[expert]}" in content, config
             assert f'experiment_name: "{expert}_{version}"' in content, config
+            if version == "v4.1.2":
+                assert "decision_point_first_token_entropy_coeff: 0.008" in content, config
+                assert "decision_point_first_token_entropy_coeff_end: 0.0024" in content, config
             assert f"old_verl_grpo/outputs/{expert}/{version}/2gpu" in content, config
             assert (
                 f"old_verl_grpo/outputs/{expert}/{version}/2gpu/swanlab" in content

@@ -5,7 +5,7 @@ defaults:
 command: run                 # run | preflight
 
 run:
-  name: v4.1.2_0.006_186步                  # LoRA 显式名称；JarvisIR 强制为 JarvisIR
+  name: v4.1.2_0.008_186步                  # LoRA 显式名称；JarvisIR 强制为 JarvisIR
   resume: true
   overwrite: false
 
