@@ -1,14 +1,14 @@
 command: run                 # run | preflight | score-worker
 
 comparison:
-  name: v4.1.1_vs_v2
-  output_csv: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_vs_v2_iqa_means.csv
+  name: v4.1.1_0.006_180_vs_v2
+  output_csv: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_0.006_180_vs_v2_iqa_means.csv
   require_identical_sample_ids: true
   expected_samples: 100
 
 sets:
-  - name: v4.1.1_0803
-    output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_0803
+  - name: v4.1.1_0.006_180
+    output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v4.1.1_0.006_186步
   - name: v2
     output_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/eval/v2
 

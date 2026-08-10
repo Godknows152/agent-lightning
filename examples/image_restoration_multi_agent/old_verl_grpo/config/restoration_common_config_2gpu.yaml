@@ -131,7 +131,7 @@ trainer:  # 配置训练流程、检查点、日志和 Ray 运行环境
   save_freq: 10  # 每隔五个训练步骤保存一次检查点
   test_freq: 10  # 每隔十个训练步骤执行一次验证
   total_epochs: 3  # 对训练数据执行三个完整训练轮次
-  total_training_steps: 150  # 不固定总步骤数，由数据量和 total_epochs 推导
+  total_training_steps: null  # 不固定总步骤数，由数据量和 total_epochs 推导
   max_actor_ckpt_to_keep: 10  # 最多保留十个常规 Actor 检查点
   keep_best_validation_ckpt: true  # 额外保留验证指标最优的 Actor 检查点
   val_before_train: false  # 正式训练开始前不单独执行一次验证

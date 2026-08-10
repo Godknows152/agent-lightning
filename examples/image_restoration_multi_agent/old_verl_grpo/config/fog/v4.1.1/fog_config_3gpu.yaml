@@ -33,8 +33,9 @@ trainer:
   project_name: FogRL
   experiment_name: "fog_v4.1.1"
   resume_mode: resume_path
-  resume_from_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.1/2gpu/global_step_40
+  resume_from_path: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.1/3gpu/0.006_186步/global_step_186
   default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.1/3gpu
+  total_epochs: 6
   ray_kwargs:
     ray_init:
       runtime_env:

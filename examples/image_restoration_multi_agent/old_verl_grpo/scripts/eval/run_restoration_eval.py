@@ -133,10 +133,14 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def validate_run_name(name: str) -> str:
-    """Validate run.name is alphanumeric (dots, dashes, underscores allowed)."""
-    if not re.match(r"^[A-Za-z0-9._-]+$", name):
+    """Validate run.name only contains safe characters.
+
+    Unicode letters/digits (e.g. Chinese) are allowed since run.name is only
+    used for directory names and labels. Path separators are rejected.
+    """
+    if not re.match(r"^[\w.-]+$", name, flags=re.UNICODE):
         raise ValueError(
-            f"run.name must be alphanumeric, got {name!r}"
+            f"run.name contains invalid characters, got {name!r}"
         )
     return name
 
@@ -151,7 +155,10 @@ def require_file(path: Path, desc: str) -> None:
 
 
 def hydra_string(value: str | Path) -> str:
-    return json.dumps(str(value), ensure_ascii=True)
+    # ensure_ascii=False keeps Unicode (e.g. Chinese) raw in the override.
+    # Hydra's override parser does NOT decode \uXXXX escapes, so escaping
+    # them (ensure_ascii=True) would corrupt non-ASCII paths.
+    return json.dumps(str(value), ensure_ascii=False)
 
 
 def ray_temp_dir(attempt_dir: Path) -> Path:
@@ -919,7 +926,8 @@ def main(config: DictConfig) -> int:
     )
 
     output_dir = output_root / run_name
-    if output_dir.exists() and not cfg.get("run", {}).get("overwrite", False):
+    output_dir_has_contents = output_dir.is_dir() and any(output_dir.iterdir())
+    if output_dir_has_contents and not cfg.get("run", {}).get("overwrite", False):
         raise FileExistsError(
             f"Output directory exists: {output_dir}. Set run.overwrite=true to overwrite."
         )
