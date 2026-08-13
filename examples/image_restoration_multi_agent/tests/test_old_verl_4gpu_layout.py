@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -124,8 +125,14 @@ def test_all_expert_versions_have_isolated_four_gpu_configs_and_launchers() -> N
             assert trainer["experiment_name"] == f"{expert}_{output_version}", config_path
             if version == "v4.1.2":
                 actor = config["actor_rollout_ref"]["actor"]
-                assert actor["decision_point_first_token_entropy_coeff"] == 0.008, config_path
-                assert actor["decision_point_first_token_entropy_coeff_end"] == 0.0024, config_path
+                peak_coeff = 0.006 if expert == "fog" else 0.008
+                assert actor["decision_point_first_token_entropy_coeff"] == peak_coeff, config_path
+                assert actor["decision_point_first_token_entropy_coeff_end"] == pytest.approx(
+                    peak_coeff * 0.1
+                ), config_path
+                assert actor["decision_point_first_token_entropy_ramp_ratio"] == 0.05, config_path
+                assert actor["decision_point_first_token_entropy_stable_end_ratio"] == 0.05, config_path
+                assert actor["decision_point_first_token_entropy_decay_end_ratio"] == 1.0, config_path
             assert trainer["default_local_dir"].endswith(
                 f"outputs/{expert}/{output_version}/4gpu"
             ), config_path

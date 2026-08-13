@@ -49,6 +49,22 @@ def test_wsd_cosine_schedule_clamps_resume_steps() -> None:
     assert get_first_token_entropy_coeff(step=100, **kwargs) == pytest.approx(0.0003)
 
 
+def test_wsd_cosine_schedule_can_decay_immediately_after_warmup() -> None:
+    kwargs = {
+        "total_steps": 101,
+        "start": 1.0,
+        "end": 0.1,
+        "schedule": "wsd_cosine",
+        "ramp_ratio": 0.05,
+        "stable_end_ratio": 0.05,
+        "decay_end_ratio": 1.0,
+    }
+
+    assert get_first_token_entropy_coeff(step=6, **kwargs) == pytest.approx(1.0)
+    assert get_first_token_entropy_coeff(step=7, **kwargs) < 1.0
+    assert get_first_token_entropy_coeff(step=101, **kwargs) == pytest.approx(0.1)
+
+
 def test_schedule_rejects_invalid_ranges() -> None:
     with pytest.raises(ValueError, match="ratios"):
         get_first_token_entropy_coeff(

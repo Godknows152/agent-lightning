@@ -77,8 +77,12 @@ def test_all_versioned_launchers_isolate_training_and_tool_logs() -> None:
             expected_output_dir = f"old_verl_grpo/outputs/{expert}/{version}/2gpu"
             assert expected_output_dir in config_content, config
             if version == "v4.1.2":
-                assert "decision_point_first_token_entropy_coeff: 0.008" in config_content, config
-                assert "decision_point_first_token_entropy_coeff_end: 0.0024" in config_content, config
+                peak_coeff = 0.006 if expert == "fog" else 0.008
+                assert f"decision_point_first_token_entropy_coeff: {peak_coeff}" in config_content, config
+                assert f"decision_point_first_token_entropy_coeff_end: {peak_coeff * 0.1:.4f}" in config_content, config
+                assert "decision_point_first_token_entropy_ramp_ratio: 0.05" in config_content, config
+                assert "decision_point_first_token_entropy_stable_end_ratio: 0.05" in config_content, config
+                assert "decision_point_first_token_entropy_decay_end_ratio: 1.00" in config_content, config
                 assert 'VERSION="v4.1.2"' in content, launcher
                 assert 'CONFIG_VERSION="v4.1.2"' in content, launcher
 
@@ -114,14 +118,32 @@ def test_two_gpu_configs_keep_outputs_logs_and_swanlab_under_two_gpu_subdirector
             assert f"project_name: {PROJECT_NAMES[expert]}" in content, config
             assert f'experiment_name: "{expert}_{version}"' in content, config
             if version == "v4.1.2":
-                assert "decision_point_first_token_entropy_coeff: 0.008" in content, config
-                assert "decision_point_first_token_entropy_coeff_end: 0.0024" in content, config
+                peak_coeff = 0.006 if expert == "fog" else 0.008
+                assert f"decision_point_first_token_entropy_coeff: {peak_coeff}" in content, config
+                assert f"decision_point_first_token_entropy_coeff_end: {peak_coeff * 0.1:.4f}" in content, config
+                assert "decision_point_first_token_entropy_ramp_ratio: 0.05" in content, config
+                assert "decision_point_first_token_entropy_stable_end_ratio: 0.05" in content, config
+                assert "decision_point_first_token_entropy_decay_end_ratio: 1.00" in content, config
             assert f"old_verl_grpo/outputs/{expert}/{version}/2gpu" in content, config
             assert (
                 f"old_verl_grpo/outputs/{expert}/{version}/2gpu/swanlab" in content
             ), config
             assert f"old_verl_grpo/log/{expert}/{version}/2gpu" in content, config
             assert "/2gpu/2gpu/" not in content, config
+
+
+def test_all_v4_1_2_configs_train_for_three_epochs() -> None:
+    for expert in ("fog", "rain", "snow", "lowlight"):
+        for gpu_count in (2, 3, 4):
+            config = (
+                OLD_VERL_ROOT
+                / "config"
+                / expert
+                / "v4.1.2"
+                / f"{expert}_config_{gpu_count}gpu.yaml"
+            )
+            content = config.read_text(encoding="utf-8")
+            assert content.count("total_epochs: 3") == 1, config
 
 
 def test_fresh_run_uses_expert_and_current_month_day(tmp_path: Path) -> None:
