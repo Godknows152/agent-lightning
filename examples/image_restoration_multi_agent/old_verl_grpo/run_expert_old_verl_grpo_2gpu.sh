@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  run_expert_old_verl_grpo_2gpu.sh <fog|low_light|rain|snow> [--smoke|--preflight] [hydra overrides...]
+  run_expert_old_verl_grpo_2gpu.sh <fog|low_light|rain|snow|unified> [--smoke|--preflight] [hydra overrides...]
 
 Training and smoke runs start in the background. Preflight runs in the current
 shell without creating datasets, starting Ray, or allocating a model on GPU.
@@ -84,7 +84,7 @@ elif [[ "${1:-}" == "--preflight" ]]; then
 fi
 
 case "${EXPERT}" in
-  fog|low_light|rain|snow) ;;
+  fog|low_light|rain|snow|unified) ;;
   *)
     echo "Unsupported expert: ${EXPERT}" >&2
     usage >&2
@@ -108,7 +108,11 @@ LOCAL_PYDEPS="${OLD_VERL_LOCAL_PYDEPS:-${OLD_VERL_DIR}/.pydeps}"
 TOOL_REGISTRY_PATH="${OLD_VERL_TOOL_REGISTRY_PATH:-${EXAMPLE_DIR}/config/tools.yaml}"
 INTERMEDIATE_DIR="${OLD_VERL_INTERMEDIATE_DIR:-/home/LXJ/tmp/agent_lightning_old_verl_restoration}"
 DEFAULT_MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
-DEFAULT_SFT_ADAPTER_ROOT="${ROOT}/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start"
+if [[ "${EXPERT}" == "unified" ]]; then
+  DEFAULT_SFT_ADAPTER_ROOT="${ROOT}/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0813/format_cold_start"
+else
+  DEFAULT_SFT_ADAPTER_ROOT="${ROOT}/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start"
+fi
 
 PYTHON_BIN="${PYTHON_BIN:-/home/LXJ/anaconda3/envs/verl/bin/python}"
 RAY_BIN="${RAY_BIN:-/home/LXJ/anaconda3/envs/verl/bin/ray}"
@@ -136,8 +140,13 @@ if [[ "${OLD_VERL_RUN_IN_FOREGROUND:-0}" != "1" && "${PREFLIGHT_ONLY}" != "1" ]]
   exit 0
 fi
 
-TRAIN_PARQUET="${OLD_VERL_DIR}/data/${EXPERT}_train.parquet"
-VAL_PARQUET="${OLD_VERL_DIR}/data/${EXPERT}_val.parquet"
+if [[ "${EXPERT}" == "unified" ]]; then
+  TRAIN_PARQUET="${OLD_VERL_DIR}/data/unified/unified_train.parquet"
+  VAL_PARQUET="${OLD_VERL_DIR}/data/unified/unified_val.parquet"
+else
+  TRAIN_PARQUET="${OLD_VERL_DIR}/data/${EXPERT}_train.parquet"
+  VAL_PARQUET="${OLD_VERL_DIR}/data/${EXPERT}_val.parquet"
+fi
 RUN_KIND="full"
 TRAIN_LIMIT_ARGS=()
 VAL_LIMIT_ARGS=()
@@ -600,8 +609,18 @@ if [[ "${OLD_VERL_CLEAR_INTERMEDIATE_IMAGES:-1}" == "1" ]]; then
   echo "Cleared sampling intermediate images: ${INTERMEDIATE_DIR}"
 fi
 
-"${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split train --output "${TRAIN_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${TRAIN_LIMIT_ARGS[@]}"
-"${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split val --output "${VAL_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${VAL_LIMIT_ARGS[@]}"
+if [[ "${EXPERT}" == "unified" ]]; then
+  if [[ ! -s "${TRAIN_PARQUET}" || ! -s "${VAL_PARQUET}" ]]; then
+    echo "Unified RL parquet data is missing. Run scripts/merge_unified_rl_data.py first." >&2
+    exit 1
+  fi
+  if [[ "${SMOKE}" == "1" ]]; then
+    echo "Unified smoke mode uses the existing full unified parquet files; sample limits are applied by Hydra." >&2
+  fi
+else
+  "${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split train --output "${TRAIN_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${TRAIN_LIMIT_ARGS[@]}"
+  "${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split val --output "${VAL_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${VAL_LIMIT_ARGS[@]}"
+fi
 
 if [[ "${OLD_VERL_STOP_RAY:-1}" == "1" ]]; then
   "${RAY_BIN}" stop --force >/dev/null 2>&1 || true

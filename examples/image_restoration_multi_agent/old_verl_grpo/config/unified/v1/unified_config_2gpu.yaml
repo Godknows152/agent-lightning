@@ -1,0 +1,41 @@
+# Unified four-expert old-verl GRPO config on physical GPUs 0 and 1 (v1).
+# v1: current-IQA reward baseline.
+
+hydra:
+  searchpath:
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/config
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+
+defaults:
+  - restoration_common_config_2gpu
+  - _self_
+
+data:
+  val_max_samples: 64
+  train_files:
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/unified/unified_train.parquet
+  val_files:
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/unified/unified_val_balanced64.parquet
+
+actor_rollout_ref:
+  model:
+    path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+    # Initialize both the trainable actor and frozen KL reference from unified SFT.
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0813/format_cold_start/unified
+  rollout:
+    multi_turn:
+      tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v1/restoration_tool_config_2gpu.yaml
+
+trainer:
+  project_name: UnifiedExpertRL
+  experiment_name: "unified_v1"
+  resume_mode: auto
+  resume_from_path: null
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/unified/v1/2gpu
+  total_epochs: 3
+  ray_kwargs:
+    ray_init:
+      runtime_env:
+        env_vars:
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/unified/v1/2gpu/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/unified/v1/2gpu"

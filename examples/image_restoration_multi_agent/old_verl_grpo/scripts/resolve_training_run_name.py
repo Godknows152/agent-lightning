@@ -112,7 +112,11 @@ def resolve_run_naming(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--expert", required=True, choices=("fog", "low_light", "rain", "snow"))
+    parser.add_argument(
+        "--expert",
+        required=True,
+        choices=("fog", "low_light", "rain", "snow", "unified"),
+    )
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--resume-mode", choices=("auto", "disable", "resume_path"), default="auto")
     parser.add_argument("--resume-from-path", type=Path)
