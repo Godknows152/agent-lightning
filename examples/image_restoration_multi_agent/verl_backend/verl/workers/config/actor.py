@@ -125,6 +125,9 @@ class ActorConfig(BaseConfig):
         decision_point_entropy_coeff (float): Coefficient for normalized legal-action sequence entropy.
         decision_point_first_token_entropy_coeff (float): Coefficient for normalized legal-action first-token
             entropy averaged within each trajectory.
+        decision_point_first_token_entropy_gate (str): Quality gate applied to the first-token entropy term.
+            ``none`` preserves the original behavior; ``positive_advantage`` keeps the entropy contribution only
+            for trajectories whose outcome advantage is positive.
         decision_point_first_token_entropy_schedule (str): Schedule for the first-token entropy coefficient.
             ``constant`` preserves fixed-coefficient behavior; ``wsd_cosine`` provides a warmup-stable-decay schedule.
         decision_point_first_token_entropy_coeff_end (Optional[float]): Final coefficient for ``wsd_cosine``.
@@ -179,6 +182,7 @@ class ActorConfig(BaseConfig):
     entropy_coeff: float = 0
     decision_point_entropy_coeff: float = 0.0
     decision_point_first_token_entropy_coeff: float = 0.0
+    decision_point_first_token_entropy_gate: str = "none"
     decision_point_first_token_entropy_schedule: str = "constant"
     decision_point_first_token_entropy_coeff_end: Optional[float] = None
     decision_point_first_token_entropy_ramp_ratio: float = 0.05
@@ -243,6 +247,10 @@ class ActorConfig(BaseConfig):
             raise ValueError("decision_point_entropy_coeff must be non-negative")
         if self.decision_point_first_token_entropy_coeff < 0:
             raise ValueError("decision_point_first_token_entropy_coeff must be non-negative")
+        if self.decision_point_first_token_entropy_gate not in {"none", "positive_advantage"}:
+            raise ValueError(
+                "decision_point_first_token_entropy_gate must be 'none' or 'positive_advantage'"
+            )
         if self.decision_point_first_token_entropy_schedule not in {"constant", "wsd_cosine"}:
             raise ValueError(
                 "decision_point_first_token_entropy_schedule must be 'constant' or 'wsd_cosine'"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Unified four-expert old-verl GRPO launcher (v4.1.2).
+# Unified four-expert old-verl GRPO launcher (v4.1.3).
+# v4.1.3: Positive-advantage-gated legal-action first-token entropy regularization.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -7,13 +8,12 @@ OLD_VERL_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
 EXPERT="unified"
-VERSION="v4.1.2"
+VERSION="v4.1.3"
 CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${VERSION}/${EXPERT}_config_2gpu.yaml"
 
 export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu}"
 export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${EXPERT}_config_2gpu}"
 export OLD_VERL_EXPERIMENT_NAME="${OLD_VERL_EXPERIMENT_NAME:-${EXPERT}_${VERSION}}"
-# Leave the output override unset so the wrapper uses trainer.default_local_dir from YAML.
 export OLD_VERL_ADAPTER_PATH="${OLD_VERL_ADAPTER_PATH:-/home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0813/format_cold_start/unified}"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then

@@ -22,7 +22,7 @@ import torch
 import yaml
 from tensordict import TensorDict
 
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer
+from verl.trainer.ppo.ray_trainer import RayPPOTrainer, _compute_positive_advantage_entropy_gate
 from verl.trainer.ppo.restoration_action_entropy import (
     ALL_TURN_RESTORATION_ACTIONS,
     FIRST_TURN_RESTORATION_ACTIONS,
@@ -97,6 +97,28 @@ def test_first_token_action_entropy_is_low_for_a_concentrated_distribution():
 
     assert raw_entropy.item() < 1e-12
     assert normalized_entropy.item() < 1e-12
+
+
+def test_positive_advantage_entropy_gate_uses_masked_trajectory_mean():
+    advantages = torch.tensor(
+        [
+            [0.5, 0.5, 0.0],
+            [-0.25, -0.25, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
+    response_mask = torch.tensor(
+        [
+            [1, 1, 0],
+            [1, 1, 0],
+            [0, 0, 0],
+        ],
+        dtype=torch.bool,
+    )
+
+    gate = _compute_positive_advantage_entropy_gate(advantages, response_mask)
+
+    assert gate.tolist() == [True, False, False]
 
 
 def test_turn_detector_uses_the_xml_action_to_disambiguate_thinking_text():

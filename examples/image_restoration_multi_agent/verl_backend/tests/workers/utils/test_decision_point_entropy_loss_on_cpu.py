@@ -23,10 +23,11 @@ from verl.utils.metric import Metric
 from verl.workers.utils import losses
 
 
-def _make_config(*, coeff: float = 0.002, first_token_coeff: float = 0.0):
+def _make_config(*, coeff: float = 0.002, first_token_coeff: float = 0.0, first_token_gate: str = "none"):
     return SimpleNamespace(
         decision_point_entropy_coeff=coeff,
         decision_point_first_token_entropy_coeff=first_token_coeff,
+        decision_point_first_token_entropy_gate=first_token_gate,
         entropy_coeff=0.0,
         global_batch_info={},
         kl_loss_coef=0.0,
@@ -203,6 +204,8 @@ def _run_first_token_ppo_loss(
     dp_size=1,
     coeff=0.002,
     scheduled_coeff=None,
+    entropy_gate=None,
+    gate_mode="none",
 ):
     batch_size = len(found)
     response_mask = torch.ones((batch_size, 3), dtype=torch.float32)
@@ -216,6 +219,8 @@ def _run_first_token_ppo_loss(
         },
         batch_size=[batch_size],
     )
+    if entropy_gate is not None:
+        data["decision_first_token_entropy_gate"] = torch.tensor(entropy_gate, dtype=torch.bool)
     tu.assign_non_tensor(
         data,
         batch_num_decision_trajectories=global_trajectory_count,
@@ -233,7 +238,7 @@ def _run_first_token_ppo_loss(
     monkeypatch.setattr(losses, "no_padding_2_padding", lambda tensor, _: tensor)
 
     return losses.ppo_loss(
-        config=_make_config(coeff=0.0, first_token_coeff=coeff),
+        config=_make_config(coeff=0.0, first_token_coeff=coeff, first_token_gate=gate_mode),
         model_output={
             "log_probs": torch.zeros_like(response_mask, requires_grad=True),
             "decision_first_token_action_entropy": torch.tensor(raw_entropies, requires_grad=True),
@@ -277,6 +282,41 @@ def test_first_token_entropy_uses_batch_schedule_coefficient(monkeypatch):
     )
 
     assert policy_loss.item() == pytest.approx(-0.00025)
+
+
+def test_first_token_entropy_positive_advantage_gate_weights_only_selected_trajectories(monkeypatch):
+    policy_loss, metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.2], [0.8]],
+        raw_entropies=[[0.4], [1.6]],
+        effective_counts=[[2.0], [5.0]],
+        legal_masses=[[0.8], [0.5]],
+        found=[[True], [True]],
+        global_trajectory_count=2,
+        entropy_gate=[True, False],
+        gate_mode="positive_advantage",
+    )
+
+    assert metrics["actor/decision_point_first_token_action_entropy_normalized"].aggregate() == pytest.approx(0.5)
+    assert metrics[
+        "actor/decision_point_first_token_gated_action_entropy_normalized"
+    ].aggregate() == pytest.approx(0.1)
+    assert metrics["actor/decision_point_first_token_entropy_gate_ratio"].aggregate() == pytest.approx(0.5)
+    assert policy_loss.item() == pytest.approx(-0.0002)
+
+
+def test_first_token_entropy_positive_advantage_gate_requires_batch_metadata(monkeypatch):
+    with pytest.raises(ValueError, match="decision_first_token_entropy_gate is required"):
+        _run_first_token_ppo_loss(
+            monkeypatch,
+            normalized_entropies=[[0.5]],
+            raw_entropies=[[1.0]],
+            effective_counts=[[4.0]],
+            legal_masses=[[0.9]],
+            found=[[True]],
+            global_trajectory_count=1,
+            gate_mode="positive_advantage",
+        )
 
 
 def test_first_token_entropy_distributed_mean_uses_valid_trajectory_count(monkeypatch):

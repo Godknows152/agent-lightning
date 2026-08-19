@@ -123,13 +123,25 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
                 "decision_point_entropy_coeff is positive"
             )
     decision_first_token_entropy_enabled = getattr(config, "decision_point_first_token_entropy_coeff", 0.0) > 0.0
+    first_token_entropy_gate_mode = getattr(config, "decision_point_first_token_entropy_gate", "none")
+    if first_token_entropy_gate_mode not in {"none", "positive_advantage"}:
+        raise ValueError("decision_point_first_token_entropy_gate must be 'none' or 'positive_advantage'")
     if decision_first_token_entropy_enabled and "decision_first_token_found" not in data:
         raise ValueError(
             "decision_first_token_found is required when decision_point_first_token_entropy_coeff is positive"
         )
     batch_num_decision_trajectories = None
+    first_token_entropy_gate_enabled = False
     if decision_first_token_entropy_enabled:
         fields.append("decision_first_token_found")
+        first_token_entropy_gate_enabled = first_token_entropy_gate_mode == "positive_advantage"
+        if first_token_entropy_gate_enabled:
+            if "decision_first_token_entropy_gate" not in data:
+                raise ValueError(
+                    "decision_first_token_entropy_gate is required when positive-advantage first-token "
+                    "entropy gating is enabled"
+                )
+            fields.append("decision_first_token_entropy_gate")
         batch_num_decision_trajectories = tu.get_non_tensor_data(
             data=data,
             key="batch_num_decision_trajectories",
@@ -210,11 +222,21 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     # Average all valid decisions within each trajectory before the global trajectory mean.
     if decision_first_token_entropy_enabled:
         first_token_found = data["decision_first_token_found"].to(torch.bool)
+        first_token_entropy_gate = None
+        if first_token_entropy_gate_enabled:
+            first_token_entropy_gate = data["decision_first_token_entropy_gate"].to(torch.float32)
+            if first_token_entropy_gate.ndim != 1 or first_token_entropy_gate.shape[0] != first_token_found.shape[0]:
+                raise ValueError("decision_first_token_entropy_gate must have shape [batch]")
         local_decision_counts = first_token_found.sum(dim=-1)
         local_valid_trajectories = local_decision_counts > 0
 
-        def global_trajectory_mean(values: torch.Tensor) -> torch.Tensor:
+        def global_trajectory_mean(
+            values: torch.Tensor,
+            trajectory_weights: torch.Tensor | None = None,
+        ) -> torch.Tensor:
             per_trajectory = (values * first_token_found).sum(dim=-1) / local_decision_counts.clamp(min=1)
+            if trajectory_weights is not None:
+                per_trajectory = per_trajectory * trajectory_weights
             return (
                 per_trajectory[local_valid_trajectories].sum()
                 / batch_num_decision_trajectories
@@ -222,22 +244,39 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             )
 
         if batch_num_decision_trajectories > 0:
-            first_token_raw_entropy = global_trajectory_mean(decision_first_token_action_entropy)
             first_token_normalized_entropy = global_trajectory_mean(decision_first_token_normalized_entropy)
-            first_token_effective_action_count = global_trajectory_mean(decision_first_token_effective_action_count)
-            first_token_legal_mass = global_trajectory_mean(decision_first_token_legal_mass)
-            policy_loss -= first_token_entropy_coeff * first_token_normalized_entropy
+            regularized_first_token_entropy = first_token_normalized_entropy
+            if first_token_entropy_gate_enabled:
+                regularized_first_token_entropy = global_trajectory_mean(
+                    decision_first_token_normalized_entropy,
+                    first_token_entropy_gate,
+                )
+                first_token_entropy_gate_ratio = (
+                    first_token_entropy_gate[local_valid_trajectories].sum()
+                    / batch_num_decision_trajectories
+                    * config.global_batch_info["dp_size"]
+                )
+            policy_loss -= first_token_entropy_coeff * regularized_first_token_entropy
         else:
             zero = log_prob.sum() * 0.0
-            first_token_raw_entropy = zero
             first_token_normalized_entropy = zero
-            first_token_effective_action_count = zero
-            first_token_legal_mass = zero
+            regularized_first_token_entropy = zero
+            if first_token_entropy_gate_enabled:
+                first_token_entropy_gate_ratio = zero
 
         metrics["actor/decision_point_first_token_action_entropy_normalized"] = Metric(
             value=first_token_normalized_entropy,
             aggregation=metric_aggregation,
         )
+        if first_token_entropy_gate_enabled:
+            metrics["actor/decision_point_first_token_gated_action_entropy_normalized"] = Metric(
+                value=regularized_first_token_entropy,
+                aggregation=metric_aggregation,
+            )
+            metrics["actor/decision_point_first_token_entropy_gate_ratio"] = Metric(
+                value=first_token_entropy_gate_ratio,
+                aggregation=metric_aggregation,
+            )
 
     # add kl loss
     if config.use_kl_loss:

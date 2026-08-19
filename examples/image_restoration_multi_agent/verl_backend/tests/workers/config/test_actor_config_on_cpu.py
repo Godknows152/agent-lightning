@@ -185,6 +185,16 @@ class TestActorConfig(unittest.TestCase):
         with self.assertRaises((ValueError, AssertionError)) as cm:
             ActorConfig(
                 strategy="fsdp",
+                decision_point_first_token_entropy_gate="unsupported",
+                use_dynamic_bsz=True,
+                optim=optim,
+                rollout_n=1,
+            )
+        self.assertIn("decision_point_first_token_entropy_gate", str(cm.exception))
+
+        with self.assertRaises((ValueError, AssertionError)) as cm:
+            ActorConfig(
+                strategy="fsdp",
                 use_dynamic_bsz=False,
                 ppo_micro_batch_size=4,
                 ppo_micro_batch_size_per_gpu=2,

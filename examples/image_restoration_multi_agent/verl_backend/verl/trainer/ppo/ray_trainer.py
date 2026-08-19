@@ -285,6 +285,21 @@ def compute_advantage(
     return data
 
 
+def _compute_positive_advantage_entropy_gate(
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Return a trajectory gate that is active only for positive outcome advantage."""
+
+    if advantages.ndim != 2 or response_mask.ndim != 2 or advantages.shape != response_mask.shape:
+        raise ValueError("advantages and response_mask must have identical [batch, response_length] shapes")
+
+    mask = response_mask.to(device=advantages.device, dtype=torch.bool)
+    response_lengths = mask.sum(dim=-1)
+    trajectory_advantages = (advantages * mask).sum(dim=-1) / response_lengths.clamp(min=1)
+    return (trajectory_advantages.detach() > 0) & response_lengths.gt(0)
+
+
 class RayPPOTrainer:
     """Distributed PPO trainer using Ray for scalable reinforcement learning.
 
@@ -2088,6 +2103,22 @@ class RayPPOTrainer:
                             norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
                             config=self.config.algorithm,
                         )
+
+                        first_token_entropy_gate = getattr(
+                            self.config.actor_rollout_ref.actor,
+                            "decision_point_first_token_entropy_gate",
+                            "none",
+                        )
+                        if (
+                            self.config.actor_rollout_ref.actor.decision_point_first_token_entropy_coeff > 0.0
+                            and first_token_entropy_gate == "positive_advantage"
+                        ):
+                            batch.batch["decision_first_token_entropy_gate"] = (
+                                _compute_positive_advantage_entropy_gate(
+                                    batch.batch["advantages"],
+                                    batch.batch["response_mask"],
+                                )
+                            )
 
                         action_rarity_reward_coeff = float(self.config.algorithm.get("action_rarity_reward_coeff", 0.0))
                         if not np.isfinite(action_rarity_reward_coeff) or action_rarity_reward_coeff < 0:
