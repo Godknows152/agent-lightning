@@ -1,5 +1,5 @@
-# Unified four-expert old-verl GRPO config on physical GPUs 0 and 1 (v4.1.4).
-# v4.1.4: quality-and-validity-gated legal-action first-token entropy with cosine decay.
+# Old-verl GRPO config for rain expert on 2 trainer GPUs (v4.1.4).
+# v4.1.4: Quality-and-validity-gated legal-action first-token entropy with cosine decay.
 
 hydra:
   searchpath:
@@ -11,27 +11,28 @@ defaults:
   - _self_
 
 data:
-  val_max_samples: 64
   train_files:
-    - examples/image_restoration_multi_agent/old_verl_grpo/data/unified/unified_train.parquet
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/rain_train.parquet
   val_files:
-    - examples/image_restoration_multi_agent/old_verl_grpo/data/unified/unified_val_balanced64.parquet
+    - examples/image_restoration_multi_agent/old_verl_grpo/data/rain_val.parquet
 
 actor_rollout_ref:
   model:
     path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
-    # Initialize both the trainable actor and frozen KL reference from unified SFT.
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0813/format_cold_start/unified
+    # Actor 从 0731 rain SFT LoRA 初始化并继续更新；冻结参考策略加载同一份初始 LoRA。
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/rain
   rollout:
     multi_turn:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_2gpu.yaml
   actor:
     entropy_coeff: 0.001
+    # v4.1.4: Average normalized first-token entropy within each trajectory.
     decision_point_entropy_coeff: 0.0
     decision_point_first_token_entropy_coeff: 0.008
     decision_point_first_token_entropy_gate: quality_validity
     decision_point_first_token_entropy_min_pure_image_reward: 0.0
     decision_point_first_token_entropy_max_repeated_actions: 1
+    # v4.1.4: 5% warmup, immediate cosine decay, floor reached at 40% of training.
     decision_point_first_token_entropy_schedule: wsd_cosine
     decision_point_first_token_entropy_coeff_end: 0.0008
     decision_point_first_token_entropy_ramp_ratio: 0.05
@@ -39,15 +40,15 @@ actor_rollout_ref:
     decision_point_first_token_entropy_decay_end_ratio: 0.4
 
 trainer:
-  project_name: UnifiedExpertRL
-  experiment_name: "unified_v4.1.4"
+  project_name: RainRL
+  experiment_name: "rain_v4.1.4"
+  total_epochs: 3
   resume_mode: auto
   resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/unified/v4.1.4/2gpu/0.008
-  total_epochs: 3
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4.1.4/2gpu
   ray_kwargs:
     ray_init:
       runtime_env:
         env_vars:
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/unified/v4.1.4/2gpu/swanlab"
-          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/unified/v4.1.4/2gpu"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/rain/v4.1.4/2gpu/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/rain/v4.1.4/2gpu"

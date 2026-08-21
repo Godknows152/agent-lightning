@@ -13,6 +13,7 @@ Versions mirror the existing per-expert experiments:
 - `v4`: thinking decision-point entropy regularization.
 - `v4.1.2`: scheduled legal-action first-token entropy regularization.
 - `v4.1.3`: positive-advantage-gated legal-action first-token entropy regularization.
+- `v4.1.4`: quality-and-validity-gated legal-action first-token entropy with cosine decay.
 
 Each version writes checkpoints to `outputs/unified/<version>/2gpu`, SwanLab
 files below its output directory, and process/tool logs to
