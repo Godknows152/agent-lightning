@@ -17,12 +17,17 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 import yaml
 from tensordict import TensorDict
 
-from verl.trainer.ppo.ray_trainer import RayPPOTrainer, _compute_positive_advantage_entropy_gate
+from verl.trainer.ppo.ray_trainer import (
+    RayPPOTrainer,
+    _compute_positive_advantage_entropy_gate,
+    _compute_quality_validity_entropy_gate,
+)
 from verl.trainer.ppo.restoration_action_entropy import (
     ALL_TURN_RESTORATION_ACTIONS,
     FIRST_TURN_RESTORATION_ACTIONS,
@@ -119,6 +124,32 @@ def test_positive_advantage_entropy_gate_uses_masked_trajectory_mean():
     gate = _compute_positive_advantage_entropy_gate(advantages, response_mask)
 
     assert gate.tolist() == [True, False, False]
+
+
+def test_quality_validity_entropy_gate_requires_quality_and_valid_actions():
+    advantages = torch.ones((4, 2), dtype=torch.float32)
+    response_mask = torch.ones_like(advantages, dtype=torch.bool)
+    pure_image_rewards = np.asarray([0.5, -0.1, 0.2, 0.2], dtype=object)
+    penalty_records = np.empty(4, dtype=object)
+    penalty_records[:] = [
+        [],
+        [],
+        [{"reason": "invalid_restoration_action", "value": -10.0}],
+        [{"reason": "repeated_restoration_action", "value": -1.0, "occurrences": 1}],
+    ]
+
+    gate = _compute_quality_validity_entropy_gate(
+        advantages,
+        response_mask,
+        {
+            "pure_image_restoration_reward": pure_image_rewards,
+            "penalty_records": penalty_records,
+        },
+        min_pure_image_reward=0.0,
+        max_repeated_actions=1,
+    )
+
+    assert gate.tolist() == [True, False, False, True]
 
 
 def test_turn_detector_uses_the_xml_action_to_disambiguate_thinking_text():

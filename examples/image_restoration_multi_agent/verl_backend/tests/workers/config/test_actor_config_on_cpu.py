@@ -192,6 +192,17 @@ class TestActorConfig(unittest.TestCase):
             )
         self.assertIn("decision_point_first_token_entropy_gate", str(cm.exception))
 
+        quality_config = ActorConfig(
+            strategy="fsdp",
+            decision_point_first_token_entropy_gate="quality_validity",
+            decision_point_first_token_entropy_min_pure_image_reward=0.0,
+            decision_point_first_token_entropy_max_repeated_actions=1,
+            use_dynamic_bsz=True,
+            optim=optim,
+            rollout_n=1,
+        )
+        self.assertEqual(quality_config.decision_point_first_token_entropy_gate, "quality_validity")
+
         with self.assertRaises((ValueError, AssertionError)) as cm:
             ActorConfig(
                 strategy="fsdp",

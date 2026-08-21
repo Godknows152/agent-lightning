@@ -124,8 +124,10 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             )
     decision_first_token_entropy_enabled = getattr(config, "decision_point_first_token_entropy_coeff", 0.0) > 0.0
     first_token_entropy_gate_mode = getattr(config, "decision_point_first_token_entropy_gate", "none")
-    if first_token_entropy_gate_mode not in {"none", "positive_advantage"}:
-        raise ValueError("decision_point_first_token_entropy_gate must be 'none' or 'positive_advantage'")
+    if first_token_entropy_gate_mode not in {"none", "positive_advantage", "quality_validity"}:
+        raise ValueError(
+            "decision_point_first_token_entropy_gate must be 'none', 'positive_advantage', or 'quality_validity'"
+        )
     if decision_first_token_entropy_enabled and "decision_first_token_found" not in data:
         raise ValueError(
             "decision_first_token_found is required when decision_point_first_token_entropy_coeff is positive"
@@ -134,12 +136,12 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     first_token_entropy_gate_enabled = False
     if decision_first_token_entropy_enabled:
         fields.append("decision_first_token_found")
-        first_token_entropy_gate_enabled = first_token_entropy_gate_mode == "positive_advantage"
+        first_token_entropy_gate_enabled = first_token_entropy_gate_mode in {"positive_advantage", "quality_validity"}
         if first_token_entropy_gate_enabled:
             if "decision_first_token_entropy_gate" not in data:
                 raise ValueError(
-                    "decision_first_token_entropy_gate is required when positive-advantage first-token "
-                    "entropy gating is enabled"
+                    "decision_first_token_entropy_gate is required when gated first-token entropy "
+                    "regularization is enabled"
                 )
             fields.append("decision_first_token_entropy_gate")
         batch_num_decision_trajectories = tu.get_non_tensor_data(
