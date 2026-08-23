@@ -1,23 +1,20 @@
 workflow:
   max_steps: 6
   max_consecutive_failures: 2
-  no_improvement_limit: null
+  no_improvement_limit: 2
   improvement_epsilon: 0.000001
   reward_mode: step_iqa_sum_v1
   reward_alpha: 0.5
   reward_scale: 5.0
   step_reward_clip: 10.0
-  tool_call_cost: 0.0
-  tool_call_reward: 0.2
+  tool_call_cost: 0.05
   repeated_action_penalty: 0.10
-  # Uniform terminal penalty for malformed Qwen3 tool output, unknown functions,
-  # missing fields, multiple calls, and unregistered actions.
-  invalid_action_penalty: 10.0
+  invalid_action_penalty: 1.0
   failure_penalty: 0.50
-  stop_min_tool_calls: 3
+  stop_min_tool_calls: 1
   stop_min_best_gain: 0.05
   valid_stop_reward: 0.25
-  premature_stop_penalty: 0.0
+  premature_stop_penalty: 1.0
   forced_termination_penalty: 0.50
 
 tools_config: tools.yaml
@@ -35,20 +32,20 @@ experts:
 expert_resources:
   fog_expert:
     resource_name: fog_expert_policy
-    served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/fog
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/fog
   snow_expert:
     resource_name: snow_expert_policy
-    served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/snow
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/snow
   rain_expert:
     resource_name: rain_expert_policy
-    served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/rain
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/rain
   low_light_expert:
     resource_name: low_light_expert_policy
-    served_model_name: qwen3.5-9b
-    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/low_light
+    served_model_name: glm-4.1v-9b-thinking
+    policy_path: ../../../LlamaFactory/image_restoration_experts/outputs/low_light
 
 runtime:
   restoration:
@@ -72,7 +69,7 @@ vlm:
   backend: vllm_openai
   base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: qwen3.5-9b
+  model: glm-4.1v-9b-thinking
   timeout_seconds: 180
   max_tokens: 512
   temperature: 1.0
@@ -84,14 +81,13 @@ vlm:
 
 expert_vlm:
   backend: vllm_openai
-  base_url: http://127.0.0.1:8001/v1
+  base_url: http://127.0.0.1:8000/v1
   api_key: EMPTY
-  model: qwen3.5-9b
+  model: glm-4.1v-9b-thinking
   timeout_seconds: 180
   max_tokens: 512
   temperature: 1.0
   top_p: 0.95
   seed: 0
   return_token_ids: true
-  enable_thinking: false
   decision_mode: vlm_strict

@@ -31,6 +31,7 @@ Environment overrides:
   OLD_VERL_EXPERIMENT_NAME=custom-name  # optional; standard name is <expert>_MMDD[_续]
   OLD_VERL_LOG_DIR=/path/to/log-dir  # optional main/tool log directory override
   OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional checkpoint output override; YAML wins when unset
+  OLD_VERL_NUMA_BINDING=auto|numa0|off  # auto binds physical GPU0/1 runs to NUMA0
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
   RAY_BIN=/home/LXJ/anaconda3/envs/verl/bin/ray
 EOF
@@ -44,6 +45,46 @@ fi
 EXPERT="${1:-fog}"
 if [[ $# -gt 0 ]]; then
   shift
+fi
+
+# GPU0 and GPU1 are both attached to NUMA0. Re-exec the complete launcher
+# under numactl, rather than binding only main_ppo, so Ray, SGLang, and all
+# descendants inherit the CPU/memory policy. The 3/4-GPU launchers preserve
+# their cross-NUMA topology by setting OLD_VERL_NUMA_BINDING=off before they
+# delegate here. Preflight is intentionally left unbound.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
+VISIBLE_DEVICES_FOR_NUMA="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1}"
+NUMA_BINDING="${OLD_VERL_NUMA_BINDING:-auto}"
+NUMA_PREFLIGHT=0
+for NUMA_ARG in "$@"; do
+  if [[ "${NUMA_ARG}" == "--preflight" || "${NUMA_ARG}" == "--preflight="* ]]; then
+    NUMA_PREFLIGHT=1
+    break
+  fi
+done
+if [[ "${OLD_VERL_PREFLIGHT_ONLY:-0}" == "1" ]]; then
+  NUMA_PREFLIGHT=1
+fi
+if [[ "${NUMA_BINDING}" != "auto" && "${NUMA_BINDING}" != "numa0" && "${NUMA_BINDING}" != "off" ]]; then
+  echo "Invalid OLD_VERL_NUMA_BINDING=${NUMA_BINDING}; expected auto, numa0, or off." >&2
+  exit 2
+fi
+if [[ "${NUMA_BINDING}" == "numa0" && "${VISIBLE_DEVICES_FOR_NUMA}" != "0,1" ]]; then
+  echo "OLD_VERL_NUMA_BINDING=numa0 requires CUDA_VISIBLE_DEVICES=0,1; got ${VISIBLE_DEVICES_FOR_NUMA}." >&2
+  echo "Use OLD_VERL_NUMA_BINDING=off for the cross-NUMA 3/4-GPU topology." >&2
+  exit 2
+fi
+if [[ "${NUMA_PREFLIGHT}" != "1" && "${NUMA_BINDING}" != "off" && \
+      ( "${NUMA_BINDING}" == "numa0" || "${VISIBLE_DEVICES_FOR_NUMA}" == "0,1" ) && \
+      "${OLD_VERL_NUMA_REEXEC:-0}" != "1" ]]; then
+  if ! command -v numactl >/dev/null 2>&1; then
+    echo "numactl is required for the NUMA0-bound 2-GPU launcher but was not found." >&2
+    exit 1
+  fi
+  export OLD_VERL_NUMA_REEXEC=1
+  exec numactl --cpunodebind=0 --preferred=0 \
+    bash "${SCRIPT_PATH}" "${EXPERT}" "$@"
 fi
 
 CONFIG_PATH_OVERRIDE=""
@@ -92,8 +133,6 @@ case "${EXPERT}" in
     ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 EXAMPLE_DIR="${ROOT}/examples/image_restoration_multi_agent"
 BACKEND_ROOT="${EXAMPLE_DIR}/verl_backend"

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import gc
 import importlib
 import importlib.util
 import json
@@ -31,8 +30,6 @@ class RestorationToolkitInstance(Protocol):
     """Runtime subset used from the copied verl restoration toolkit."""
 
     def load_single_model(self, model_name: str) -> object | None: ...
-
-    def unload_all_models(self) -> None: ...
 
     def process_image_with_models(self, model_list: list[str], img_path: str, output_dir: str) -> str: ...
 
@@ -304,43 +301,20 @@ def _serve_jsonl(
     checkpoint: Path | None,
     device: torch.device,
 ) -> None:
-    if adapter != "verl_toolkit" and (len(model_names) != 1 or repo is None or checkpoint is None):
-        raise ValueError("persistent candidate worker requires one model, --repo, and --checkpoint")
-
-    toolkit: RestorationToolkitInstance | None = None
-    candidate_model: torch.nn.Module | None = None
-
-    def wake_models() -> None:
-        nonlocal toolkit, candidate_model
-        if adapter == "verl_toolkit":
-            if toolkit is None:
-                toolkit = _load_verl_toolkit(
-                    model_names,
-                    external_tools_root,
-                    device,
-                    preload=True,
-                    auto_unload=False,
-                )
-            else:
-                missing = [model_name for model_name in model_names if toolkit.load_single_model(model_name) is None]
-                if missing:
-                    raise RuntimeError(f"failed to reload verl restoration models: {missing}")
-        elif candidate_model is None:
-            assert repo is not None and checkpoint is not None
-            candidate_model = _load_candidate_model(model_names[0], repo, checkpoint, device)
-        torch.cuda.synchronize(device)
-
-    def sleep_models() -> None:
-        nonlocal candidate_model
-        if toolkit is not None:
-            toolkit.unload_all_models()
+    if adapter == "verl_toolkit":
+        toolkit = _load_verl_toolkit(
+            model_names,
+            external_tools_root,
+            device,
+            preload=True,
+            auto_unload=False,
+        )
         candidate_model = None
-        gc.collect()
-        with torch.cuda.device(device):
-            torch.cuda.empty_cache()
-        torch.cuda.synchronize(device)
-
-    wake_models()
+    else:
+        if len(model_names) != 1 or repo is None or checkpoint is None:
+            raise ValueError("persistent candidate worker requires one model, --repo, and --checkpoint")
+        toolkit = None
+        candidate_model = _load_candidate_model(model_names[0], repo, checkpoint, device)
 
     torch.cuda.synchronize(device)
     _emit(
@@ -360,35 +334,6 @@ def _serve_jsonl(
         try:
             request = json.loads(line)
             request_id = request.get("request_id")
-            command = request.get("command", "infer")
-            if command == "sleep":
-                sleep_models()
-                _emit(
-                    RESULT_PREFIX,
-                    {
-                        "request_id": request_id,
-                        "status": "success",
-                        "state": "sleeping",
-                        "device": str(device),
-                        "cuda_allocated_mb": torch.cuda.memory_allocated(device) / 1024**2,
-                    },
-                )
-                continue
-            if command == "wake":
-                wake_models()
-                _emit(
-                    RESULT_PREFIX,
-                    {
-                        "request_id": request_id,
-                        "status": "success",
-                        "state": "ready",
-                        "device": str(device),
-                        "cuda_allocated_mb": torch.cuda.memory_allocated(device) / 1024**2,
-                    },
-                )
-                continue
-            if command != "infer":
-                raise ValueError(f"unknown worker command: {command}")
             model_name = str(request["model"])
             if model_name not in model_names:
                 raise ValueError(f"model is not loaded by this worker: {model_name}")
@@ -398,8 +343,7 @@ def _serve_jsonl(
             if toolkit is not None:
                 _run_loaded_verl_toolkit(toolkit, model_name, input_path, output_path)
             else:
-                if candidate_model is None:
-                    raise RuntimeError("candidate restoration model is sleeping")
+                assert candidate_model is not None
                 _run_loaded_candidate(model_name, candidate_model, input_path, output_path, device)
             torch.cuda.synchronize(device)
             _emit(

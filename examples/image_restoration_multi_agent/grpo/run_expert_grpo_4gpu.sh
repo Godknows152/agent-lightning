@@ -22,6 +22,9 @@ export GRPO_PYTHON
 export GRPO_TOPOLOGY="4gpu"
 export GRPO_CONFIG_DIR="examples/image_restoration_multi_agent/grpo/configs"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+# The 4-GPU topology spans NUMA0 and NUMA1; keep it unbound rather than
+# forcing GPU2/3 traffic through NUMA0.
+export GRPO_NUMA_BINDING=off
 export IMAGE_RESTORATION_DEVICES="cuda:0,cuda:1,cuda:2,cuda:3"
 export IMAGE_RESTORATION_IQA_DEVICES="cuda:0,cuda:1,cuda:2,cuda:3"
 export IMAGE_RESTORATION_WORKERS_PER_DEVICE="1"

@@ -118,8 +118,8 @@ class PersistentToolRuntime:
         tools_config: Path,
         external_tools_root: Path,
         iqa_repo: Path,
-        restoration_devices: list[str],
-        iqa_devices: list[str],
+        restoration_device: str,
+        iqa_device: str,
         metrics: list[str],
         restoration_workers: int = 1,
         iqa_workers: int = 1,
@@ -128,19 +128,13 @@ class PersistentToolRuntime:
             raise ValueError("restoration_workers must be positive")
         if iqa_workers < 1:
             raise ValueError("iqa_workers must be positive")
-        if not restoration_devices:
-            raise ValueError("restoration_devices must not be empty")
-        if not iqa_devices:
-            raise ValueError("iqa_devices must not be empty")
-        self.restoration_devices = restoration_devices
-        self.iqa_devices = iqa_devices
+        self.restoration_device = restoration_device
+        self.iqa_device = iqa_device
         self.metrics = metrics
         self.restoration_workers = restoration_workers
         self.iqa_workers = iqa_workers
         self._workers: list[JsonlWorker] = []
         self._action_workers: dict[str, tuple[JsonlWorkerPool, str]] = {}
-        self._state = "starting"
-        self._state_lock = threading.Lock()
 
         tool_payload = yaml.safe_load(tools_config.read_text(encoding="utf-8"))
         tools = tool_payload.get("tools") if isinstance(tool_payload, dict) else None
@@ -159,7 +153,7 @@ class PersistentToolRuntime:
                     "--metrics",
                     ",".join(metrics),
                     "--device",
-                    iqa_devices[worker_index % len(iqa_devices)],
+                    iqa_device,
                     "--serve-jsonl",
                 ],
             )
@@ -183,7 +177,7 @@ class PersistentToolRuntime:
                     "--external-tools-root",
                     str(external_tools_root),
                     "--device",
-                    restoration_devices[worker_index % len(restoration_devices)],
+                    restoration_device,
                     "--serve-jsonl",
                 ],
             )
@@ -217,7 +211,7 @@ class PersistentToolRuntime:
                         "--checkpoint",
                         str((external_tools_root / runtime["checkpoint"]).resolve()),
                         "--device",
-                        restoration_devices[worker_index % len(restoration_devices)],
+                        restoration_device,
                         "--serve-jsonl",
                     ],
                 )
@@ -230,15 +224,8 @@ class PersistentToolRuntime:
         if set(self._action_workers) != action_names:
             missing = sorted(action_names - set(self._action_workers))
             raise RuntimeError(f"persistent restoration workers are missing actions: {missing}")
-        self._state = "ready"
-
-    def _require_ready(self) -> None:
-        with self._state_lock:
-            if self._state != "ready":
-                raise RuntimeError(f"tool runtime is not ready: state={self._state}")
 
     def restore(self, payload: dict[str, object]) -> dict[str, Any]:
-        self._require_ready()
         action = str(payload["action"])
         worker_and_model = self._action_workers.get(action)
         if worker_and_model is None:
@@ -253,61 +240,17 @@ class PersistentToolRuntime:
         )
 
     def evaluate(self, payload: dict[str, object]) -> dict[str, Any]:
-        self._require_ready()
         return self._iqa_pool.request({"input": str(payload["image_path"])})
 
-    def sleep(self) -> dict[str, object]:
-        """Unload every worker model after all rollout requests have completed."""
-        with self._state_lock:
-            if self._state == "sleeping":
-                return {"status": "sleeping"}
-            if self._state != "ready":
-                raise RuntimeError(f"cannot sleep tool runtime from state={self._state}")
-            self._state = "sleeping_pending"
-        try:
-            workers = [worker.request({"command": "sleep"}) for worker in self._workers]
-        except Exception:
-            with self._state_lock:
-                self._state = "failed"
-            raise
-        with self._state_lock:
-            self._state = "sleeping"
-        return {"status": "sleeping", "workers": workers}
-
-    def wake(self) -> dict[str, object]:
-        """Reload every worker model before the next rollout phase."""
-        with self._state_lock:
-            if self._state == "ready":
-                return {"status": "ready"}
-            if self._state != "sleeping":
-                raise RuntimeError(f"cannot wake tool runtime from state={self._state}")
-            self._state = "waking"
-        try:
-            workers = [worker.request({"command": "wake"}) for worker in self._workers]
-        except Exception:
-            with self._state_lock:
-                self._state = "failed"
-            raise
-        with self._state_lock:
-            self._state = "ready"
-        return {"status": "ready", "workers": workers}
-
     def health(self) -> dict[str, object]:
-        iqa_worker_devices = [str(worker.ready["device"]) for worker in self._iqa_pool.workers]
-        restoration_worker_devices = {
-            action: [str(worker.ready["device"]) for worker in worker_pool.workers]
-            for action, (worker_pool, _model) in self._action_workers.items()
-        }
         return {
-            "status": self._state,
-            "restoration_devices": self.restoration_devices,
-            "iqa_devices": self.iqa_devices,
+            "status": "ready",
+            "restoration_device": self.restoration_device,
+            "iqa_device": self.iqa_device,
             "actions": sorted(self._action_workers),
             "metrics": self.metrics,
             "restoration_workers": self.restoration_workers,
             "iqa_workers": self.iqa_workers,
-            "iqa_worker_devices": iqa_worker_devices,
-            "restoration_worker_devices": restoration_worker_devices,
             "workers": {worker.name: worker.ready for worker in self._workers},
         }
 
@@ -347,10 +290,6 @@ def _handler(runtime: PersistentToolRuntime) -> type[BaseHTTPRequestHandler]:
                     response = runtime.restore(cast(dict[str, object], payload))
                 elif self.path == "/evaluate":
                     response = runtime.evaluate(cast(dict[str, object], payload))
-                elif self.path == "/sleep":
-                    response = runtime.sleep()
-                elif self.path == "/wake":
-                    response = runtime.wake()
                 else:
                     self._write_json(HTTPStatus.NOT_FOUND, {"status": "failed", "error": "unknown endpoint"})
                     return
@@ -372,8 +311,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--external-tools-root", type=Path, required=True)
     parser.add_argument("--iqa-repo", type=Path, required=True)
     parser.add_argument("--metrics", default="maniqa,niqe,clipiqa,topiq_nr")
-    parser.add_argument("--restoration-devices", default="cuda:0")
-    parser.add_argument("--iqa-devices", default="cuda:0")
+    parser.add_argument("--restoration-device", default="cuda:1")
+    parser.add_argument("--iqa-device", default="cuda:0")
     parser.add_argument("--restoration-workers", type=int, default=1)
     parser.add_argument("--iqa-workers", type=int, default=1)
     return parser.parse_args()
@@ -385,8 +324,8 @@ def main() -> None:
         tools_config=args.tools_config.expanduser().resolve(),
         external_tools_root=args.external_tools_root.expanduser().resolve(),
         iqa_repo=args.iqa_repo.expanduser().resolve(),
-        restoration_devices=[item.strip() for item in args.restoration_devices.split(",") if item.strip()],
-        iqa_devices=[item.strip() for item in args.iqa_devices.split(",") if item.strip()],
+        restoration_device=args.restoration_device,
+        iqa_device=args.iqa_device,
         metrics=[item.strip() for item in args.metrics.split(",") if item.strip()],
         restoration_workers=args.restoration_workers,
         iqa_workers=args.iqa_workers,
@@ -401,8 +340,8 @@ def main() -> None:
     signal.signal(signal.SIGTERM, request_shutdown)
     print(
         f"Persistent tool runtime ready at http://{args.host}:{args.port}; "
-        f"IQA={args.iqa_devices} x{args.iqa_workers}, "
-        f"restoration={args.restoration_devices} x{args.restoration_workers}",
+        f"IQA={args.iqa_device} x{args.iqa_workers}, "
+        f"restoration={args.restoration_device} x{args.restoration_workers}",
         flush=True,
     )
     try:

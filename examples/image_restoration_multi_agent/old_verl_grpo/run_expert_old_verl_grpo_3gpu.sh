@@ -56,6 +56,9 @@ if [[ "${#VISIBLE_DEVICE_LIST[@]}" != "4" || "${VISIBLE_DEVICE_LIST[0]}" != "0" 
 fi
 
 export OLD_VERL_CUDA_VISIBLE_DEVICES="${VISIBLE_DEVICES}"
+# This topology uses physical GPU2/3 on NUMA1 in addition to GPU0/1 on
+# NUMA0; do not inherit the strict NUMA0 policy from the 2-GPU delegate.
+export OLD_VERL_NUMA_BINDING=off
 export OLD_VERL_CONFIG_NAME="${OLD_VERL_CONFIG_NAME:-${CONFIG_EXPERT}_config_3gpu}"
 export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${SCRIPT_DIR}/log/${CONFIG_EXPERT}/${OUTPUT_VERSION}/3gpu}"
 export OLD_VERL_INTERMEDIATE_DIR="${OLD_VERL_INTERMEDIATE_DIR:-/home/LXJ/tmp/agent_lightning_old_verl_restoration_3gpu}"

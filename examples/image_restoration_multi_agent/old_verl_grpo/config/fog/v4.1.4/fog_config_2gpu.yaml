@@ -37,7 +37,7 @@ actor_rollout_ref:
     decision_point_first_token_entropy_coeff_end: 0.0008
     decision_point_first_token_entropy_ramp_ratio: 0.05
     decision_point_first_token_entropy_stable_end_ratio: 0.05
-    decision_point_first_token_entropy_decay_end_ratio: 0.4
+    decision_point_first_token_entropy_decay_end_ratio: 0.8
 
 trainer:
   project_name: FogRL
