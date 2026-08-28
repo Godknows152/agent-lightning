@@ -13,33 +13,6 @@ case "$EXPERT" in
   *) echo "Unknown expert: $EXPERT" >&2; exit 2 ;;
 esac
 
-# The 2-GPU GRPO topology uses physical GPU0/1, both local to NUMA0. Bind the
-# whole launcher before starting the persistent tool server or Python trainer
-# so their child processes inherit the same policy. The 4-GPU wrapper exports
-# CUDA_VISIBLE_DEVICES=0,1,2,3 and therefore intentionally skips this block.
-SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-GRPO_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
-GRPO_NUMA_BINDING="${GRPO_NUMA_BINDING:-auto}"
-if [[ "${GRPO_NUMA_BINDING}" != "auto" && "${GRPO_NUMA_BINDING}" != "numa0" && "${GRPO_NUMA_BINDING}" != "off" ]]; then
-  echo "Invalid GRPO_NUMA_BINDING=${GRPO_NUMA_BINDING}; expected auto, numa0, or off." >&2
-  exit 2
-fi
-if [[ "${GRPO_NUMA_BINDING}" == "numa0" && "${GRPO_VISIBLE_DEVICES}" != "0,1" ]]; then
-  echo "GRPO_NUMA_BINDING=numa0 requires CUDA_VISIBLE_DEVICES=0,1; got ${GRPO_VISIBLE_DEVICES}." >&2
-  exit 2
-fi
-if [[ "${GRPO_NUMA_BINDING}" != "off" && \
-      ( "${GRPO_NUMA_BINDING}" == "numa0" || "${GRPO_VISIBLE_DEVICES}" == "0,1" ) && \
-      "${GRPO_NUMA_REEXEC:-0}" != "1" ]]; then
-  if ! command -v numactl >/dev/null 2>&1; then
-    echo "numactl is required for the NUMA0-bound 2-GPU GRPO launcher but was not found." >&2
-    exit 1
-  fi
-  export GRPO_NUMA_REEXEC=1
-  exec numactl --cpunodebind=0 --preferred=0 \
-    bash "${SCRIPT_PATH}" "${EXPERT}" "$@"
-fi
-
 ROOT="/home/LXJ/Python_Projects/Agent_Lightning"
 LOG_DIR="$ROOT/examples/image_restoration_multi_agent/grpo/log"
 mkdir -p "$LOG_DIR"

@@ -350,9 +350,6 @@ fi
 # Expose four physical GPUs to Actor/FSDP, two TP2 rollout replicas, restoration, and IQA.
 # The tool runtime creates one restoration/IQA worker on each logical cuda:0-3.
 export CUDA_VISIBLE_DEVICES="${OLD_VERL_CUDA_VISIBLE_DEVICES:-0,1,2,3}"
-# Four-GPU training spans both NUMA nodes, so it must not use the strict
-# NUMA0 policy used by the physical GPU0/1-only launcher.
-export OLD_VERL_NUMA_BINDING=off
 if [[ -d "${LOCAL_PYDEPS}" ]]; then
   export PYTHONPATH="${LOCAL_PYDEPS}:${BACKEND_ROOT}:${EXAMPLE_DIR}:${PYTHONPATH:-}"
 else
