@@ -325,6 +325,26 @@ def test_first_token_entropy_quality_validity_gate_weights_only_selected_traject
     assert policy_loss.item() == pytest.approx(-0.0002)
 
 
+def test_first_token_entropy_nonpositive_advantage_gate_weights_only_selected_trajectories(monkeypatch):
+    policy_loss, metrics = _run_first_token_ppo_loss(
+        monkeypatch,
+        normalized_entropies=[[0.2], [0.8]],
+        raw_entropies=[[0.4], [1.6]],
+        effective_counts=[[2.0], [5.0]],
+        legal_masses=[[0.8], [0.5]],
+        found=[[True], [True]],
+        global_trajectory_count=2,
+        entropy_gate=[True, False],
+        gate_mode="nonpositive_advantage",
+    )
+
+    assert metrics["actor/decision_point_first_token_gated_action_entropy_normalized"].aggregate() == pytest.approx(
+        0.1
+    )
+    assert metrics["actor/decision_point_first_token_entropy_gate_ratio"].aggregate() == pytest.approx(0.5)
+    assert policy_loss.item() == pytest.approx(-0.0002)
+
+
 def test_first_token_entropy_positive_advantage_gate_requires_batch_metadata(monkeypatch):
     with pytest.raises(ValueError, match="decision_first_token_entropy_gate is required"):
         _run_first_token_ppo_loss(

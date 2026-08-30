@@ -300,6 +300,21 @@ def _compute_positive_advantage_entropy_gate(
     return (trajectory_advantages.detach() > 0) & response_lengths.gt(0)
 
 
+def _compute_nonpositive_advantage_entropy_gate(
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Return a trajectory gate that is active for non-positive mean advantage."""
+
+    if advantages.ndim != 2 or response_mask.ndim != 2 or advantages.shape != response_mask.shape:
+        raise ValueError("advantages and response_mask must have identical [batch, response_length] shapes")
+
+    mask = response_mask.to(device=advantages.device, dtype=torch.bool)
+    response_lengths = mask.sum(dim=-1)
+    trajectory_advantages = (advantages * mask).sum(dim=-1) / response_lengths.clamp(min=1)
+    return (trajectory_advantages.detach() <= 0) & response_lengths.gt(0)
+
+
 _QUALITY_GATE_INVALID_PENALTY_REASONS = frozenset(
     {
         "no_tool_call",
@@ -2206,10 +2221,16 @@ class RayPPOTrainer:
                         )
                         if first_token_entropy_coeff_enabled and first_token_entropy_gate in {
                             "positive_advantage",
+                            "nonpositive_advantage",
                             "quality_validity",
                         }:
                             if first_token_entropy_gate == "positive_advantage":
                                 entropy_gate = _compute_positive_advantage_entropy_gate(
+                                    batch.batch["advantages"],
+                                    batch.batch["response_mask"],
+                                )
+                            elif first_token_entropy_gate == "nonpositive_advantage":
+                                entropy_gate = _compute_nonpositive_advantage_entropy_gate(
                                     batch.batch["advantages"],
                                     batch.batch["response_mask"],
                                 )

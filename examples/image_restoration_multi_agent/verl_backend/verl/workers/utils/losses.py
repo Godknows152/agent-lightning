@@ -124,9 +124,15 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             )
     decision_first_token_entropy_enabled = getattr(config, "decision_point_first_token_entropy_coeff", 0.0) > 0.0
     first_token_entropy_gate_mode = getattr(config, "decision_point_first_token_entropy_gate", "none")
-    if first_token_entropy_gate_mode not in {"none", "positive_advantage", "quality_validity"}:
+    if first_token_entropy_gate_mode not in {
+        "none",
+        "positive_advantage",
+        "nonpositive_advantage",
+        "quality_validity",
+    }:
         raise ValueError(
-            "decision_point_first_token_entropy_gate must be 'none', 'positive_advantage', or 'quality_validity'"
+            "decision_point_first_token_entropy_gate must be 'none', 'positive_advantage', "
+            "'nonpositive_advantage', or 'quality_validity'"
         )
     if decision_first_token_entropy_enabled and "decision_first_token_found" not in data:
         raise ValueError(
@@ -136,7 +142,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
     first_token_entropy_gate_enabled = False
     if decision_first_token_entropy_enabled:
         fields.append("decision_first_token_found")
-        first_token_entropy_gate_enabled = first_token_entropy_gate_mode in {"positive_advantage", "quality_validity"}
+        first_token_entropy_gate_enabled = first_token_entropy_gate_mode in {
+            "positive_advantage",
+            "nonpositive_advantage",
+            "quality_validity",
+        }
         if first_token_entropy_gate_enabled:
             if "decision_first_token_entropy_gate" not in data:
                 raise ValueError(

@@ -25,6 +25,7 @@ from tensordict import TensorDict
 
 from verl.trainer.ppo.ray_trainer import (
     RayPPOTrainer,
+    _compute_nonpositive_advantage_entropy_gate,
     _compute_positive_advantage_entropy_gate,
     _compute_quality_validity_entropy_gate,
 )
@@ -124,6 +125,30 @@ def test_positive_advantage_entropy_gate_uses_masked_trajectory_mean():
     gate = _compute_positive_advantage_entropy_gate(advantages, response_mask)
 
     assert gate.tolist() == [True, False, False]
+
+
+def test_nonpositive_advantage_entropy_gate_uses_masked_trajectory_mean():
+    advantages = torch.tensor(
+        [
+            [-0.5, -0.5, 0.0],
+            [0.25, -0.25, 100.0],
+            [0.5, 0.5, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
+    response_mask = torch.tensor(
+        [
+            [1, 1, 0],
+            [1, 1, 0],
+            [1, 1, 0],
+            [0, 0, 0],
+        ],
+        dtype=torch.bool,
+    )
+
+    gate = _compute_nonpositive_advantage_entropy_gate(advantages, response_mask)
+
+    assert gate.tolist() == [True, True, False, False]
 
 
 def test_quality_validity_entropy_gate_requires_quality_and_valid_actions():

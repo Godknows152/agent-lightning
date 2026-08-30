@@ -128,7 +128,8 @@ class ActorConfig(BaseConfig):
             entropy averaged within each trajectory.
         decision_point_first_token_entropy_gate (str): Quality gate applied to the first-token entropy term.
             ``none`` preserves the original behavior; ``positive_advantage`` keeps the entropy contribution only
-            for trajectories whose outcome advantage is positive; ``quality_validity`` additionally requires
+            for trajectories whose outcome advantage is positive; ``nonpositive_advantage`` keeps it only for
+            trajectories whose mean outcome advantage is non-positive; ``quality_validity`` additionally requires
             positive pure-image reward and a valid, non-repetitive restoration trajectory.
         decision_point_first_token_entropy_min_pure_image_reward (float): Strict lower bound for the pure-image
             reward when ``quality_validity`` gating is enabled.
@@ -255,10 +256,15 @@ class ActorConfig(BaseConfig):
             raise ValueError("decision_point_entropy_coeff must be non-negative")
         if self.decision_point_first_token_entropy_coeff < 0:
             raise ValueError("decision_point_first_token_entropy_coeff must be non-negative")
-        if self.decision_point_first_token_entropy_gate not in {"none", "positive_advantage", "quality_validity"}:
+        if self.decision_point_first_token_entropy_gate not in {
+            "none",
+            "positive_advantage",
+            "nonpositive_advantage",
+            "quality_validity",
+        }:
             raise ValueError(
-                "decision_point_first_token_entropy_gate must be 'none', 'positive_advantage', or "
-                "'quality_validity'"
+                "decision_point_first_token_entropy_gate must be 'none', 'positive_advantage', "
+                "'nonpositive_advantage', or 'quality_validity'"
             )
         if not math.isfinite(self.decision_point_first_token_entropy_min_pure_image_reward):
             raise ValueError("decision_point_first_token_entropy_min_pure_image_reward must be finite")

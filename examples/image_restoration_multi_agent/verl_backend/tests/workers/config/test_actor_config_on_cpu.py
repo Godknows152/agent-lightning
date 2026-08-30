@@ -203,6 +203,15 @@ class TestActorConfig(unittest.TestCase):
         )
         self.assertEqual(quality_config.decision_point_first_token_entropy_gate, "quality_validity")
 
+        nonpositive_config = ActorConfig(
+            strategy="fsdp",
+            decision_point_first_token_entropy_gate="nonpositive_advantage",
+            use_dynamic_bsz=True,
+            optim=optim,
+            rollout_n=1,
+        )
+        self.assertEqual(nonpositive_config.decision_point_first_token_entropy_gate, "nonpositive_advantage")
+
         with self.assertRaises((ValueError, AssertionError)) as cm:
             ActorConfig(
                 strategy="fsdp",

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Old-verl GRPO launcher for fog expert (v4.1.4)
-# v4.1.4: Quality-and-validity-gated legal-action first-token entropy with cosine decay (0.008 -> 0.0008).
+# v4.1.4: Non-positive-advantage-gated legal-action first-token entropy with cosine decay (0.008 -> 0.0008).
 set -euo pipefail
 
 EXPERT="fog"
