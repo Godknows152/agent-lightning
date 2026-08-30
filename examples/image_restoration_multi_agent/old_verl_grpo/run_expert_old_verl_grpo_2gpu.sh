@@ -47,6 +47,7 @@ if [[ $# -gt 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_PATH="${SCRIPT_DIR}/$(basename "${BASH_SOURCE[0]}")"
 
 CONFIG_PATH_OVERRIDE=""
 CONFIG_NAME_OVERRIDE=""
