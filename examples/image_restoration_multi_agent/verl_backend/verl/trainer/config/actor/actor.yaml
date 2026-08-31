@@ -94,13 +94,13 @@ decision_point_entropy_coeff: 0.0
 # Normalized legal-action first-token entropy coefficient, averaged within each trajectory
 decision_point_first_token_entropy_coeff: 0.0
 
-# Quality gate for first-token entropy: none, positive_advantage, nonpositive_advantage, or quality_validity
+# Quality gate for first-token entropy: none, positive_advantage, nonpositive_advantage, quality_validity, or reverse_quality_validity
 decision_point_first_token_entropy_gate: none
 
-# Strict lower bound for pure-image reward in quality_validity mode
+# Strict lower bound for pure-image reward in quality_validity and reverse_quality_validity modes
 decision_point_first_token_entropy_min_pure_image_reward: 0.0
 
-# Maximum repeated-action occurrences allowed in quality_validity mode
+# Maximum repeated-action occurrences allowed in quality_validity and reverse_quality_validity modes
 decision_point_first_token_entropy_max_repeated_actions: 1
 
 # Schedule for the first-token entropy coefficient: constant or wsd_cosine

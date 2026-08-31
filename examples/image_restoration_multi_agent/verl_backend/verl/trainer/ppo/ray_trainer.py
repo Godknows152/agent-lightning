@@ -407,6 +407,83 @@ def _compute_quality_validity_entropy_gate(
     return positive_advantage & quality & valid & repeats_ok & response_lengths.gt(0)
 
 
+def _compute_reverse_quality_validity_entropy_gate(
+    advantages: torch.Tensor,
+    response_mask: torch.Tensor,
+    non_tensor_batch: dict[str, Any],
+    *,
+    min_pure_image_reward: float = 0.0,
+    max_repeated_actions: int = 1,
+) -> torch.Tensor:
+    """Open entropy on relative or image-quality failure while retaining validity checks."""
+
+    if advantages.ndim != 2 or response_mask.ndim != 2 or advantages.shape != response_mask.shape:
+        raise ValueError("advantages and response_mask must have identical [batch, response_length] shapes")
+    if not np.isfinite(min_pure_image_reward):
+        raise ValueError("min_pure_image_reward must be finite")
+    if max_repeated_actions < 0:
+        raise ValueError("max_repeated_actions must be non-negative")
+
+    batch_size = advantages.shape[0]
+    mask = response_mask.to(device=advantages.device, dtype=torch.bool)
+    response_lengths = mask.sum(dim=-1)
+    trajectory_advantages = (advantages * mask).sum(dim=-1) / response_lengths.clamp(min=1)
+    nonpositive_advantage = trajectory_advantages.detach() <= 0
+
+    pure_image_values = non_tensor_batch.get("pure_image_restoration_reward")
+    quality_failure_mask = np.zeros(batch_size, dtype=np.bool_)
+    if pure_image_values is not None:
+        values = np.asarray(pure_image_values, dtype=object)
+        if values.shape == ():
+            values = np.full(batch_size, values.item(), dtype=object)
+        if len(values) != batch_size:
+            raise ValueError(
+                "Expected pure_image_restoration_reward length "
+                f"{batch_size}, got {len(values)}"
+            )
+        for index, value in enumerate(values):
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError):
+                continue
+            quality_failure_mask[index] = np.isfinite(numeric_value) and numeric_value <= min_pure_image_reward
+
+    invalid_trajectory = np.zeros(batch_size, dtype=np.bool_)
+    repeated_action_counts = np.zeros(batch_size, dtype=np.int64)
+    penalty_values = non_tensor_batch.get("penalty_records")
+    if penalty_values is not None:
+        records = np.asarray(penalty_values, dtype=object)
+        if records.shape == ():
+            records = np.full(batch_size, records.item(), dtype=object)
+        if len(records) != batch_size:
+            raise ValueError(f"Expected penalty_records length {batch_size}, got {len(records)}")
+        for index, trajectory_records in enumerate(records):
+            if not isinstance(trajectory_records, (list, tuple, np.ndarray)):
+                continue
+            for record in trajectory_records:
+                if not isinstance(record, dict):
+                    continue
+                reason = str(record.get("reason", "")).strip()
+                try:
+                    occurrences = max(1, int(record.get("occurrences", 1)))
+                except (TypeError, ValueError):
+                    occurrences = 1
+                if reason in _QUALITY_GATE_INVALID_PENALTY_REASONS:
+                    invalid_trajectory[index] = True
+                if reason == "repeated_restoration_action":
+                    repeated_action_counts[index] += occurrences
+
+    valid = torch.as_tensor(~invalid_trajectory, dtype=torch.bool, device=advantages.device)
+    repeats_ok = torch.as_tensor(
+        repeated_action_counts <= max_repeated_actions,
+        dtype=torch.bool,
+        device=advantages.device,
+    )
+    quality_failure = torch.as_tensor(quality_failure_mask, dtype=torch.bool, device=advantages.device)
+    response_exists = response_lengths.gt(0)
+    return (nonpositive_advantage | quality_failure) & valid & repeats_ok & response_exists
+
+
 class RayPPOTrainer:
     """Distributed PPO trainer using Ray for scalable reinforcement learning.
 
@@ -2223,6 +2300,7 @@ class RayPPOTrainer:
                             "positive_advantage",
                             "nonpositive_advantage",
                             "quality_validity",
+                            "reverse_quality_validity",
                         }:
                             if first_token_entropy_gate == "positive_advantage":
                                 entropy_gate = _compute_positive_advantage_entropy_gate(
@@ -2233,6 +2311,22 @@ class RayPPOTrainer:
                                 entropy_gate = _compute_nonpositive_advantage_entropy_gate(
                                     batch.batch["advantages"],
                                     batch.batch["response_mask"],
+                                )
+                            elif first_token_entropy_gate == "reverse_quality_validity":
+                                entropy_gate = _compute_reverse_quality_validity_entropy_gate(
+                                    batch.batch["advantages"],
+                                    batch.batch["response_mask"],
+                                    batch.non_tensor_batch,
+                                    min_pure_image_reward=float(
+                                        self.config.actor_rollout_ref.actor.get(
+                                            "decision_point_first_token_entropy_min_pure_image_reward", 0.0
+                                        )
+                                    ),
+                                    max_repeated_actions=int(
+                                        self.config.actor_rollout_ref.actor.get(
+                                            "decision_point_first_token_entropy_max_repeated_actions", 1
+                                        )
+                                    ),
                                 )
                             else:
                                 entropy_gate = _compute_quality_validity_entropy_gate(

@@ -129,10 +129,11 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         "positive_advantage",
         "nonpositive_advantage",
         "quality_validity",
+        "reverse_quality_validity",
     }:
         raise ValueError(
             "decision_point_first_token_entropy_gate must be 'none', 'positive_advantage', "
-            "'nonpositive_advantage', or 'quality_validity'"
+            "'nonpositive_advantage', 'quality_validity', or 'reverse_quality_validity'"
         )
     if decision_first_token_entropy_enabled and "decision_first_token_found" not in data:
         raise ValueError(
@@ -147,6 +148,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             "positive_advantage",
             "nonpositive_advantage",
             "quality_validity",
+            "reverse_quality_validity",
         }
         if first_token_entropy_gate_enabled:
             if "decision_first_token_entropy_gate" not in data:
