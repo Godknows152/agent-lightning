@@ -27,8 +27,8 @@ Environment overrides:
   OLD_VERL_CLEAR_TOOL_LOGS=1  # clear this expert's tool logs before training
   OLD_VERL_SHOW_KNOWN_WARNINGS=1  # show otherwise-suppressed third-party warning spam
   OLD_VERL_RESUME_MODE=auto|disable|resume_path
-  OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N  # adds the "_续" suffix
-  OLD_VERL_EXPERIMENT_NAME=custom-name  # optional; defaults to the version config name, with [_续] on resume
+  OLD_VERL_RESUME_FROM_PATH=/path/to/global_step_N
+  # The SwanLab experiment name is always read from trainer.experiment_name in the Hydra config.
   OLD_VERL_LOG_DIR=/path/to/log-dir  # optional main/tool log directory override
   OLD_VERL_OUTPUT_DIR=/path/to/output-dir  # optional checkpoint output override; YAML wins when unset
   PYTHON_BIN=/home/LXJ/anaconda3/envs/verl/bin/python
@@ -144,7 +144,7 @@ VAL_LIMIT_ARGS=()
 CONFIG_OVERRIDES=()
 HYDRA_OVERRIDES=()
 PROJECT_NAME_OVERRIDE="${OLD_VERL_PROJECT_NAME:-}"
-EXPERIMENT_NAME_OVERRIDE="${OLD_VERL_EXPERIMENT_NAME:-}"
+EXPERIMENT_NAME_OVERRIDE=""
 OUTPUT_DIR_OVERRIDE="${OLD_VERL_OUTPUT_DIR:-}"
 SWANLAB_LOG_DIR_OVERRIDE="${OLD_VERL_SWANLAB_LOG_DIR:-}"
 SWANLAB_MODE_OVERRIDE=""
@@ -169,7 +169,8 @@ fi
 for override in "$@"; do
   case "${override}" in
     trainer.experiment_name=*)
-      EXPERIMENT_NAME_OVERRIDE="${override#trainer.experiment_name=}"
+      echo "trainer.experiment_name must be set in the Hydra config, not on the command line" >&2
+      exit 2
       ;;
     trainer.default_local_dir=*)
       OUTPUT_DIR_OVERRIDE="${override#trainer.default_local_dir=}"
@@ -260,9 +261,7 @@ fi
 if [[ "${RESUME_PATH_WAS_EXPLICIT}" != "1" && "${CONFIG_RESUME_FROM_PATH}" != "-" ]]; then
   RESUME_FROM_PATH_OVERRIDE="${CONFIG_RESUME_FROM_PATH}"
 fi
-if [[ -z "${EXPERIMENT_NAME_OVERRIDE}" ]]; then
-  EXPERIMENT_NAME_OVERRIDE="${CONFIG_EXPERIMENT_NAME}"
-fi
+EXPERIMENT_NAME_OVERRIDE="${CONFIG_EXPERIMENT_NAME}"
 if [[ -z "${OUTPUT_DIR_OVERRIDE}" ]]; then
   OUTPUT_DIR_OVERRIDE="${CONFIG_OUTPUT_DIR}"
 fi
@@ -291,9 +290,6 @@ IFS=$'\t' read -r \
 
 if [[ "${RESUME_FROM_PATH_OVERRIDE}" == "-" ]]; then
   RESUME_FROM_PATH_OVERRIDE=""
-fi
-if [[ "${SMOKE}" == "1" ]]; then
-  EXPERIMENT_NAME_OVERRIDE="${EXPERIMENT_NAME_OVERRIDE}_smoke"
 fi
 if [[ -z "${SWANLAB_LOG_DIR_OVERRIDE}" ]]; then
   SWANLAB_LOG_DIR_OVERRIDE="${RESOLVED_SWANLAB_LOG_DIR}"

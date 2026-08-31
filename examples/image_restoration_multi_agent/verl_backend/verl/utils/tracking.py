@@ -130,9 +130,7 @@ class Tracking:
             SWANLAB_API_KEY = os.environ.get("SWANLAB_API_KEY", None)
             SWANLAB_LOG_DIR = os.environ.get("SWANLAB_LOG_DIR", "swanlog")
             SWANLAB_MODE = os.environ.get("SWANLAB_MODE", "cloud")
-            # SWANLAB_RESUME: explicit escape hatch ("must"/"allow") that overrides
-            # the automatic resume-aware continuation below.
-            SWANLAB_RESUME = os.environ.get("SWANLAB_RESUME", None)
+            swanlab_resume = None
             SWANLAB_RESUME_RUN_ID = None
             if SWANLAB_API_KEY:
                 swanlab.login(SWANLAB_API_KEY)  # NOTE: previous login information will be overwritten
@@ -141,12 +139,10 @@ class Tracking:
                 config = {}  # make sure config is not None, otherwise **config will raise error
 
             # Resume-aware SwanLab continuation: when verl resumes training from a
-            # checkpoint (trainer.resume_mode == "resume_path"), append new metrics to
-            # the ORIGINAL SwanLab experiment instead of creating a new one. The
-            # original experiment name is persisted in a marker file inside
-            # trainer.default_local_dir at first launch, so any launch script can pass
-            # an arbitrary experiment_name when resuming; it is replaced by the
-            # recorded one before swanlab.init.
+            # checkpoint, append new metrics to the original SwanLab run. The run ID
+            # is persisted in a marker file inside
+            # trainer.default_local_dir at first launch. The experiment name remains
+            # the value composed from the Hydra configuration.
             trainer_cfg = config.get("trainer", {}) if isinstance(config, dict) else {}
             default_local_dir = trainer_cfg.get("default_local_dir")
             marker_path = os.path.join(default_local_dir, ".swanlab_experiment.json") if default_local_dir else None
@@ -165,7 +161,7 @@ class Tracking:
                     is_resume_launch = find_latest_ckpt_path(ckpt_dir) is not None
                 except Exception:
                     is_resume_launch = False
-            if SWANLAB_RESUME is None and is_resume_launch:
+            if is_resume_launch:
                 if marker_path and os.path.exists(marker_path):
                     try:
                         with open(marker_path, encoding="utf-8") as f:
@@ -174,18 +170,21 @@ class Tracking:
                         marker_data = {}
                     prev_experiment_name = marker_data.get("experiment_name")
                     prev_run_id = marker_data.get("run_id")
-                    if prev_experiment_name:
-                        experiment_name = prev_experiment_name
-                        if prev_run_id:
-                            SWANLAB_RESUME = "must"
-                            SWANLAB_RESUME_RUN_ID = prev_run_id
-                        else:
-                            # Name-only marker: swanlab asserts on must without a run id.
-                            SWANLAB_RESUME = "allow"
+                    if prev_experiment_name and prev_experiment_name != experiment_name:
+                        raise ValueError(
+                            "Hydra trainer.experiment_name does not match the existing SwanLab marker: "
+                            f"{experiment_name!r} != {prev_experiment_name!r}"
+                        )
+                    if prev_run_id:
+                        swanlab_resume = "must"
+                        SWANLAB_RESUME_RUN_ID = prev_run_id
+                    elif prev_experiment_name:
+                        # Name-only marker: swanlab asserts on must without a run id.
+                        swanlab_resume = "allow"
                 else:
                     # Legacy experiment without a marker: try to continue under the
                     # passed experiment_name, fall back to creating a new experiment.
-                    SWANLAB_RESUME = "allow"
+                    swanlab_resume = "allow"
             init_kwargs = {}
             if SWANLAB_RESUME_RUN_ID:
                 init_kwargs["id"] = SWANLAB_RESUME_RUN_ID
@@ -195,12 +194,12 @@ class Tracking:
                 config={"FRAMEWORK": "verl", **config},
                 logdir=SWANLAB_LOG_DIR,
                 mode=SWANLAB_MODE,
-                resume=SWANLAB_RESUME,
+                resume=swanlab_resume,
                 **init_kwargs,
             )
             self.logger["swanlab"] = swanlab
             # Persist this run's experiment name so future resumes can continue it.
-            if marker_path and SWANLAB_RESUME != "must":
+            if marker_path and swanlab_resume != "must":
                 os.makedirs(default_local_dir, exist_ok=True)
                 run_id = None
                 try:

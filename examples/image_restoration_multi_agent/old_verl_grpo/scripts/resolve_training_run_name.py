@@ -1,11 +1,11 @@
-"""Resolve standardized old-VERL output and SwanLab experiment names.
+"""Resolve old-VERL output paths and checkpoints from the Hydra experiment name.
 
 CLI usage:
     python resolve_training_run_name.py --expert rain --output-root /path/to/outputs
 
 The command prints four tab-separated fields for the Bash launcher:
-experiment name, output directory, SwanLab log directory, and the checkpoint
-path selected for resume (or ``-`` for a fresh run).
+the unchanged Hydra experiment name, output directory, SwanLab log directory,
+and the checkpoint path selected for resume (or ``-`` for a fresh run).
 """
 
 from __future__ import annotations
@@ -71,17 +71,17 @@ def resolve_run_naming(
     experiment_name: str | None = None,
     output_dir: Path | None = None,
 ) -> RunNaming:
-    """Resolve the shared output directory and SwanLab experiment name."""
+    """Resolve output paths without changing the Hydra experiment name."""
 
     if resume_mode not in {"auto", "disable", "resume_path"}:
         raise ValueError(f"Unsupported resume mode: {resume_mode!r}")
 
-    current_time = now or datetime.now()
-    base_name = f"{expert}_{current_time:%m%d}"
+    del now
     output_root = output_root.expanduser().resolve()
     explicit_output_dir = output_dir.expanduser().resolve() if output_dir is not None else None
-    fresh_output_dir = explicit_output_dir or output_root / base_name
-    continuation_output_dir = explicit_output_dir or output_root / f"{base_name}_续"
+    if not experiment_name:
+        raise ValueError("experiment_name must come from the composed Hydra config")
+    resolved_output_dir = explicit_output_dir or output_root / experiment_name
 
     checkpoint: Path | None = None
     if resume_from_path is not None:
@@ -91,19 +91,10 @@ def resolve_run_naming(
     elif resume_mode == "resume_path":
         raise ValueError("resume_mode='resume_path' requires resume_from_path")
     elif resume_mode == "auto":
-        # Prefer an already-created continuation directory when restarting a
-        # continuation, then fall back to today's fresh-run directory.
-        checkpoint = find_latest_checkpoint(continuation_output_dir)
-        if checkpoint is None:
-            checkpoint = find_latest_checkpoint(fresh_output_dir)
+        checkpoint = find_latest_checkpoint(resolved_output_dir)
 
-    is_continuation = checkpoint is not None
-    resolved_name = experiment_name or base_name
-    if is_continuation and not resolved_name.endswith("_续"):
-        resolved_name = f"{resolved_name}_续"
-    resolved_output_dir = explicit_output_dir or output_root / resolved_name
     return RunNaming(
-        experiment_name=resolved_name,
+        experiment_name=experiment_name,
         output_dir=resolved_output_dir,
         swanlab_log_dir=resolved_output_dir / "swanlab",
         resume_from_path=checkpoint,
