@@ -757,6 +757,20 @@ class FSDPEngine(BaseEngine):
                 batch_num_first_token_decision_points=int(batch_num_first_token_decision_points.item()),
                 batch_num_decision_trajectories=int(batch_num_decision_trajectories.item()),
             )
+            if "decision_first_token_entropy_gate" in data:
+                gated_trajectories = data["decision_first_token_entropy_gate"].bool() & decision_first_token_found.any(
+                    dim=-1
+                )
+                batch_num_gated_decision_trajectories = gated_trajectories.sum().to(get_device_id())
+                torch.distributed.all_reduce(
+                    batch_num_gated_decision_trajectories,
+                    op=torch.distributed.ReduceOp.SUM,
+                    group=self.get_data_parallel_group(),
+                )
+                tu.assign_non_tensor(
+                    data,
+                    batch_num_gated_decision_trajectories=int(batch_num_gated_decision_trajectories.item()),
+                )
         tu.assign_non_tensor(data, dp_size=self.get_data_parallel_size())
 
         micro_batches, indices = prepare_micro_batches(

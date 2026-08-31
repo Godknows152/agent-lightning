@@ -139,6 +139,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             "decision_first_token_found is required when decision_point_first_token_entropy_coeff is positive"
         )
     batch_num_decision_trajectories = None
+    batch_num_gated_decision_trajectories = None
     first_token_entropy_gate_enabled = False
     if decision_first_token_entropy_enabled:
         fields.append("decision_first_token_found")
@@ -154,6 +155,16 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
                     "regularization is enabled"
                 )
             fields.append("decision_first_token_entropy_gate")
+            batch_num_gated_decision_trajectories = tu.get_non_tensor_data(
+                data,
+                key="batch_num_gated_decision_trajectories",
+                default=None,
+            )
+            if batch_num_gated_decision_trajectories is None:
+                raise ValueError(
+                    "batch_num_gated_decision_trajectories is required when gated first-token entropy "
+                    "regularization is enabled"
+                )
         batch_num_decision_trajectories = tu.get_non_tensor_data(
             data=data,
             key="batch_num_decision_trajectories",
@@ -245,13 +256,17 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
         def global_trajectory_mean(
             values: torch.Tensor,
             trajectory_weights: torch.Tensor | None = None,
+            denominator: int | None = None,
         ) -> torch.Tensor:
             per_trajectory = (values * first_token_found).sum(dim=-1) / local_decision_counts.clamp(min=1)
             if trajectory_weights is not None:
                 per_trajectory = per_trajectory * trajectory_weights
+            denominator = batch_num_decision_trajectories if denominator is None else denominator
+            if denominator <= 0:
+                return values.sum() * 0.0
             return (
                 per_trajectory[local_valid_trajectories].sum()
-                / batch_num_decision_trajectories
+                / denominator
                 * config.global_batch_info["dp_size"]
             )
 
@@ -262,6 +277,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
                 regularized_first_token_entropy = global_trajectory_mean(
                     decision_first_token_normalized_entropy,
                     first_token_entropy_gate,
+                    batch_num_gated_decision_trajectories,
                 )
                 first_token_entropy_gate_ratio = (
                     first_token_entropy_gate[local_valid_trajectories].sum()

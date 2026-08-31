@@ -228,6 +228,14 @@ def _run_first_token_ppo_loss(
         dp_size=dp_size,
         global_batch_size=dp_size,
     )
+    if entropy_gate is not None:
+        tu.assign_non_tensor(
+            data,
+            batch_num_gated_decision_trajectories=sum(
+                bool(gate) and any(found_row)
+                for gate, found_row in zip(entropy_gate, found, strict=True)
+            ),
+        )
     if scheduled_coeff is not None:
         tu.assign_non_tensor(data, decision_point_first_token_entropy_coeff=scheduled_coeff)
 
@@ -300,9 +308,9 @@ def test_first_token_entropy_positive_advantage_gate_weights_only_selected_traje
     assert metrics["actor/decision_point_first_token_action_entropy_normalized"].aggregate() == pytest.approx(0.5)
     assert metrics[
         "actor/decision_point_first_token_gated_action_entropy_normalized"
-    ].aggregate() == pytest.approx(0.1)
+    ].aggregate() == pytest.approx(0.2)
     assert metrics["actor/decision_point_first_token_entropy_gate_ratio"].aggregate() == pytest.approx(0.5)
-    assert policy_loss.item() == pytest.approx(-0.0002)
+    assert policy_loss.item() == pytest.approx(-0.0004)
 
 
 def test_first_token_entropy_quality_validity_gate_weights_only_selected_trajectories(monkeypatch):
@@ -319,10 +327,10 @@ def test_first_token_entropy_quality_validity_gate_weights_only_selected_traject
     )
 
     assert metrics["actor/decision_point_first_token_gated_action_entropy_normalized"].aggregate() == pytest.approx(
-        0.1
+        0.2
     )
     assert metrics["actor/decision_point_first_token_entropy_gate_ratio"].aggregate() == pytest.approx(0.5)
-    assert policy_loss.item() == pytest.approx(-0.0002)
+    assert policy_loss.item() == pytest.approx(-0.0004)
 
 
 def test_first_token_entropy_nonpositive_advantage_gate_weights_only_selected_trajectories(monkeypatch):
@@ -339,10 +347,10 @@ def test_first_token_entropy_nonpositive_advantage_gate_weights_only_selected_tr
     )
 
     assert metrics["actor/decision_point_first_token_gated_action_entropy_normalized"].aggregate() == pytest.approx(
-        0.1
+        0.2
     )
     assert metrics["actor/decision_point_first_token_entropy_gate_ratio"].aggregate() == pytest.approx(0.5)
-    assert policy_loss.item() == pytest.approx(-0.0002)
+    assert policy_loss.item() == pytest.approx(-0.0004)
 
 
 def test_first_token_entropy_positive_advantage_gate_requires_batch_metadata(monkeypatch):
