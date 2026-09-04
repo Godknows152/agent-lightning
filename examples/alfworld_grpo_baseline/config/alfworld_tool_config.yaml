@@ -1,0 +1,26 @@
+tools:
+  - class_name: "alfworld_baseline.alfworld_tool.ALFWorldTool"
+    config:
+      type: native
+      max_steps: 50
+      # Protocol penalties are additive per assistant turn.  ALFWorld's native
+      # success reward is normally +1, so -0.05 keeps one error small relative
+      # to task completion while still making malformed/illegal outputs visible.
+      format_penalty: -0.05
+      invalid_action_penalty: -0.05
+      unknown_tool_penalty: -0.05
+      no_tool_call_penalty: -0.05
+      malformed_tool_call_penalty: -0.05
+    tool_schema:
+      type: function
+      function:
+        name: alfworld_action
+        description: Execute exactly one ALFWorld text action. Copy the action from the current admissible action list.
+        parameters:
+          type: object
+          properties:
+            action:
+              type: string
+              description: One exact action string from the current admissible action list.
+          required: [action]
+          additionalProperties: false

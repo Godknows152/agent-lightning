@@ -1,0 +1,40 @@
+{#
+  Compatibility template.  The active baseline uses the model's native
+  Qwen2.5 tokenizer template (``custom_chat_template`` is unset).  If an
+  external callers should leave this unset and use the model's native Qwen2.5
+  template; this compatibility file is retained for older XML-only callers.
+#}
+{%- if tools %}
+{{- '<|im_start|>system\n' }}
+{%- if messages[0]['role'] == 'system' %}{{- messages[0]['content'] }}{%- else %}{{- 'You are Qwen, created by Alibaba Cloud. You are a helpful assistant.' }}{%- endif %}
+{{- '\n\n# Tools\n\nYou must call exactly one function on every assistant turn. Function signatures are provided inside <tools></tools> XML tags:\n<tools>' }}
+{%- for tool in tools %}{{- '\n' }}{{- tool | tojson }}{%- endfor %}
+{{- '\n</tools>\n\nSTRICT OVERRIDE: output exactly one native Qwen XML call and no other text. Do not output Hermes JSON, reasoning, Markdown, or a prefix/suffix. The required shape is:\n<tool_call>\n<function=alfworld_action>\n<parameter=action>\nEXACTLY ONE ACTION COPIED FROM THE CURRENT LIST\n</parameter>\n</function>\n</tool_call><|im_end|>\n' }}
+{%- else %}
+{%- if messages[0]['role'] == 'system' %}{{- '<|im_start|>system\n' + messages[0]['content'] + '<|im_end|>\n' }}{%- else %}{{- '<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n' }}{%- endif %}
+{%- endif %}
+{%- for message in messages %}
+{%- if message.role == 'user' or (message.role == 'system' and not loop.first) or (message.role == 'assistant' and not message.tool_calls) %}
+{{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' }}
+{%- elif message.role == 'assistant' %}
+{{- '<|im_start|>assistant' }}{%- if message.content %}{{- '\n' + message.content }}{%- endif %}
+{%- for tool_call in message.tool_calls %}
+{%- if tool_call.function is defined %}{%- set tool_call = tool_call.function %}{%- endif %}
+{{- '\n<tool_call>\n<function=' + tool_call.name + '>\n' }}
+{%- if tool_call.arguments is mapping %}
+{%- for args_name, args_value in tool_call.arguments|items %}
+{{- '<parameter=' + args_name + '>\n' }}
+{%- if args_value is mapping or (args_value is sequence and args_value is not string) %}{{- args_value | tojson | safe }}{%- else %}{{- args_value | string }}{%- endif %}
+{{- '\n</parameter>\n' }}
+{%- endfor %}
+{%- endif %}
+{{- '</function>\n</tool_call>' }}
+{%- endfor %}
+{{- '<|im_end|>\n' }}
+{%- elif message.role == 'tool' %}
+{%- if loop.index0 == 0 or messages[loop.index0 - 1].role != 'tool' %}{{- '<|im_start|>user' }}{%- endif %}
+{{- '\n<tool_response>\n' + message.content + '\n</tool_response>' }}
+{%- if loop.last or messages[loop.index0 + 1].role != 'tool' %}{{- '<|im_end|>\n' }}{%- endif %}
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}{{- '<|im_start|>assistant\n' }}{%- endif %}

@@ -1,0 +1,10 @@
+# ALFWorld GRPO v1 for Qwen3.5-2B and its native XML tool calls.
+hydra:
+  searchpath:
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+
+defaults:
+  - /alfworld_common_config_2gpu
+  - /model_profiles@_global_: qwen35_2b
+  - _self_

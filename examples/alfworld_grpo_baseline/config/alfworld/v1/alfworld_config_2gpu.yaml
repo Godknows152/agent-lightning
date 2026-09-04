@@ -1,0 +1,21 @@
+# Legacy alias for Qwen2.5-1.5B. New commands use config/alfworld/qwen25_1_5b/v1.
+hydra:
+  searchpath:
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+
+defaults:
+  - /alfworld_common_config_2gpu
+  - /model_profiles@_global_: qwen25_1_5b
+  - _self_
+
+trainer:
+  project_name: ALFWorldRL
+  experiment_name: alfworld_v1_seed0
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
+  ray_kwargs:
+    ray_init:
+      runtime_env:
+        env_vars:
+          SWANLAB_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0/swanlab
+          VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/v1/2gpu/seed0

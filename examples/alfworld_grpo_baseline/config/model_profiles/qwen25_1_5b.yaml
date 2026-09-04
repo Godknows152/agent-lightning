@@ -1,0 +1,7 @@
+# Qwen2.5-1.5B-Instruct profile. Keep protocol, model and parquet together.
+variables:
+  MODEL_PROFILE: qwen25_1_5b
+  BASE_MODEL: /home/LXJ/Python_Projects/Models/Qwen2.5-1.5B-Instruct
+  DATA_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/data/qwen25_1_5b
+  PROMPT_PROFILE: qwen25
+  MULTI_TURN_FORMAT: hermes

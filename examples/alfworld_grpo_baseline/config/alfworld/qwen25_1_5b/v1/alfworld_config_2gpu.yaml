@@ -1,0 +1,10 @@
+# ALFWorld GRPO v1 for Qwen2.5-1.5B-Instruct and its Hermes JSON tool calls.
+hydra:
+  searchpath:
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+
+defaults:
+  - /alfworld_common_config_2gpu
+  - /model_profiles@_global_: qwen25_1_5b
+  - _self_

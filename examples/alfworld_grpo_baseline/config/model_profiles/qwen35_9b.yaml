@@ -1,0 +1,7 @@
+# Qwen3.5-9B profile. This profile retains its native XML tool protocol.
+variables:
+  MODEL_PROFILE: qwen35_9b
+  BASE_MODEL: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+  DATA_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/data/qwen35_9b
+  PROMPT_PROFILE: qwen35
+  MULTI_TURN_FORMAT: qwen3_coder

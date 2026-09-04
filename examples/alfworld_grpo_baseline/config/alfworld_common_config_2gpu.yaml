@@ -1,0 +1,117 @@
+# Shared ALFWorld text GRPO configuration for the isolated old-VERL backend.
+defaults:
+  - ppo_trainer
+  - _self_
+
+variables:
+  NUM_GPUS: 2
+  TENSOR_MODEL_PARALLEL_SIZE: 2
+  NUM_ROLLOUTS: 8
+  TOOL_CONFIG: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/alfworld_tool_config.yaml
+  SEED: 0
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+  use_final_reward_as_step_reward: true
+  use_intrinsic_reward: false
+
+data:
+  train_files: ${variables.DATA_DIR}/train.parquet
+  val_files: ${variables.DATA_DIR}/test.parquet
+  train_batch_size: 16
+  val_batch_size: 32
+  max_prompt_length: 2048
+  max_response_length: 4096
+  truncation: error
+  return_raw_chat: true
+  need_tools_kwargs: true
+  # Qwen's native template may otherwise open a <think> block before the
+  # assistant response.  ALFWorld requires the response itself to be a strict
+  # tool call, so disable visible reasoning for this isolated baseline.
+  apply_chat_template_kwargs:
+    enable_thinking: false
+  seed: ${variables.SEED}
+
+reward:
+  custom_reward_function:
+    path: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/src/alfworld_baseline/reward.py
+    name: compute_score
+
+actor_rollout_ref:
+  rollout:
+    name: sglang
+    tensor_model_parallel_size: ${variables.TENSOR_MODEL_PARALLEL_SIZE}
+    n: ${variables.NUM_ROLLOUTS}
+    gpu_memory_utilization: 0.25
+    log_prob_micro_batch_size_per_gpu: 2
+    enforce_eager: true
+    enable_chunked_prefill: false
+    multi_turn:
+      enable: true
+      format: ${variables.MULTI_TURN_FORMAT}
+      max_user_turns: 50
+      max_assistant_turns: 50
+      max_generated_response_length: 4096
+      tool_config_path: ${variables.TOOL_CONFIG}
+    agent:
+      default_agent_loop: alfworld_tool_agent
+      agent_loop_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/agent_loops.yaml
+      num_workers: 1
+      num_gpus_per_worker: 0.0
+  actor:
+    data_loader_seed: ${variables.SEED}
+    ppo_mini_batch_size: 4
+    ppo_micro_batch_size_per_gpu: 2
+    optim:
+      lr: 1.0e-6
+    use_kl_loss: false
+    entropy_coeff: 0.0
+    fsdp_config:
+      seed: ${variables.SEED}
+      # Model-specific protocol and checkpoint settings are composed from a
+      # profile; shared GRPO parameters remain in this file.
+      model_dtype: bfloat16
+      param_offload: true
+      optimizer_offload: true
+  ref:
+    log_prob_micro_batch_size_per_gpu: 2
+    fsdp_config:
+      param_offload: true
+  model:
+    path: ${variables.BASE_MODEL}
+    trust_remote_code: true
+    use_remove_padding: true
+    enable_gradient_checkpointing: true
+
+trainer:
+  n_gpus_per_node: ${variables.NUM_GPUS}
+  nnodes: 1
+  total_training_steps: 150
+  total_epochs: 1
+  save_freq: 25
+  test_freq: 25
+  val_before_train: false
+  resume_mode: disable
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
+  rollout_data_dir: ${trainer.default_local_dir}/rollouts
+  project_name: ALFWorldRL
+  experiment_name: alfworld_v1_seed0
+  log_val_generations: 8
+  logger:
+    - console
+    - swanlab
+  max_actor_ckpt_to_keep: 3
+  ray_kwargs:
+    ray_init:
+      runtime_env:
+        env_vars:
+          # SGLang JIT kernels require C++20. Ubuntu 20.04's default GCC 9
+          # lacks <concepts>, so keep the compiler override ALFWorld-local.
+          CC: ${oc.env:ALFWORLD_CC,/usr/bin/gcc-10}
+          CXX: ${oc.env:ALFWORLD_CXX,/usr/bin/g++-10}
+          CUDAHOSTCXX: ${oc.env:ALFWORLD_CXX,/usr/bin/g++-10}
+          NVCC_CCBIN: ${oc.env:ALFWORLD_CXX,/usr/bin/g++-10}
+          SWANLAB_MODE: cloud
+          SWANLAB_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0/swanlab
+          VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/v1/2gpu/seed0

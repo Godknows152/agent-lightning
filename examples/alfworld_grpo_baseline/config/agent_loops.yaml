@@ -1,0 +1,2 @@
+- name: alfworld_tool_agent
+  _target_: alfworld_baseline.agent_loop.ALFWorldToolAgentLoop

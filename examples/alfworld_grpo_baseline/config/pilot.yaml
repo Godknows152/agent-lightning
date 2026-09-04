@@ -1,0 +1,10 @@
+# Legacy pilot override fragment. Prefer scripts/alfworld/alfworld_v1.sh --pilot.
+variables:
+  NUM_ROLLOUTS: 2
+data:
+  train_batch_size: 8
+  val_batch_size: 8
+trainer:
+  total_training_steps: 5
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/pilot_seed0
+  experiment_name: alfworld_v1_pilot_seed0

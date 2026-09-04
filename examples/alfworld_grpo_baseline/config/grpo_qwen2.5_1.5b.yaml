@@ -1,0 +1,9 @@
+# Compatibility alias. New experiments should use config/alfworld/v1/alfworld_config_2gpu.yaml.
+hydra:
+  searchpath:
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
+    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+
+defaults:
+  - alfworld_common_config_2gpu
+  - _self_
