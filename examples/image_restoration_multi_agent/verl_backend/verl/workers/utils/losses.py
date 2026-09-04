@@ -140,7 +140,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             "decision_first_token_found is required when decision_point_first_token_entropy_coeff is positive"
         )
     batch_num_decision_trajectories = None
-    batch_num_gated_decision_trajectories = None
     first_token_entropy_gate_enabled = False
     if decision_first_token_entropy_enabled:
         fields.append("decision_first_token_found")
@@ -157,16 +156,6 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
                     "regularization is enabled"
                 )
             fields.append("decision_first_token_entropy_gate")
-            batch_num_gated_decision_trajectories = tu.get_non_tensor_data(
-                data,
-                key="batch_num_gated_decision_trajectories",
-                default=None,
-            )
-            if batch_num_gated_decision_trajectories is None:
-                raise ValueError(
-                    "batch_num_gated_decision_trajectories is required when gated first-token entropy "
-                    "regularization is enabled"
-                )
         batch_num_decision_trajectories = tu.get_non_tensor_data(
             data=data,
             key="batch_num_decision_trajectories",
@@ -244,7 +233,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
             value=dp_action_sequence_entropy, aggregation=metric_aggregation
         )
 
-    # Average all valid decisions within each trajectory before the global trajectory mean.
+    # Average all valid decisions within each trajectory before the global valid-trajectory mean.
     if decision_first_token_entropy_enabled:
         first_token_found = data["decision_first_token_found"].to(torch.bool)
         first_token_entropy_gate = None
@@ -279,7 +268,7 @@ def ppo_loss(config: ActorConfig, model_output, data: TensorDict, dp_group=None)
                 regularized_first_token_entropy = global_trajectory_mean(
                     decision_first_token_normalized_entropy,
                     first_token_entropy_gate,
-                    batch_num_gated_decision_trajectories,
+                    batch_num_decision_trajectories,
                 )
                 first_token_entropy_gate_ratio = (
                     first_token_entropy_gate[local_valid_trajectories].sum()

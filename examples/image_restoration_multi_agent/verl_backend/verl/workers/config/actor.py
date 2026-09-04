@@ -125,7 +125,8 @@ class ActorConfig(BaseConfig):
         entropy_coeff (float): Entropy coefficient for regularization.
         decision_point_entropy_coeff (float): Coefficient for normalized legal-action sequence entropy.
         decision_point_first_token_entropy_coeff (float): Coefficient for normalized legal-action first-token
-            entropy averaged within each trajectory.
+            entropy averaged within each trajectory and then across valid trajectories; an enabled gate acts as a
+            per-trajectory weight in the latter average.
         decision_point_first_token_entropy_gate (str): Quality gate applied to the first-token entropy term.
             ``none`` preserves the original behavior; ``positive_advantage`` keeps the entropy contribution only
             for trajectories whose outcome advantage is positive; ``nonpositive_advantage`` keeps it only for

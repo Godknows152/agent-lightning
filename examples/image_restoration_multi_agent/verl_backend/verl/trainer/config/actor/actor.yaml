@@ -91,7 +91,7 @@ entropy_coeff: 0
 # Normalized complete legal-action sequence entropy coefficient at the thinking decision point
 decision_point_entropy_coeff: 0.0
 
-# Normalized legal-action first-token entropy coefficient, averaged within each trajectory
+# Normalized legal-action first-token entropy coefficient, averaged within each trajectory and then across valid trajectories
 decision_point_first_token_entropy_coeff: 0.0
 
 # Quality gate for first-token entropy: none, positive_advantage, nonpositive_advantage, quality_validity, or reverse_quality_validity
