@@ -3,6 +3,25 @@
 本文件记录 Qwen3.5-2B ALFWorld GRPO 的 KL 与 Entropy 参数更新。每次调整只改变
 KL/Entropy 相关字段，并在启动前完成 Hydra/训练 preflight。
 
+## 2026-09-05：第 4 轮 → 第 5 轮
+
+### 上一轮参数与训练情况
+
+- `actor.entropy_coeff = 0.05`
+- `actor.use_kl_loss = true`
+- `actor.kl_loss_coef = 0.0001`
+- `actor/entropy` 在 step 4、5 升至 `2.51`、`4.94`，出现熵爆炸趋势。
+- `actor/tool_choice_entropy` 与 `tool_call_counts/mean` 在 step 4、5 均为 `0`，奖励固定约 `-0.05`，优势为 `0`，工具探索坍缩。
+- `actor/kl_loss` 在 step 4 达 `2.22`、step 5 为 `0.99`；低 KL 系数未能约束策略漂移。
+- 训练在 step 5 后停止并删除本轮产出；云端 SwanLab run `0go5u59j` 仍需授权 UI/API 删除（当前 CLI 无删除命令）。
+
+### 本轮新参数
+
+- `actor.entropy_coeff = 0.02`：从 `0.05` 下调，保留探索激励并抑制 token-level 熵爆炸。
+- `actor.use_kl_loss = true`：继续使用冻结 reference policy。
+- `actor.kl_loss_coef = 0.0005`：从 `0.0001` 提高到中等强度，约束 KL 漂移但低于曾导致熵坍缩的 `0.001`。
+- `actor.kl_loss_type = low_var_kl`，`algorithm.use_kl_in_reward = false`：保持原设置，避免重复 KL 惩罚。
+
 ## 2026-09-05：第 3 轮 → 第 4 轮
 
 ### 上一轮参数与训练情况
