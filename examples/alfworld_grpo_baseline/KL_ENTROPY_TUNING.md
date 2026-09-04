@@ -3,6 +3,31 @@
 本文件记录 Qwen3.5-2B ALFWorld GRPO 的 KL 与 Entropy 参数更新。每次调整只改变
 KL/Entropy 相关字段，并在启动前完成 Hydra/训练 preflight。
 
+## 2026-09-05：第 3 轮 → 第 4 轮
+
+### 上一轮参数与训练情况
+
+- `actor.entropy_coeff = 0.012`
+- `actor.use_kl_loss = true`
+- `actor.kl_loss_coef = 0.0002`
+- `actor.kl_loss_type = low_var_kl`
+- `algorithm.use_kl_in_reward = false`
+- 训练在 `global_step=2` 后停止；本轮产出已删除。
+- `actor/entropy` 从 step 1 的约 `0.60` 降至 step 2 的约 `0.025`，仍触发早期熵坍缩判据。
+- `actor/tool_choice_entropy` 从约 `2.51` 降至约 `0.24`，仍有工具调用，但探索强度快速下降。
+- `critic/rewards/mean` 从约 `-0.22` 改善到 `-0.014`，但只有两个点，不能证明持续提升。
+- `actor/kl_loss` 约为 `0.0004`、`0.0285`，降低 KL 后仍未阻止 token-level 熵快速下落。
+- 结论：主要限制已转为熵正则过弱；停止并清理该轮，继续提高 Entropy、轻微降低 KL。
+- 本轮 SwanLab 云端记录：`nwrnit3c`（当前 CLI 无删除命令，需授权 UI/API 删除）。
+
+### 本轮新参数
+
+- `actor.entropy_coeff = 0.05`：提高到共享配置的常用强度，优先阻止训练初期熵坍缩。
+- `actor.use_kl_loss = true`：继续使用冻结 reference policy。
+- `actor.kl_loss_coef = 0.0001`：保留轻量 KL 锚定，避免重新出现较大 KL 项压制探索。
+- `actor.kl_loss_type = low_var_kl`：保持低方差估计。
+- `algorithm.use_kl_in_reward = false`：保持关闭，避免双重 KL 惩罚。
+
 ## 2026-09-05：第 2 轮 → 第 3 轮
 
 ### 上一轮参数与训练情况
