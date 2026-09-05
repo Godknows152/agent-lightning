@@ -189,7 +189,7 @@ def matching_processes() -> list[psutil.Process]:
 
 def stop_training() -> None:
     # systemd owns the complete Ray/SGLang cgroup, including reparented workers.
-    subprocess.run(["systemctl", "--user", "stop", TRAINING_UNIT], check=True, timeout=150)
+    subprocess.run(["systemctl", "--user", "stop", TRAINING_UNIT], check=False, timeout=150)
     if training_status().get("ActiveState") in {"active", "activating", "deactivating"}:
         raise RuntimeError("training unit did not stop; refusing cleanup")
     if matching_processes():
@@ -344,9 +344,19 @@ def main() -> int:
     if reason is None and not alive and not state.get("last_restart_at"):
         reason = "bootstrap"
     log(f"check alive={alive} rows={len(rows)} reason={reason or 'hold'} metrics={metrics} params={old}")
-    if reason in {"failed_or_no_metrics", "bootstrap"}:
-        # Infrastructure failure is not evidence that KL/entropy is wrong.
-        log("attention: no running training or insufficient metrics; parameters unchanged")
+    if reason == "bootstrap":
+        # First launch: no metrics exist yet, so start without changing KL/entropy.
+        launch(state, old)
+        return 0
+    if reason == "failed_or_no_metrics":
+        # An initialization/runtime failure is not evidence that KL/entropy is wrong.
+        # Retry with the same parameters, but still delete the failed attempt first.
+        log("attention: no running training or insufficient metrics; retrying with unchanged parameters")
+        stop_training()
+        cleanup(output, run_id or cloud_run_id(state))
+        state.update({"current_output_dir": None, "cloud_run_id": None, "last_restart_at": None})
+        save_state(state)
+        launch(state, old)
         return 0
     if not reason or args.dry_run:
         if args.dry_run and reason:
