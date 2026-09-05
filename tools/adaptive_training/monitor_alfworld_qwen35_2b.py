@@ -34,6 +34,8 @@ RUN_NAME = "alfworld_qwen35_2b_v1_seed0"
 SWANLAB_BIN = Path(os.environ.get("SWANLAB_BIN", "/home/LXJ/anaconda3/envs/alfworld-verl/bin/swanlab"))
 PYTHON_BIN = Path(os.environ.get("PYTHON_BIN", "/home/LXJ/anaconda3/envs/alfworld-verl/bin/python"))
 
+TRAINING_UNIT = "agent-lightning-alfworld-qwen35-2b-training.service"
+
 WINDOW = 3
 STARTUP_GRACE = 12 * 60
 RESTART_COOLDOWN = 10 * 60
@@ -164,49 +166,34 @@ def local_metrics(output_dir: Path | None) -> list[dict[str, float]]:
     return rows
 
 
+def training_status() -> dict[str, str]:
+    result = subprocess.run(
+        ["systemctl", "--user", "show", TRAINING_UNIT,
+         "-p", "ActiveState", "-p", "SubState", "-p", "Result", "-p", "MainPID"],
+        text=True, capture_output=True, check=True,
+    )
+    return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+
 def matching_processes() -> list[psutil.Process]:
-    tokens = ("qwen35_2b_v1.sh", "run_alfworld_grpo_2gpu.sh", "alfworld_baseline.main_ppo", "config/alfworld/qwen35_2b/v1")
+    # Do not match shell command strings or other ALFWorld model profiles.
     result = []
     for proc in psutil.process_iter(["pid", "cmdline"]):
-        if proc.pid == os.getpid():
-            continue
-        try:
-            command = " ".join(proc.info.get("cmdline") or [])
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        if "monitor_alfworld_qwen35_2b.py" in command:
-            continue
-        if any(token in command for token in tokens):
+        args = proc.info["cmdline"] or []
+        if "alfworld_baseline.main_ppo" in args and str(CONFIG.parent) in args:
+            result.append(proc)
+        elif str(LAUNCHER) in args and proc.pid != os.getpid():
             result.append(proc)
     return result
 
 
 def stop_training() -> None:
-    roots = matching_processes()
-    if not roots:
-        return
-    all_procs = {p.pid: p for p in roots}
-    for root in roots:
-        try:
-            for child in root.children(recursive=True):
-                all_procs[child.pid] = child
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    log(f"stopping {len(all_procs)} ALFWorld processes")
-    for proc in all_procs.values():
-        try:
-            proc.send_signal(signal.SIGTERM)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-    deadline = time.time() + 90
-    while time.time() < deadline and any(p.is_running() for p in all_procs.values()):
-        time.sleep(2)
-    for proc in all_procs.values():
-        try:
-            if proc.is_running():
-                proc.kill()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+    # systemd owns the complete Ray/SGLang cgroup, including reparented workers.
+    subprocess.run(["systemctl", "--user", "stop", TRAINING_UNIT], check=True, timeout=150)
+    if training_status().get("ActiveState") in {"active", "activating", "deactivating"}:
+        raise RuntimeError("training unit did not stop; refusing cleanup")
+    if matching_processes():
+        raise RuntimeError("unmanaged Qwen3.5-2B training remains; refusing cleanup")
 
 
 def delete_cloud(run_id: str | None) -> None:
@@ -261,38 +248,75 @@ def commit(reason: str) -> None:
     log(f"committed {reason}")
 
 
-def launch(state: dict[str, Any], new: dict[str, float]) -> None:
-    state["attempt"] = int(state.get("attempt", 0)) + 1
-    name = f"attempt_{state['attempt']:03d}_kl{new['kl_loss_coef']:.5f}_e{new['entropy_coeff']:.5f}"
-    output = ADAPTIVE_ROOT / name
+def launch(state: dict[str, Any], new: dict[str, float], *, retry: bool = False) -> None:
+    if retry:
+        output = Path(state["current_output_dir"])
+    else:
+        attempt = int(state.get("attempt", 0)) + 1
+        name = f"attempt_{attempt:03d}_kl{new['kl_loss_coef']:.5f}_e{new['entropy_coeff']:.5f}"
+        output = ADAPTIVE_ROOT / name
+        if output.exists():
+            raise RuntimeError(f"refusing to overwrite existing attempt: {output}")
+    if training_status().get("ActiveState") in {"active", "activating", "deactivating"}:
+        raise RuntimeError("training already active")
+    if matching_processes():
+        raise RuntimeError("unmanaged target training already active")
     output.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env.update({
+    (output / "log").mkdir(exist_ok=True)
+    env = {
         "ALFWORLD_MODEL_PROFILE": "qwen35_2b",
         "ALFWORLD_OUTPUT_DIR": str(output),
         "ALFWORLD_LOG_DIR": str(output / "log"),
         "ALFWORLD_SWANLAB_LOG_DIR": str(output / "swanlab"),
         "ALFWORLD_SWANLAB_MODE": "cloud",
-        "ALFWORLD_FOREGROUND": "0",
+        "ALFWORLD_FOREGROUND": "1",
         "ALFWORLD_TOTAL_STEPS": "150",
         "CUDA_VISIBLE_DEVICES": "0,1",
-    })
-    subprocess.Popen(["bash", str(LAUNCHER)], cwd=ROOT, env=env, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    state.update({"current_output_dir": str(output), "cloud_run_id": None, "last_restart_at": time.time(), "params": new})
+        "PYTHON_BIN": str(PYTHON_BIN),
+        "SWANLAB_BIN": str(SWANLAB_BIN),
+    }
+    command = [
+        "systemd-run", "--user", "--collect", f"--unit={TRAINING_UNIT}",
+        "--service-type=exec", f"--working-directory={ROOT}",
+        "--property=KillMode=control-group", "--property=TimeoutStopSec=90",
+        f"--property=StandardOutput=append:{output / 'log' / 'training.log'}",
+        "--property=StandardError=inherit",
+    ]
+    command.extend(f"--setenv={key}={value}" for key, value in env.items())
+    command.extend(["/bin/bash", str(LAUNCHER)])
+    subprocess.run(command, check=True, text=True, capture_output=True, timeout=30)
+    if not retry:
+        state["attempt"] = attempt
+    state.update({"current_output_dir": str(output), "cloud_run_id": None,
+                  "last_restart_at": time.time(), "params": new, "training_unit": TRAINING_UNIT})
     save_state(state)
-    log(f"started ALFWorld Qwen3.5-2B attempt {state['attempt']} with {new}")
+    log(f"training service dispatched for attempt {state['attempt']}; waiting for actual metrics")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--retry-start", action="store_true", help="retry an empty launch without changing parameters")
     args = parser.parse_args()
     state = load_state()
     old = params()
     output = Path(state["current_output_dir"]) if state.get("current_output_dir") else None
-    alive = bool(matching_processes())
-    run_id = cloud_run_id(state) if alive or output else None
-    rows = cloud_metrics(run_id) or local_metrics(output)
+    if args.retry_start:
+        if output is None or not output.is_relative_to(ADAPTIVE_ROOT):
+            raise RuntimeError("no managed attempt to retry")
+        # Only an attempt that never reached training may reuse its directory.
+        if any(p.stat().st_size for p in output.rglob("*") if p.is_file()):
+            raise RuntimeError("attempt contains data; inspect before retrying")
+        if not args.dry_run:
+            launch(state, old, retry=True)
+        return 0
+    status = training_status()
+    alive = status.get("ActiveState") in {"active", "activating"} or bool(matching_processes())
+    rows = local_metrics(output)
+    run_id = state.get("cloud_run_id")
+    if not rows and (alive or output):
+        run_id = cloud_run_id(state)
+        rows = cloud_metrics(run_id)
     reason: str | None = None
     metrics: dict[str, Any] = {"rows": len(rows)}
     if len(rows) >= WINDOW:
@@ -314,6 +338,10 @@ def main() -> int:
     if reason is None and not alive and not state.get("last_restart_at"):
         reason = "bootstrap"
     log(f"check alive={alive} rows={len(rows)} reason={reason or 'hold'} metrics={metrics} params={old}")
+    if reason in {"failed_or_no_metrics", "bootstrap"}:
+        # Infrastructure failure is not evidence that KL/entropy is wrong.
+        log("attention: no running training or insufficient metrics; parameters unchanged")
+        return 0
     if not reason or args.dry_run:
         if args.dry_run and reason:
             log(f"dry-run would apply {adjust(old, reason)}")
@@ -322,7 +350,7 @@ def main() -> int:
         log("restart suppressed by cooldown")
         return 0
     stop_training()
-    cleanup(output, run_id)
+    cleanup(output, run_id or cloud_run_id(state))
     new = adjust(old, reason)
     update_config(new)
     append_doc(old, new, reason, metrics)
