@@ -174,6 +174,8 @@ def matching_processes() -> list[psutil.Process]:
             command = " ".join(proc.info.get("cmdline") or [])
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
+        if "monitor_alfworld_qwen35_2b.py" in command:
+            continue
         if any(token in command for token in tokens):
             result.append(proc)
     return result
