@@ -206,3 +206,22 @@ KL/Entropy 相关字段，并在启动前完成 Hydra/训练 preflight。
 - 探索性：`actor/tool_choice_entropy > 0` 且 `tool_call_counts/mean > 0`；连续三步二者同时为零则判为探索坍缩。
 - 奖励：比较最近窗口 `critic/rewards/mean` 与前一窗口，要求没有持续恶化并出现缓慢改善迹象。
 - KL：记录 `actor/kl_loss` 与 `actor/kl_coef`；若 KL 连续升高且熵同步下降，优先降低 `kl_loss_coef`；若熵爆炸且 KL 很低，优先降低 `entropy_coeff` 或适度提高 KL 系数。
+
+
+## 2026-09-05：第 12 轮启动前调整
+
+### 判定
+
+当前无存活目标训练进程，最新 rollout 只覆盖启动早期，未形成可验证的连续奖励上升或熵稳定窗口；目标未满足。
+
+### 参数更新
+
+- `actor.entropy_coeff`: `0.004 → 0.006`，小幅增强探索，降低早期熵坍缩风险。
+- `actor.use_kl_loss`: `true`（保持）。
+- `actor.kl_loss_coef`: `0.003 → 0.005`，增强 reference 锚定，抑制策略漂移和熵爆炸。
+- `actor.kl_loss_type`: `low_var_kl`（保持）。
+- `algorithm.use_kl_in_reward`: `false`（保持，避免重复 KL 惩罚）。
+
+### 效果
+
+调整前没有足够指标窗口，无法评价效果；启动后按最近至少 5 个完成 step 检查。
