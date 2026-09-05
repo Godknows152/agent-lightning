@@ -33,7 +33,7 @@ actor_rollout_ref:
   actor:
     ppo_mini_batch_size: 8
     ppo_micro_batch_size_per_gpu: 2
-    entropy_coeff: 0.02
+    entropy_coeff: 0.03
     # Apply a conservative explicit KL penalty against the frozen reference
     # policy. Keep reward-side KL disabled to avoid penalizing the same drift
     # twice.
