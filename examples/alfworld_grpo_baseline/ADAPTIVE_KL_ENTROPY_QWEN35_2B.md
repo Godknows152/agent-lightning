@@ -7,3 +7,4 @@
 | 时间 | 原因 | 调整前（KL / Entropy） | 调整后（KL / Entropy） | 上一轮效果 |
 |---|---|---|---|---|
 | 2026-09-05 17:04:49 +0800 | bootstrap | 0.005 / 0.006 | 0.004 / 0.0069 | step=None, reward=None, entropy=None, tool_entropy=None |
+| 2026-09-05 17:12:31 +0800 | bootstrap | 0.004 / 0.0069 | 0.0032 / 0.007935 | step=None, reward=None, entropy=None, tool_entropy=None |
