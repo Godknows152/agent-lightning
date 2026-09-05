@@ -53,14 +53,22 @@ def main() -> int:
         env.game_files, env.num_games = game_files, len(game_files)
         env = env.init_env(batch_size=len(game_files))
         observations, info = env.reset()
-        for offset, (game_file, observation) in enumerate(zip(game_files, observations, strict=True)):
-            actions = tuple(info["admissible_commands"][offset])
+        # TextWorld may reorder a batch during reset (for example when domain
+        # randomization is enabled). The wrapper's reported gamefile is the
+        # authoritative pairing for each returned observation/action list.
+        actual_game_files = info.get("extra.gamefile")
+        if not isinstance(actual_game_files, list) or len(actual_game_files) != len(observations):
+            raise RuntimeError("ALFWorld reset did not return one extra.gamefile per observation")
+        for offset, (game_file, observation) in enumerate(zip(actual_game_files, observations, strict=True)):
+            actions = tuple(str(action) for action in info["admissible_commands"][offset])
+            game_file = str(game_file)
             observation = str(observation)
             mission = observation.split("Your task is to: ", 1)[-1] if "Your task is to: " in observation else observation
-            prompt = [
-                {"role": "system", "content": prompt_profile.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt_profile.build_user_prompt(mission=mission, observation=observation, admissible_actions=actions)},
-            ]
+            observation = observation.replace(f"Your task is to: {mission}.", "").replace(f"Your task is to: {mission}", "").strip()
+            prompt = []
+            if prompt_profile.SYSTEM_PROMPT.strip():
+                prompt.append({"role": "system", "content": prompt_profile.SYSTEM_PROMPT})
+            prompt.append({"role": "user", "content": prompt_profile.build_user_prompt(mission=mission, observation=observation, admissible_actions=actions)})
             index = start + offset
             rows.append({"data_source": "alfworld", "agent_name": "alfworld_tool_agent", "prompt": copy.deepcopy(prompt), "reward_model": {"style": "rule", "ground_truth": {"game_file": game_file}}, "extra_info": {"index": index, "sample_id": f"{args.split}-{index:06d}", "game_file": game_file, "prompt_profile": args.profile, "prompt_version": prompt_profile.PROMPT_VERSION, "need_tools_kwargs": True, "tools_kwargs": {"alfworld_action": {"create_kwargs": {"game_file": game_file}}}}})
         env.close()

@@ -1494,7 +1494,15 @@ class FSDPEngineWithLMHead(FSDPEngine):
         device_name = get_device_name()
         # actually, we should avoid assigning like this...
         micro_batch = micro_batch.to(get_device_id())
-        model_inputs, output_args = self.prepare_model_inputs(micro_batch=micro_batch)
+        replay_contexts = "alfworld_turn_contexts" in micro_batch
+        forward_batch = micro_batch
+        if replay_contexts:
+            from .turn_context import expand_turn_contexts, restore_trajectory_outputs
+
+            if self.use_ulysses_sp:
+                raise ValueError("ALFWorld turn-context replay requires sequence parallel size 1")
+            forward_batch, replay_source, replay_target = expand_turn_contexts(micro_batch)
+        model_inputs, output_args = self.prepare_model_inputs(micro_batch=forward_batch)
 
         with torch.autocast(device_type=device_name, dtype=torch.bfloat16):
             raw_output = self.module(
@@ -1503,8 +1511,10 @@ class FSDPEngineWithLMHead(FSDPEngine):
             )  # prevent model thinks we are generating
 
             model_output = self.prepare_model_outputs(
-                output=raw_output, output_args=output_args, micro_batch=micro_batch, logits_processor_func=loss_function
+                output=raw_output, output_args=output_args, micro_batch=forward_batch, logits_processor_func=loss_function
             )
+            if replay_contexts:
+                model_output = restore_trajectory_outputs(model_output, micro_batch, replay_source, replay_target)
             if "decision_action_token_ids" in micro_batch:
                 raw_action_entropy, normalized_action_entropy = self._compute_decision_action_entropies(
                     micro_batch,

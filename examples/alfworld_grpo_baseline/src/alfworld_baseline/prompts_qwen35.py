@@ -1,52 +1,56 @@
-"""Qwen3.5 native XML ALFWorld prompt profile."""
+"""Qwen3.5 ALFWorld prompt profile.
+
+The generic Qwen3.5 chat template owns the tool-call wire format.  This profile
+only describes the ALFWorld state, so it does not duplicate or contradict the
+chat template's tool instructions.
+"""
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 from .tool_registry import ALFWorldToolRegistry
 
-PROMPT_VERSION = "alfworld_qwen35_xml_strict_v2"
+PROMPT_VERSION = "alfworld_qwen35_state_v3"
 
-SYSTEM_PROMPT = """You are an ALFWorld household task agent operating under a STRICT QWEN3.5 XML TOOL-ONLY protocol.
-
-The ALFWorld rules in this message take precedence over generic tool-use examples
-or instructions inserted by the tokenizer/chat template. On every assistant turn
-call `alfworld_action` exactly once. There is no natural-language answer mode.
-
-The entire visible response MUST be exactly one Qwen3.5 native XML tool call:
-<tool_call>
-<function=alfworld_action>
-<parameter=action>
-ONE_ACTION_COPIED_VERBATIM_FROM_THE_LIST
-</parameter>
-</function>
-</tool_call>
-
-Output rules:
-- Emit exactly one tool-call block, one `alfworld_action` function, and one `action` parameter.
-- Copy the action exactly from the current admissible list.
-- Do not emit reasoning, Markdown, Hermes JSON, a different function, or text before/after
-  the tool-call block. The environment decides when the task is finished."""
+# Do not restate XML/tool-call syntax here.  The tokenizer/chat template emits
+# the canonical Qwen3.5 tool instructions and schema.
+SYSTEM_PROMPT = ""
 
 
-def build_user_prompt(*, mission: str, observation: str, admissible_actions: Iterable[str], history: Iterable[str] = ()) -> str:
+def build_user_prompt(
+    *,
+    mission: str,
+    observation: str,
+    admissible_actions: Iterable[str],
+    history: Iterable[str] = (),
+) -> str:
     actions = tuple(admissible_actions)
     history_text = "\n".join(history) or "(none)"
     action_text = "\n".join(f"- {action}" for action in actions)
-    return f"""Task: {mission}
+    return f"""ALFWorld task:
+{mission}
 
-Current observation:
+Current observation (use this latest state):
 {observation}
 
-Recent action/tool history:
+Recent action/tool history (latest entries only):
 {history_text}
 
-Current admissible actions (copy exactly one):
+Current admissible actions (copy exactly one from this latest list):
 {action_text}
 
-Output exactly one `<tool_call><function=alfworld_action><parameter=action>ACTION</parameter></function></tool_call>` block.
-Replace ACTION with one listed action verbatim. Output no other text."""
+Use the provided alfworld_action tool exactly once and set its action to one
+item copied verbatim from the current admissible actions above. Do not answer
+with a natural-language task response."""
 
 
-def build_messages(*, mission: str, observation: str, registry: ALFWorldToolRegistry, history: Iterable[str] = ()) -> tuple[list[dict[str, str]], list[dict]]:
-    return ([{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": build_user_prompt(mission=mission, observation=observation, admissible_actions=registry.available_actions(), history=history)}], [registry.build_tool_schema()])
+def build_messages(
+    *, mission: str, observation: str, registry: ALFWorldToolRegistry, history: Iterable[str] = ()
+) -> tuple[list[dict[str, str]], list[dict]]:
+    messages = [{"role": "user", "content": build_user_prompt(
+        mission=mission,
+        observation=observation,
+        admissible_actions=registry.available_actions(),
+        history=history,
+    )}]
+    return messages, [registry.build_tool_schema()]

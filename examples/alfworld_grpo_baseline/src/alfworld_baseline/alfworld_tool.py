@@ -49,6 +49,17 @@ class ALFWorldTool(BaseTool):
         self._instances[instance] = {"env": env, "observation": observation[0], "info": info, "steps": 0}
         return instance, ToolResponse()
 
+    def get_state(self, instance_id: str) -> tuple[str, tuple[str, ...]]:
+        """Return the authoritative current observation and action list.
+
+        The agent loop uses this immediately after ``create`` so the first
+        model prompt is built from the same environment instance that will
+        execute the first action, rather than trusting a stale parquet prompt.
+        """
+        state = self._instances[instance_id]
+        info = state["info"]
+        return str(state["observation"]), tuple(str(a) for a in info["admissible_commands"][0])
+
     async def execute(self, instance_id: str, parameters: dict[str, Any], **kwargs: Any) -> tuple[Any, float, dict]:
         state = self._instances[instance_id]
         action = parameters.get("action")
@@ -63,7 +74,21 @@ class ALFWorldTool(BaseTool):
             penalty = float(
                 self.config.get("invalid_action_penalty", self.config.get("format_penalty", -0.05))
             )
-            return ToolResponse(text=f"Invalid ALFWorld action: {exc}"), penalty, {"error": "invalid_action", "action": action}
+            current_observation = str(state["observation"])
+            current_actions = tuple(str(a) for a in info["admissible_commands"][0])
+            text = (
+                "Tool execution failed: invalid action.\n\n"
+                f"The action {action!r} is not admissible in the current state.\n\n"
+                f"Current observation:\n{current_observation}\n\n"
+                "Current admissible actions (copy exactly one):\n"
+                + "\n".join(current_actions)
+            )
+            return ToolResponse(text=text), penalty, {
+                "error": "invalid_action",
+                "action": action,
+                "observation": current_observation,
+                "admissible_commands": current_actions,
+            }
         (observations,), (rewards,), (done,), next_info = state["env"].step([action])
         state["observation"], state["info"] = observations, next_info
         state["steps"] += 1
@@ -71,7 +96,14 @@ class ALFWorldTool(BaseTool):
         done = bool(done or truncated)
         reward = float(rewards)
         text = f"Observation:\n{observations}\n\nAdmissible actions:\n{chr(10).join(next_info['admissible_commands'][0])}"
-        return ToolResponse(text=text), reward, {"action": action, "won": bool(next_info.get("won", [False])[0]), "done": done, "truncated": truncated, "admissible_commands": next_info["admissible_commands"][0]}
+        return ToolResponse(text=text), reward, {
+            "action": action,
+            "observation": str(observations),
+            "won": bool(next_info.get("won", [False])[0]),
+            "done": done,
+            "truncated": truncated,
+            "admissible_commands": next_info["admissible_commands"][0],
+        }
 
     async def release(self, instance_id: str, **kwargs: Any) -> None:
         state = self._instances.pop(instance_id, None)

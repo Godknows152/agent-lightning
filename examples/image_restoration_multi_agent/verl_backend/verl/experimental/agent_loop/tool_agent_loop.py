@@ -34,7 +34,7 @@ from verl.experimental.agent_loop.agent_loop import (
 )
 from verl.experimental.agent_loop.tool_parser import FunctionCall, ToolParser
 from verl.experimental.agent_loop.utils import build_gpt_oss_tool_response_text
-from verl.tools.schemas import ToolResponse
+from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
 from verl.tools.utils.tool_registry import initialize_tools_from_config
 from verl.utils.profiler import simple_timer
 from verl.utils.rollout_trace import rollout_trace_op
@@ -73,6 +73,10 @@ class AgentData:
 
         # State variables
         self.prompt_ids: list[int] = []
+        # Optional prompt used only for the next inference request.  The
+        # trajectory in ``prompt_ids`` retains loss slots. A compact-context
+        # loop must also replay its actual per-turn prompts during training.
+        self.generation_prompt_ids: list[int] = []
         self.response_ids: list[int] = []
         self.response_mask: list[int] = []
         self.response_logprobs: list[float] = []
@@ -810,6 +814,7 @@ class ToolAgentLoop(AgentLoopBase):
             videos=agent_data.video_data,
         )
         agent_data.prompt_ids = prompt_ids
+        agent_data.generation_prompt_ids = list(prompt_ids)
         return AgentState.GENERATING
 
     async def _handle_generating_state(
@@ -825,9 +830,10 @@ class ToolAgentLoop(AgentLoopBase):
         generation_params["max_new_tokens"] = max(0, remaining_generated_tokens)
         generation_params.pop("max_generated_response_length", None)
         with simple_timer("generate_sequences", agent_data.metrics):
+            generation_prompt_ids = getattr(agent_data, "generation_prompt_ids", None) or agent_data.prompt_ids
             output: TokenOutput = await self.server_manager.generate(
                 request_id=agent_data.request_id,
-                prompt_ids=agent_data.prompt_ids,
+                prompt_ids=generation_prompt_ids,
                 sampling_params=generation_params,
                 image_data=agent_data.image_data,
                 video_data=agent_data.video_data,
@@ -855,6 +861,8 @@ class ToolAgentLoop(AgentLoopBase):
         )
         agent_data.response_ids = response_ids
         agent_data.prompt_ids += agent_data.response_ids
+        if getattr(agent_data, "generation_prompt_ids", None):
+            agent_data.generation_prompt_ids += agent_data.response_ids
         agent_data.response_mask += [1] * len(agent_data.response_ids)
         if response_logprobs:
             agent_data.response_logprobs += response_logprobs
@@ -869,9 +877,18 @@ class ToolAgentLoop(AgentLoopBase):
             not ignore_termination and self._generated_response_length(agent_data) >= self.max_generated_response_length
         )
 
-        # Extract tool calls (use per-sample tools if routed)
+        # Extract tool calls against the same per-turn schemas that were sent
+        # to the model. ALFWorld replaces the action enum after every state
+        # transition. The parser reads parameter types from these schemas;
+        # admissible-action membership is validated separately by the tool.
         active_tools = getattr(agent_data, "_active_tools", self.tools)
-        tools = [tool.tool_schema for tool in active_tools.values()]
+        tools = getattr(agent_data, "_active_tool_schemas", None)
+        if tools is None:
+            tools = [tool.tool_schema for tool in active_tools.values()]
+        # ``apply_chat_template`` consumes serialized dictionaries, while the
+        # XML parser accesses the typed schema fields. Normalize dynamic
+        # per-turn dictionaries before parsing.
+        tools = [OpenAIFunctionToolSchema.model_validate(tool) if isinstance(tool, dict) else tool for tool in tools]
         _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(agent_data.response_ids, tools)
 
         # Check soft termination conditions (max turns) AFTER tool call extraction.
@@ -898,6 +915,15 @@ class ToolAgentLoop(AgentLoopBase):
                     generated_budget_exhausted=generated_budget_exhausted,
                 )
             return AgentState.TERMINATED
+
+    async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
+        """Optionally replace the next inference context after a tool turn.
+
+        The default preserves the historical behavior.  Task-specific loops
+        may override this to use a compact state prompt while keeping the full
+        loss/mask trajectory in ``agent_data.prompt_ids``.
+        """
+        return None
 
     async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
         """Handle the processing tools state: execute tool calls and prepare tool responses."""
@@ -1075,10 +1101,13 @@ class ToolAgentLoop(AgentLoopBase):
         )
 
         agent_data.prompt_ids += response_ids
+        if getattr(agent_data, "generation_prompt_ids", None):
+            agent_data.generation_prompt_ids += response_ids
         agent_data.response_mask += [0] * len(response_ids)
         if agent_data.response_logprobs:
             agent_data.response_logprobs += [0.0] * len(response_ids)
         agent_data.user_turns += 1
+        await self._rebuild_generation_prompt_after_tool(agent_data)
 
         return AgentState.GENERATING
 

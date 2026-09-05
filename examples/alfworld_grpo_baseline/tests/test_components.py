@@ -49,13 +49,27 @@ def test_prompt_requires_qwen25_json_and_overrides_generic_template_guidance():
     assert '"name":"alfworld_action"' in SYSTEM_PROMPT
 
 
-def test_qwen35_prompt_profile_keeps_native_xml_contract():
+def test_qwen35_prompt_profile_defers_tool_protocol_to_chat_template():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
-    assert profile.PROMPT_VERSION == "alfworld_qwen35_xml_strict_v2"
-    assert "<function=alfworld_action>" in profile.SYSTEM_PROMPT
-    assert "<parameter=action>" in profile.SYSTEM_PROMPT
+    assert profile.PROMPT_VERSION == "alfworld_qwen35_state_v3"
+    assert profile.SYSTEM_PROMPT == ""
+    user_prompt = profile.build_user_prompt(
+        mission="put the apple in the drawer",
+        observation="You see a drawer.",
+        admissible_actions=["open drawer 1"],
+    )
+    assert "current admissible actions" in user_prompt
+    assert "alfworld_action tool exactly once" in user_prompt
+
+def test_qwen35_dynamic_schema_enum_matches_latest_admissible_actions():
+    from alfworld_baseline.tool_registry import ALFWorldToolRegistry
+
+    schema = ALFWorldToolRegistry(("look", "open drawer 1")).build_tool_schema()
+    action = schema["function"]["parameters"]["properties"]["action"]
+    assert action["enum"] == ["look", "open drawer 1"]
+
 
 def test_alfworld_agent_loop_marks_environment_terminal(monkeypatch):
     import asyncio
