@@ -1,0 +1,11 @@
+[Unit]
+Description=Check ALFWorld Qwen3.5-2B every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=agent-lightning-alfworld-qwen35-2b-adaptive-monitor.service
+
+[Install]
+WantedBy=default.target

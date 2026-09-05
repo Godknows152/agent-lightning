@@ -1,0 +1,9 @@
+[Unit]
+Description=Agent Lightning ALFWorld Qwen3.5-2B adaptive KL entropy monitor
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/LXJ/Python_Projects/Agent_Lightning
+Environment=CUDA_VISIBLE_DEVICES=0,1
+ExecStart=/home/LXJ/anaconda3/bin/python /home/LXJ/Python_Projects/Agent_Lightning/tools/adaptive_training/monitor_alfworld_qwen35_2b.py

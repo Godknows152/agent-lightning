@@ -1,9 +1,0 @@
-[Unit]
-Description=Agent Lightning fog GRPO adaptive KL/entropy monitor
-After=network-online.target
-
-[Service]
-Type=oneshot
-WorkingDirectory=/home/LXJ/Python_Projects/Agent_Lightning
-Environment=CUDA_VISIBLE_DEVICES=0,1
-ExecStart=/home/LXJ/anaconda3/bin/python /home/LXJ/Python_Projects/Agent_Lightning/tools/adaptive_training/monitor_fog_v414.py --once
