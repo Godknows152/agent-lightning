@@ -1,0 +1,11 @@
+[Unit]
+Description=Check fog GRPO every 30 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=agent-lightning-fog-adaptive-monitor.service
+
+[Install]
+WantedBy=default.target
