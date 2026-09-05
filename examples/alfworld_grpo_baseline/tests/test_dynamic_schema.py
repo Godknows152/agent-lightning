@@ -74,7 +74,7 @@ def make_replay_batch():
                                                        torch.tensor([20,21,22])], layout=torch.jagged)
     batch["loss_mask"] = torch.tensor([[1,1,0,1,1], [1,0,0,0,0]])
     batch["temperature"] = torch.tensor([1., 0.7])
-    tu.assign_non_tensor(batch, alfworld_turn_contexts=[
+    tu.assign_non_tensor(batch, multi_modal_inputs=[None, {}], alfworld_turn_contexts=[
         [{"prompt_ids": [10,11], "response_ids": [12,13], "response_offset": 0},
          {"prompt_ids": [30,31,32], "response_ids": [15,16], "response_offset": 3}],
         [{"prompt_ids": [20,21], "response_ids": [22], "response_offset": 0}],
@@ -97,6 +97,15 @@ def test_training_replays_actual_prompts_and_preserves_loss_slots_and_gradients(
     assert restored.values().tolist() == [0,1,2,0,6,7,0,0,10,0]
     restored.values().sum().backward()
     assert values.grad.nonzero().flatten().tolist() == source.tolist()
+
+
+def test_training_replay_rejects_nonempty_multimodal_payload():
+    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
+    batch = make_replay_batch()
+    from verl.utils import tensordict_utils as tu
+    tu.assign_non_tensor(batch, multi_modal_inputs=[{"pixel_values": [1]}, None])
+    with pytest.raises(ValueError, match="non-empty multi_modal_inputs"):
+        expand_turn_contexts(batch)
 
 
 def test_training_replay_fails_closed_on_missing_or_mismatched_context():

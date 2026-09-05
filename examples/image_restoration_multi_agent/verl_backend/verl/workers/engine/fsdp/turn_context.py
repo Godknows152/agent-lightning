@@ -20,7 +20,26 @@ def expand_turn_contexts(batch: TensorDict) -> tuple[TensorDict, torch.Tensor, t
         raise ValueError("Turn-context replay requires padding-free inputs")
     if not tu.get_non_tensor_data(batch, "use_remove_padding", True):
         raise ValueError("Turn-context replay requires use_remove_padding=True")
-    for key in ("multi_modal_inputs", "decision_action_token_ids", "decision_first_token_ids"):
+    # ALFWorld is text-only, but the shared dataset pipeline may still add an
+    # empty ``multi_modal_inputs`` placeholder. Ignore only placeholders; fail
+    # closed if actual image/video payloads are present.
+    if "multi_modal_inputs" in batch:
+        multimodal = batch["multi_modal_inputs"]
+        if hasattr(multimodal, "tolist"):
+            multimodal = multimodal.tolist()
+
+        def _has_payload(value):
+            if value is None:
+                return False
+            if isinstance(value, dict):
+                return any(_has_payload(item) for item in value.values())
+            if isinstance(value, (list, tuple)):
+                return any(_has_payload(item) for item in value)
+            return True
+
+        if _has_payload(multimodal):
+            raise ValueError("Turn-context replay does not support non-empty multi_modal_inputs")
+    for key in ("decision_action_token_ids", "decision_first_token_ids"):
         if key in batch:
             raise ValueError(f"Turn-context replay does not support {key}")
     records = batch["alfworld_turn_contexts"]
