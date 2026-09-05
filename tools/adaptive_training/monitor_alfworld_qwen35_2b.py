@@ -263,6 +263,8 @@ def launch(state: dict[str, Any], new: dict[str, float], *, retry: bool = False)
         raise RuntimeError("unmanaged target training already active")
     output.mkdir(parents=True, exist_ok=True)
     (output / "log").mkdir(exist_ok=True)
+    torch_lib = PYTHON_BIN.parent.parent / "lib/python3.12/site-packages/torch/lib"
+    cuda_runtime_lib = PYTHON_BIN.parent.parent / "lib/python3.12/site-packages/nvidia/cuda_runtime/lib"
     env = {
         "ALFWORLD_MODEL_PROFILE": "qwen35_2b",
         "ALFWORLD_OUTPUT_DIR": str(output),
@@ -274,13 +276,17 @@ def launch(state: dict[str, Any], new: dict[str, float], *, retry: bool = False)
         "CUDA_VISIBLE_DEVICES": "0,1",
         "PYTHON_BIN": str(PYTHON_BIN),
         "SWANLAB_BIN": str(SWANLAB_BIN),
+        # Keep PyTorch's bundled CUDA runtime ahead of host CUDA.  The SGLang
+        # spawn path otherwise may resolve an incompatible libcudart and die
+        # before the first training step.
+        "LD_LIBRARY_PATH": f"{torch_lib}:{cuda_runtime_lib}:/usr/local/cuda/lib64",
     }
     command = [
-        "systemd-run", "--user", "--collect", f"--unit={TRAINING_UNIT}",
+        "systemd-run", "--user", f"--unit={TRAINING_UNIT}",
         "--service-type=exec", f"--working-directory={ROOT}",
         "--property=KillMode=control-group", "--property=TimeoutStopSec=90",
         f"--property=StandardOutput=append:{output / 'log' / 'training.log'}",
-        "--property=StandardError=inherit",
+        f"--property=StandardError=append:{output / 'log' / 'training.log'}",
     ]
     command.extend(f"--setenv={key}={value}" for key, value in env.items())
     command.extend(["/bin/bash", str(LAUNCHER)])
