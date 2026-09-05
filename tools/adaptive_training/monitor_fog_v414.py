@@ -265,7 +265,12 @@ def cloud_run_for_output(output_dir: Path | None) -> str | None:
     start = max(starts)
     try:
         raw = subprocess.check_output(["swanlab", "api", "run", "list", PROJECT_PATH, "-n", "1", "-s", "100"], text=True, stderr=subprocess.DEVNULL)
-        runs = json.loads(raw).get("data", {}).get("list", [])
+        # The global SwanLab CLI may emit a Python warning before its JSON.
+        # Decode from the first JSON object so cleanup remains reliable.
+        start_index = raw.find("{")
+        if start_index < 0:
+            raise ValueError("SwanLab list returned no JSON object")
+        runs = json.JSONDecoder().raw_decode(raw[start_index:])[0].get("data", {}).get("list", [])
     except Exception as exc:
         log(f"could not query SwanLab for deletion: {exc}")
         return None
