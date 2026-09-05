@@ -264,7 +264,7 @@ def cloud_run_for_output(output_dir: Path | None) -> str | None:
         return None
     start = max(starts)
     try:
-        raw = subprocess.check_output(["swanlab", "api", "run", "list", PROJECT_PATH, "-n", "1", "-s", "100"], text=True, stderr=subprocess.DEVNULL)
+        raw = subprocess.check_output([str(Path(sys.executable).parent / "swanlab"), "api", "run", "list", PROJECT_PATH, "-n", "1", "-s", "100"], text=True, stderr=subprocess.DEVNULL)
         # The global SwanLab CLI may emit a Python warning before its JSON.
         # Decode from the first JSON object so cleanup remains reliable.
         start_index = raw.find("{")
@@ -401,6 +401,14 @@ def main() -> int:
     process_alive = bool(process_matches())
     rows = metric_rows()
     reason, metrics = decision(rows, process_alive)
+    if (
+        reason is None
+        and not process_alive
+        and state.get("current_output_dir")
+        and state.get("last_restart_at")
+        and time.time() - float(state["last_restart_at"]) >= STARTUP_GRACE_SECONDS
+    ):
+        reason, metrics = "failed_or_no_metrics", {"rows": len(rows)}
     log(f"check: alive={process_alive} rows={len(rows)} reason={reason or 'hold'} metrics={metrics} params={params}")
     if not reason:
         return 0
