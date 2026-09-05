@@ -196,6 +196,18 @@ def metric_rows() -> list[dict[str, float]]:
     return rows
 
 
+
+def latest_log_text() -> str:
+    logs = sorted(LOG_DIR.glob("fog_v4.1.4_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not logs:
+        return ""
+    return logs[0].read_text(encoding="utf-8", errors="ignore")
+
+
+def training_completed() -> bool:
+    text = latest_log_text()
+    return bool(re.search(r"Training Progress:\s+100%|training (?:completed|finished)", text, re.IGNORECASE))
+
 def process_matches() -> list[Any]:
     if psutil is None:
         result = subprocess.run(["pgrep", "-af", "fog_v4_1_4|fog_config_2gpu|run_expert_old_verl_grpo_2gpu.sh fog"], text=True, capture_output=True)
@@ -401,6 +413,10 @@ def main() -> int:
     process_alive = bool(process_matches())
     rows = metric_rows()
     reason, metrics = decision(rows, process_alive)
+    # A cleanly completed run is not a failed attempt.  Keep its outputs and
+    # avoid an endless restart loop when its latest reward window is healthy.
+    if reason == "failed_or_finished" and not process_alive and training_completed():
+        reason = None
     if (
         reason is None
         and not process_alive
