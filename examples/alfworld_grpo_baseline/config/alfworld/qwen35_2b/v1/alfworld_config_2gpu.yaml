@@ -18,6 +18,9 @@ variables:
   NUM_ROLLOUTS: 4
 
 data:
+  # Qwen3.5-2B only: reason before emitting the single XML tool call.
+  apply_chat_template_kwargs:
+    enable_thinking: true
   train_batch_size: 8
   val_batch_size: 8
   max_response_length: 2048

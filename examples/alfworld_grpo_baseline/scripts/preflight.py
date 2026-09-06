@@ -54,24 +54,28 @@ def main() -> int:
     if missing_data:
         raise RuntimeError("missing prepared VERL parquet files: " + ", ".join(missing_data))
     registry = ALFWorldToolRegistry(["look", "go to cabinet 1"])
-    rendered = tokenizer.apply_chat_template(
-        [{"role": "user", "content": "Choose."}],
-        tools=[registry.build_tool_schema()],
-        tokenize=False,
-        add_generation_prompt=True,
-        enable_thinking=False,
-        chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE,
-    )
-    if "example_function_name" in rendered or "If you choose to call a function" in rendered:
-        raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
-    xml_example = (
-        "<tool_call>\n<function=alfworld_action>\n<parameter=action>\n"
-        "ACTION\n</parameter>\n</function>\n</tool_call>"
-    )
-    if rendered.count(xml_example) != 1:
-        raise RuntimeError("Qwen3.5 ALFWorld template must contain exactly one canonical XML tool-call example")
-    if not rendered.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n"):
-        raise RuntimeError("Qwen3.5 ALFWorld generation prefix does not match enable_thinking=False")
+    for thinking in (False, True):
+        rendered = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "Choose."}],
+            tools=[registry.build_tool_schema()],
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=thinking,
+            chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE,
+        )
+        if "example_function_name" in rendered or "If you choose to call a function" in rendered:
+            raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
+        xml_example = (
+            "<tool_call>\n<function=alfworld_action>\n<parameter=action>\n"
+            "ACTION\n</parameter>\n</function>\n</tool_call>"
+        )
+        if rendered.count(xml_example) != 1:
+            raise RuntimeError("Qwen3.5 ALFWorld template must contain exactly one canonical XML tool-call example")
+        expected_prefix = "<|im_start|>assistant\n<think>\n"
+        if not thinking:
+            expected_prefix += "\n</think>\n\n"
+        if not rendered.endswith(expected_prefix):
+            raise RuntimeError(f"Qwen3.5 generation prefix mismatch: enable_thinking={thinking}")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
     print(f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} rendered_tokens={len(tokenizer(rendered, add_special_tokens=False)["input_ids"])}")
     valid = parse_tool_call('<tool_call>\n<function=alfworld_action>\n<parameter=action>\nlook\n</parameter>\n</function>\n</tool_call>')

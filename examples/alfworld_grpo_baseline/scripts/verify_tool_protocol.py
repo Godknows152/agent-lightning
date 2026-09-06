@@ -27,6 +27,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageText
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
+from alfworld_baseline.thinking import tool_output
 
 PROFILES = {
     "qwen25_1_5b": {
@@ -123,7 +124,9 @@ def main() -> int:
     ap.add_argument("--device", default="cuda:0")
     ap.add_argument("--no-generate", action="store_true")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="qwen35_2b")
+    ap.add_argument("--enable-thinking", action=argparse.BooleanOptionalAction, default=None)
     args = ap.parse_args()
+    thinking = args.enable_thinking if args.enable_thinking is not None else args.profile == "qwen35_2b"
 
     profile = PROFILES[args.profile]
     model_path = profile["model"]
@@ -145,7 +148,7 @@ def main() -> int:
         tools=tools,
         add_generation_prompt=True,
         tokenize=False,
-        enable_thinking=False,
+        enable_thinking=thinking,
         chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE if args.profile.startswith("qwen35") else None,
     )
     result: dict[str, object] = {
@@ -159,7 +162,7 @@ def main() -> int:
         "rendered_prompt_tokens": len(tokenizer(rendered, add_special_tokens=False)["input_ids"]),
         "prompt_contract": {
             "version": row["extra_info"].get("prompt_version"),
-            "enable_thinking": False,
+            "enable_thinking": thinking,
             "required_function": "alfworld_action",
             "required_parameter": "action",
             "runtime_termination_ignored": list(RUNTIME_TERMINATION_MARKERS),
@@ -190,13 +193,14 @@ def main() -> int:
         generations = []
         for seq in generated_ids[:, prompt_len:]:
             text = tokenizer.decode(seq, skip_special_tokens=False)
-            parsed = parse_tool_call(text)
-            visible_text, terminal_tokens = strip_runtime_termination(text)
+            executable_text, _ = tool_output(text, enable_thinking=thinking)
+            parsed = parse_tool_call(executable_text)
+            visible_text, terminal_tokens = strip_runtime_termination(executable_text)
             validation = validate_tool_call(parsed, ALFWorldToolRegistry(admissible_actions)) if admissible_actions else None
             generations.append(
                 {
-                    "class": classify(text),
-                    "strict_xml": classify(text) in {"qwen25_json_strict", "qwen3_xml_strict"},
+                    "class": classify(executable_text),
+                    "strict_xml": classify(executable_text) in {"qwen25_json_strict", "qwen3_xml_strict"},
                     "runtime_termination_tokens": terminal_tokens,
                     "visible_text": visible_text,
                     "parser_status": parsed.status.value,

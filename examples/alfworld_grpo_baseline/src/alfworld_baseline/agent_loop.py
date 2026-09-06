@@ -13,6 +13,7 @@ from verl.tools.schemas import ToolResponse
 
 from .prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
 from .tool_registry import ALFWorldToolRegistry
+from .thinking import ThinkingToolParser, tool_output
 
 
 @register("alfworld_tool_agent")
@@ -43,6 +44,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if self._is_qwen35_alfworld:
             self.apply_chat_template_kwargs = dict(self.apply_chat_template_kwargs)
             self.apply_chat_template_kwargs["chat_template"] = QWEN35_ALFWORLD_CHAT_TEMPLATE
+        self._thinking_enabled = self._is_qwen35_alfworld and bool(
+            self.apply_chat_template_kwargs.get("enable_thinking", False)
+        )
+        if self._thinking_enabled:
+            self.tool_parser = ThinkingToolParser(self.tool_parser, self.tokenizer)
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
         self.NO_TOOL_CALL_PENALTY = float(tool_config.get("no_tool_call_penalty", self.NO_TOOL_CALL_PENALTY))
@@ -196,7 +202,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if getattr(agent_data, "data_source", "") != "alfworld" or agent_data.tool_calls:
             return state
         response_len = len(agent_data.response_ids)
-        response_text = self.tokenizer.decode(agent_data.response_ids)
+        response_text, _ = tool_output(
+            self.tokenizer.decode(agent_data.response_ids),
+            enable_thinking=getattr(self, "_thinking_enabled", False),
+        )
         if any(marker in response_text for marker in self.TOOL_CALL_ATTEMPT_MARKERS):
             self._apply_malformed_tool_call_penalty(agent_data, response_len)
         else:
@@ -211,7 +220,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             return super()._apply_tool_call_format_guardrails(agent_data, token_ids, log_probs)
 
         format_token_ids = self._strip_trailing_termination_tokens(token_ids)
-        text = self.tokenizer.decode(format_token_ids)
+        full_text = self.tokenizer.decode(format_token_ids)
+        text, reasoning_offset = tool_output(
+            full_text, enable_thinking=getattr(self, "_thinking_enabled", False)
+        )
         start = text.find(self.TOOL_CALL_START_TOKEN)
         end = text.find(self.TOOL_CALL_END_TOKEN, start) if start >= 0 else -1
         if start < 0 or end < 0:
@@ -232,7 +244,17 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 details={"extra_prefix": bool(prefix), "extra_suffix": bool(suffix), "multiple_calls": multiple_calls},
             )
 
-        keep_token_count = self._first_complete_tool_call_token_count(token_ids)
+        if getattr(self, "_thinking_enabled", False):
+            # Keep the original reasoning + call IDs and aligned logprobs.
+            # XML examples inside reasoning must not truncate the real call.
+            target = reasoning_offset + call_end
+            keep_token_count = next(
+                (i for i in range(1, len(token_ids) + 1)
+                 if len(self.tokenizer.decode(token_ids[:i])) >= target),
+                None,
+            )
+        else:
+            keep_token_count = self._first_complete_tool_call_token_count(token_ids)
         if keep_token_count is None or keep_token_count >= len(token_ids):
             return token_ids, log_probs
         trimmed_log_probs = log_probs[:keep_token_count] if log_probs else None
