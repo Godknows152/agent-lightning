@@ -23,7 +23,7 @@ data:
     enable_thinking: true
   train_batch_size: 8
   val_batch_size: 8
-  max_response_length: 2048
+  max_response_length: 4096
 
 actor_rollout_ref:
   rollout:
@@ -32,7 +32,7 @@ actor_rollout_ref:
     multi_turn:
       max_user_turns: 30
       max_assistant_turns: 30
-      max_generated_response_length: 2048
+      max_generated_response_length: 4096
   actor:
     ppo_mini_batch_size: 8
     ppo_micro_batch_size_per_gpu: 2
