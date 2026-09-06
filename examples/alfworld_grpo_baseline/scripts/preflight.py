@@ -54,7 +54,16 @@ def main() -> int:
     if missing_data:
         raise RuntimeError("missing prepared VERL parquet files: " + ", ".join(missing_data))
     registry = ALFWorldToolRegistry(["look", "go to cabinet 1"])
-    rendered = tokenizer.apply_chat_template([{"role": "system", "content": "Use one tool."}, {"role": "user", "content": "Choose."}], tools=[registry.build_tool_schema()], tokenize=False, add_generation_prompt=True)
+    rendered = tokenizer.apply_chat_template(
+        [{"role": "user", "content": "Choose."}],
+        tools=[registry.build_tool_schema()],
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+        chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE,
+    )
+    if "example_function_name" in rendered or "If you choose to call a function" in rendered:
+        raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
     print(f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} rendered_tokens={len(tokenizer(rendered, add_special_tokens=False)["input_ids"])}")
     valid = parse_tool_call('<tool_call>\n<function=alfworld_action>\n<parameter=action>\nlook\n</parameter>\n</function>\n</tool_call>')
