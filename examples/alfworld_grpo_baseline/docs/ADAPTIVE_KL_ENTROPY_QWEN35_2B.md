@@ -89,3 +89,28 @@ attempt_006 的策略熵由 0.2253 上升至 0.3092，不能仅凭绝对值低�
 - SDK 删除 bm7ss2uu 返回 True；随后云端项目列表 total=0，确认旧 run 已删除。
 - 实际 ALFWorld 环境在新 TMPDIR 创建成功，并成功执行一个合法动作（初始 55 个可用动作）。
 - 新 TMPDIR 所在盘可用约 3160 GiB；19 项测试通过。当前空闲量不保证整个训练永不耗尽，仍需观察增长。
+
+### 本轮启动环境（脚本内容未修改）
+
+```bash
+mkdir -p /home/LXJ/tmp/alfworld-manual
+TMPDIR=/home/LXJ/tmp/alfworld-manual \
+TMP=/home/LXJ/tmp/alfworld-manual \
+TEMP=/home/LXJ/tmp/alfworld-manual \
+RAY_TMPDIR=/home/LXJ/tmp/alfworld-manual \
+LD_LIBRARY_PATH=/home/LXJ/anaconda3/envs/alfworld-verl/lib/python3.12/site-packages/torch/lib:/home/LXJ/anaconda3/envs/alfworld-verl/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/cuda/lib64 \
+bash /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/scripts/alfworld/qwen35_2b_v1.sh
+```
+
+不要与已运行的训练重复启动；正式新实验应另外指定唯一 ALFWORLD_OUTPUT_DIR/ALFWORLD_LOG_DIR/ALFWORLD_SWANLAB_LOG_DIR。
+本轮专用目录为 `/home/LXJ/tmp/alfworld-tune008`，上例是下一次手动启动的示意；不要删除仍在使用的目录。
+
+
+### 2026-09-06 09:47 +08:00：真实训练更新验证
+
+- 参数提交：`a092cccc`；后台主 PID：3184923；云端 run：vdy2vkeb。
+- 日志已出现 **step=1 / 150**，包含 rollout、old logprob、reference logprob、actor 更新和权重同步；不是仅初始化成功。
+- 首步 entropy=0.205583，KL loss=0.00071814，KL coeff=0.004，reward mean=-0.01875，工具选择熵=3.923626，grad norm=12.75；数值均有限。
+- old logprob 耗时约 21.56 秒，reference 25.66 秒，actor 更新 138.44 秒。
+- 已读取主进程、TaskRunner、Actor worker、AgentLoop worker 的环境，确认 TMPDIR/TMP/TEMP/RAY_TMPDIR 均指向新专用目录。
+- 当前仍在后台训练；首步成功不代表已证实长期稳定或奖励持续改善。至少在 5–10 个完整更新后比较同一 Prompt 下的窗口，不因单点熵偏低再次自动加大正则。
