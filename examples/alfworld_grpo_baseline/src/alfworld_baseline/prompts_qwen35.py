@@ -24,7 +24,7 @@ QWEN35_ALFWORLD_CHAT_TEMPLATE = r"""
 {%- for tool in tools %}
 {{- '\n' + (tool | tojson) }}
 {%- endfor %}
-{{- '\n</tools>\n\nCall exactly one provided function using the XML tool-call format. The action argument must be copied exactly from the current admissible action list. Do not answer in natural language.\n<|im_end|>\n' }}
+{{- '\n</tools>\n\nReturn exactly one tool call and no other visible text. Use this exact XML structure, replacing ACTION with one exact value from the current action enum:\n\n<tool_call>\n<function=alfworld_action>\n<parameter=action>\nACTION\n</parameter>\n</function>\n</tool_call>\n\nDo not output ACTION literally. Do not output a plain-text action, explanation, plan, or suffix.\n<|im_end|>\n' }}
 {%- endif %}
 {%- for message in messages %}
 {%- if message.role == 'system' %}
@@ -41,6 +41,11 @@ QWEN35_ALFWORLD_CHAT_TEMPLATE = r"""
 {%- endfor %}
 {%- if add_generation_prompt %}
 {{- '<|im_start|>assistant\n' }}
+{%- if enable_thinking is defined and enable_thinking %}
+{{- '<think>\n' }}
+{%- else %}
+{{- '<think>\n\n</think>\n\n' }}
+{%- endif %}
 {%- endif %}
 """.strip()
 
@@ -72,7 +77,7 @@ Current observation:
 Current admissible actions (the action value must be copied exactly from this list):
 {action_text}
 
-Call `alfworld_action` exactly once. Copy one action character-for-character from the current admissible actions. Do not output the task goal, a plan, an explanation, or a natural-language answer."""
+Choose exactly one next action character-for-character from the current admissible actions."""
 
 
 def build_messages(

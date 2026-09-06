@@ -128,7 +128,7 @@ def main() -> int:
     profile = PROFILES[args.profile]
     model_path = profile["model"]
     data_path = profile["data"]
-    out = ROOT / "outputs" / "diagnostics" / args.profile / "tool_protocol.json"
+    output_path = ROOT / "outputs" / "diagnostics" / args.profile / "tool_protocol.json"
 
     row = pd.read_parquet(data_path).iloc[0]
     messages = row["prompt"].tolist() if hasattr(row["prompt"], "tolist") else row["prompt"]
@@ -181,14 +181,14 @@ def main() -> int:
         )
         inputs = tokenizer(rendered, return_tensors="pt").to(model.device)
         with torch.inference_mode():
-            out = model.generate(
+            generated_ids = model.generate(
                 **inputs, do_sample=True, temperature=1.0, top_p=1.0,
                 num_return_sequences=args.samples, max_new_tokens=args.max_new_tokens,
                 pad_token_id=tokenizer.pad_token_id, eos_token_id=tokenizer.eos_token_id,
             )
         prompt_len = inputs["input_ids"].shape[1]
         generations = []
-        for seq in out[:, prompt_len:]:
+        for seq in generated_ids[:, prompt_len:]:
             text = tokenizer.decode(seq, skip_special_tokens=False)
             parsed = parse_tool_call(text)
             visible_text, terminal_tokens = strip_runtime_termination(text)
@@ -211,10 +211,10 @@ def main() -> int:
         result["validation_status_counts"] = dict(Counter(x["validation_status"] for x in generations))
         result["strict_xml_rate"] = sum(x["strict_xml"] for x in generations) / len(generations) if generations else 0.0
         result["strict_qwen25_json_rate"] = sum(x["class"] == "qwen25_json_strict" for x in generations) / len(generations) if generations else 0.0
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({k: result[k] for k in ("sample_id", "rendered_prompt_chars", "rendered_prompt_tokens", "generation_class_counts", "parser_status_counts") if k in result}, ensure_ascii=False))
-    print(f"diagnostic_saved={out}")
+    print(f"diagnostic_saved={output_path}")
     return 0
 
 

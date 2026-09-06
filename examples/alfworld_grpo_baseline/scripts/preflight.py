@@ -64,6 +64,14 @@ def main() -> int:
     )
     if "example_function_name" in rendered or "If you choose to call a function" in rendered:
         raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
+    xml_example = (
+        "<tool_call>\n<function=alfworld_action>\n<parameter=action>\n"
+        "ACTION\n</parameter>\n</function>\n</tool_call>"
+    )
+    if rendered.count(xml_example) != 1:
+        raise RuntimeError("Qwen3.5 ALFWorld template must contain exactly one canonical XML tool-call example")
+    if not rendered.endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n"):
+        raise RuntimeError("Qwen3.5 ALFWorld generation prefix does not match enable_thinking=False")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
     print(f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} rendered_tokens={len(tokenizer(rendered, add_special_tokens=False)["input_ids"])}")
     valid = parse_tool_call('<tool_call>\n<function=alfworld_action>\n<parameter=action>\nlook\n</parameter>\n</function>\n</tool_call>')

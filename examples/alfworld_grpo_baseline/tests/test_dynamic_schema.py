@@ -5,9 +5,29 @@ from types import SimpleNamespace
 import pytest
 
 from alfworld_baseline.agent_loop import ALFWorldToolAgentLoop
+from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
 from alfworld_baseline.tool_registry import ALFWorldToolRegistry
 from verl.experimental.agent_loop.tool_agent_loop import AgentData
 from verl.tools.schemas import OpenAIFunctionToolSchema
+
+
+
+def test_qwen35_tool_protocol_has_one_concrete_xml_source():
+    xml_example = (
+        "<tool_call>\n<function=alfworld_action>\n<parameter=action>\n"
+        "ACTION\n</parameter>\n</function>\n</tool_call>"
+    )
+    assert QWEN35_ALFWORLD_CHAT_TEMPLATE.count(xml_example.replace("\n", "\\n")) == 1
+    assert "example_function_name" not in QWEN35_ALFWORLD_CHAT_TEMPLATE
+    assert "Do not output ACTION literally" in QWEN35_ALFWORLD_CHAT_TEMPLATE
+
+    user_prompt = build_user_prompt(
+        mission="find an apple", observation="A drawer.", admissible_actions=("look", "open drawer 1")
+    )
+    assert "<tool_call>" not in user_prompt
+    assert "alfworld_action" not in user_prompt
+    assert "Current observation:\nA drawer." in user_prompt
+    assert "- look\n- open drawer 1" in user_prompt
 
 
 def test_initial_schema_and_refresh_are_per_trajectory():
