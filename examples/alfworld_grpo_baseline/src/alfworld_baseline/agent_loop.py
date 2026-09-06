@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -10,6 +11,7 @@ from verl.experimental.agent_loop.tool_agent_loop import AgentData, AgentState, 
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 from verl.tools.schemas import ToolResponse
 
+from .prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
 from .tool_registry import ALFWorldToolRegistry
 
 
@@ -18,9 +20,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     """ALFWorld loop with authoritative state prompts and bounded history.
 
     The full VERL trajectory remains available for policy-loss accounting, but
-    the next inference request uses a fresh compact state prompt. This prevents
-    stale ALFWorld action lists and unbounded conversation growth from entering
-    the Qwen3.5-2B context.
+    every inference request uses a fresh current-state-only prompt. Previous
+    observations, action lists, tool responses, and assistant turns are never
+    sent as context for the next ALFWorld decision.
     """
 
     NO_TOOL_CALL_PENALTY = -0.05
@@ -29,10 +31,18 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     FORMAT_PENALTY = -0.05
     FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = 0.0
     TRAJECTORY_REPEAT_PENALTY_SCALE = 0.0
-    RECENT_HISTORY_TURNS = 3
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
+        # Replace the stock Qwen3.5 template only for Qwen3.5 ALFWorld runs.
+        # The stock template contains a generic example_function_name and
+        # normal-answer branch that compete with the dynamic schema. Qwen2.5
+        # keeps its existing Hermes path unchanged.
+        model_profile = os.environ.get("ALFWORLD_MODEL_PROFILE", "").lower()
+        self._is_qwen35_alfworld = model_profile.startswith("qwen35") or self.processor is not None
+        if self._is_qwen35_alfworld:
+            self.apply_chat_template_kwargs = dict(self.apply_chat_template_kwargs)
+            self.apply_chat_template_kwargs["chat_template"] = QWEN35_ALFWORLD_CHAT_TEMPLATE
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
         self.NO_TOOL_CALL_PENALTY = float(tool_config.get("no_tool_call_penalty", self.NO_TOOL_CALL_PENALTY))
@@ -51,7 +61,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             content = message.get("content", "")
             if not isinstance(content, str):
                 continue
-            match = re.search(r"(?:ALFWorld task|Task):\s*(.+?)(?:\n\n|$)", content, re.DOTALL)
+            match = re.search(
+                r"(?:ALFWorld task|Task goal \(not an executable action\)|Task):\s*(.+?)(?:\n\n|$)",
+                content,
+                re.DOTALL,
+            )
             if match:
                 return match.group(1).strip()
             match = re.search(r"Your task is to:\s*(.+?)(?:\n\n|$)", content, re.DOTALL)
@@ -81,24 +95,19 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         mission: str,
         observation: str,
         actions: tuple[str, ...],
-        history: list[str],
     ) -> list[dict[str, str]]:
-        history_text = "\n".join(history[-self.RECENT_HISTORY_TURNS :]) or "(none)"
-        action_text = "\n".join(f"- {action}" for action in actions)
-        content = f"""ALFWorld task:
-{mission}
+        """Build the next request from the goal and latest state only."""
 
-Current observation (latest state):
-{self._compact_observation(observation, mission)}
-
-Recent action/tool history (last {self.RECENT_HISTORY_TURNS} turns):
-{history_text}
-
-Current admissible actions (copy exactly one from this latest list):
-{action_text}
-
-Use the provided alfworld_action tool exactly once. Set its action to one item copied verbatim from the current admissible actions above. Do not output a natural-language answer."""
-        return [{"role": "user", "content": content}]
+        return [
+            {
+                "role": "user",
+                "content": build_user_prompt(
+                    mission=mission,
+                    observation=observation,
+                    admissible_actions=actions,
+                ),
+            }
+        ]
 
     async def _set_authoritative_initial_prompt(self, agent_data: AgentData) -> None:
         """Create the tool first and build turn zero from its actual state."""
@@ -118,7 +127,7 @@ Use the provided alfworld_action tool exactly once. Set its action to one item c
         # Remove the dataset's possibly stale state and any custom system
         # message. The chat template supplies the canonical tool instructions.
         agent_data.messages = self._state_prompt_messages(
-            mission=mission, observation=observation, actions=actions, history=[]
+            mission=mission, observation=observation, actions=actions
         )
         # The action enum is part of the model-facing tool schema, not merely
         # prose in the prompt. Rebuild it from the authoritative environment
@@ -131,7 +140,7 @@ Use the provided alfworld_action tool exactly once. Set its action to one item c
         return await super()._handle_pending_state(agent_data, sampling_params)
 
     async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
-        """Use only the latest environment state plus the last three summaries."""
+        """Rebuild the next request from only the latest environment state."""
         if getattr(agent_data, "data_source", "") != "alfworld":
             return
         if agent_data.extra_fields.get("alfworld_environment_finished"):
@@ -141,14 +150,9 @@ Use the provided alfworld_action tool exactly once. Set its action to one item c
         actions = tuple(
             str(a) for a in tool_metrics.get("admissible_commands", agent_data.alfworld_current_actions)
         )
-        action = str(tool_metrics.get("action", "unknown"))
-        result = str(tool_metrics["error"]) if tool_metrics.get("error") else self._compact_observation(
-            observation, agent_data.alfworld_mission
-        ).replace("\n", " ")[:240]
-        history = list(getattr(agent_data, "alfworld_recent_history", []))
-        history.append(f"Action: {action} — {result}.")
-        history = history[-self.RECENT_HISTORY_TURNS :]
-        agent_data.alfworld_recent_history = history
+        # Keep this compatibility field empty: history is retained internally
+        # only for accounting/debugging and is never part of model context.
+        agent_data.alfworld_recent_history = []
         agent_data.alfworld_current_observation = observation
         agent_data.alfworld_current_actions = actions
         # Refresh the enum after every environment transition. The next model
@@ -158,7 +162,6 @@ Use the provided alfworld_action tool exactly once. Set its action to one item c
             mission=agent_data.alfworld_mission,
             observation=observation,
             actions=actions,
-            history=history,
         )
         # Only the next inference context is compacted. prompt_ids retains the
         # complete VERL trajectory and its response mask for training. Per-turn

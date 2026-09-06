@@ -42,6 +42,7 @@ def main() -> int:
     print(f"cxx20_compiler={cxx} nvcc={nvcc}")
     from transformers import AutoTokenizer
     from alfworld_baseline.parser import parse_tool_call
+    from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
     from alfworld_baseline.validator import ValidationStatus, validate_tool_call
     model = Path(os.environ.get("ALFWORLD_MODEL", "/home/LXJ/Python_Projects/Models/Qwen3.5-2B"))

@@ -50,7 +50,8 @@ def test_initial_schema_and_refresh_are_per_trajectory():
             await loop._rebuild_generation_prompt_after_tool(first)
         assert actions(first) == ["look", "take apple 4"]
         assert actions(second) == ["look", "open cabinet 2"]
-        assert len(first.alfworld_recent_history) == 3
+        assert first.alfworld_recent_history == []
+        assert "Recent action/tool history" not in first.messages[0]["content"]
         assert "action 0" not in first.messages[0]["content"]
         assert "take apple 4" in first.messages[0]["content"]
         assert first.prompt_ids == [9, 8, 7]

@@ -25,6 +25,9 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageText
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
+
 PROFILES = {
     "qwen25_1_5b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen2.5-1.5B-Instruct"),
@@ -34,12 +37,12 @@ PROFILES = {
     "qwen35_9b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen3.5-9B"),
         "data": ROOT / "data" / "qwen35_9b" / "train.parquet",
-        "template": "Qwen3.5 tokenizer native chat_template",
+        "template": "Qwen3.5 ALFWorld current-state chat_template",
     },
     "qwen35_2b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen3.5-2B"),
         "data": ROOT / "data" / "qwen35_2b" / "train.parquet",
-        "template": "Qwen3.5 tokenizer native chat_template",
+        "template": "Qwen3.5 ALFWorld current-state chat_template",
     },
 }
 RUNTIME_TERMINATION_MARKERS = ("<|im_end|>", "<|endoftext|>")
@@ -102,10 +105,14 @@ def _admissible_actions(messages: list[dict[str, object]]) -> tuple[str, ...]:
     """Extract the action list injected by ``build_user_prompt``."""
 
     user = next((str(m.get("content", "")) for m in messages if m.get("role") == "user"), "")
-    marker = "Current admissible actions (copy exactly one):\n"
-    if marker not in user:
+    markers = (
+        "Current admissible actions (the action value must be copied exactly from this list):\n",
+        "Current admissible actions (copy exactly one):\n",
+    )
+    marker = next((candidate for candidate in markers if candidate in user), None)
+    if marker is None:
         return ()
-    section = user.split(marker, 1)[1].split("\n\nSTRICT OUTPUT CHECK", 1)[0]
+    section = user.split(marker, 1)[1].split("\n\n", 1)[0]
     return tuple(line[2:] for line in section.splitlines() if line.startswith("- "))
 
 
@@ -127,14 +134,11 @@ def main() -> int:
     messages = row["prompt"].tolist() if hasattr(row["prompt"], "tolist") else row["prompt"]
     messages = [dict(x) for x in messages]
     admissible_actions = _admissible_actions(messages)
-    tools = [{
-        "type": "function",
-        "function": {
-            "name": "alfworld_action",
-            "description": "Execute exactly one admissible ALFWorld text action.",
-            "parameters": {"type": "object", "properties": {"action": {"type": "string"}}, "required": ["action"]},
-        },
-    }]
+    from alfworld_baseline.tool_registry import ALFWorldToolRegistry
+
+    if not admissible_actions:
+        raise RuntimeError("could not extract admissible actions from the prepared prompt")
+    tools = [ALFWorldToolRegistry(admissible_actions).build_tool_schema()]
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     rendered = tokenizer.apply_chat_template(
         messages,
@@ -142,6 +146,7 @@ def main() -> int:
         add_generation_prompt=True,
         tokenize=False,
         enable_thinking=False,
+        chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE if args.profile.startswith("qwen35") else None,
     )
     result: dict[str, object] = {
         "profile": args.profile,
