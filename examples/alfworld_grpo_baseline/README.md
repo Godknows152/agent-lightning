@@ -104,3 +104,15 @@ Qwen3.5-9B、Qwen2.5 等未启用 `environment_driven` 的配置仍保留旧的 
 
 目前只完成隔离组件和无 GPU smoke/preflight；尚未启动正式 baseline 训练。默认只训练一个 `seed0`；
 `seed1/seed2` 和三 seed 串行脚本仅用于后续需要均值/方差时的可选重复实验。
+
+### Trajectory-local repeated-action penalty
+
+Valid executions of the same exact ALFWorld command are counted across the entire
+trajectory, including nonconsecutive repetitions. Occurrence `k` contributes
+`-0.1 * (k - 1)` in addition to its native environment reward (first execution: 0;
+second: -0.1; third: -0.2). There is no cap. Invalid attempts do not enter the count,
+and counters reset per trajectory, including when reusing pooled environments.
+Each decision receives at most one category: no call (-0.1), invalid call (-0.1),
+or valid repeated action. Terminal success reward is preserved. The third counter
+is `alfworld_penalty/repeated_action_count`. No state-change bonus or history
+context is introduced.

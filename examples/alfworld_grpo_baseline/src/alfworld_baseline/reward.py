@@ -27,7 +27,10 @@ def compute_score(
     0 otherwise). The agent loop additionally appends exactly one ``-0.1``
     penalty for each decision that either has no parsed tool call or contains a
     parsed but invalid tool call. The returned score is therefore the native
-    environment reward plus the two allowed protocol penalties.
+    environment reward plus the two protocol penalties and a mutually
+    exclusive repeated-action penalty for valid decisions: occurrence k of an
+    exact command costs 0.1 * (k - 1), counting only valid executions within
+    the same trajectory.
     """
     if data_source != "alfworld":
         raise ValueError(f"ALFWorld reward received unexpected data_source={data_source!r}")

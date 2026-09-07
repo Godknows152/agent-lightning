@@ -140,6 +140,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_invalid_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_valid_tool_call_count", 0)
+            agent_data.extra_fields.setdefault("alfworld_repeated_action_penalty_count", 0)
+            agent_data.alfworld_action_occurrences = {}
             if getattr(self, "_environment_budget", None) is not None:
                 agent_data.extra_fields.update({
                     "alfworld_decision_steps": 0,
@@ -185,22 +187,21 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
     ALFWORLD_NO_TOOL_CALL_PENALTY = -0.1
     ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.1
+    ALFWORLD_REPEATED_ACTION_PENALTY = -0.1
 
     def _record_alfworld_penalty(
         self,
         agent_data: AgentData,
-        kind: Literal["no_tool_call", "invalid_tool_call"],
+        kind: Literal["no_tool_call", "invalid_tool_call", "repeated_action"],
         *,
         append_reward: bool,
+        prior_occurrences: int = 0,
     ) -> float:
-        """Record exactly one ALFWorld protocol penalty.
+        """Record one of three mutually exclusive decision penalties.
 
-        ALFWorld deliberately keeps its protocol accounting separate from the
-        restoration loop's generic ``penalty_records`` mechanism. There are
-        only two mutually exclusive categories: no parsed tool call and a
-        parsed but invalid tool call. ``append_reward`` is false when the
-        caller returns the penalty to VERL, whose processing phase appends the
-        returned value to ``tool_rewards`` itself.
+        Valid repeated actions pay -0.1 per prior valid occurrence of that
+        exact command in this trajectory. Invalid attempts never enter this
+        count. Returned penalties are appended by the processing phase.
         """
         if kind == "no_tool_call":
             count_key = "alfworld_no_tool_call_penalty_count"
@@ -208,6 +209,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         elif kind == "invalid_tool_call":
             count_key = "alfworld_invalid_tool_call_penalty_count"
             value = self.ALFWORLD_INVALID_TOOL_CALL_PENALTY
+        elif kind == "repeated_action":
+            if prior_occurrences < 1:
+                raise ValueError("Repeated actions require at least one prior valid occurrence")
+            count_key = "alfworld_repeated_action_penalty_count"
+            value = self.ALFWORLD_REPEATED_ACTION_PENALTY * prior_occurrences
         else:  # pragma: no cover - Literal callers should make this unreachable.
             raise ValueError(f"unknown ALFWorld penalty kind: {kind!r}")
 
@@ -378,6 +384,21 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             # (for example an inadmissible action). This is category 2, and
             # the returned value is appended by the processing phase.
             reward = self._invalid_tool_call_penalty(agent_data)
+        elif getattr(agent_data, "data_source", "") == "alfworld" and isinstance(metrics, dict):
+            action = metrics.get("action")
+            if isinstance(action, str) and action:
+                occurrences = getattr(agent_data, "alfworld_action_occurrences", None)
+                if occurrences is None:
+                    occurrences = {}
+                    agent_data.alfworld_action_occurrences = occurrences
+                prior = occurrences.get(action, 0)
+                occurrences[action] = prior + 1
+                if prior:
+                    penalty = self._record_alfworld_penalty(
+                        agent_data, "repeated_action", append_reward=False, prior_occurrences=prior
+                    )
+                    # Preserve native environment reward, including terminal success.
+                    reward = float(reward or 0.0) + penalty
         if getattr(agent_data, "data_source", "") == "alfworld" and isinstance(metrics, dict):
             agent_data.alfworld_last_tool_metrics = dict(metrics)
             if metrics.get("admissible_commands"):

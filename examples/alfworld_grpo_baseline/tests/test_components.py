@@ -121,7 +121,7 @@ def test_alfworld_agent_loop_marks_environment_terminal(monkeypatch):
     assert data.extra_fields["alfworld_terminal_reason"] == "done"
 
 
-def test_alfworld_rollout_metrics_only_expose_the_two_penalty_series():
+def test_alfworld_rollout_metrics_expose_three_penalty_series():
     from types import SimpleNamespace
     from alfworld_baseline.metrics import compute_alfworld_rollout_metrics
 
@@ -131,6 +131,7 @@ def test_alfworld_rollout_metrics_only_expose_the_two_penalty_series():
                 "alfworld_terminal_reason": ["done", "max_steps", "max_steps"],
                 "alfworld_no_tool_call_penalty_count": [2, 0, 1],
                 "alfworld_invalid_tool_call_penalty_count": [0, 3, 1],
+                "alfworld_repeated_action_penalty_count": [1, 2, 3],
                 "alfworld_valid_tool_call_count": [4, 1, 2],
             }
         )
@@ -140,6 +141,7 @@ def test_alfworld_rollout_metrics_only_expose_the_two_penalty_series():
         "alfworld_termination/max_steps_count": 2,
         "alfworld_penalty/no_tool_call_count": 3,
         "alfworld_penalty/invalid_tool_call_count": 4,
+        "alfworld_penalty/repeated_action_count": 6,
         "alfworld/valid_tool_call_count/min": 1,
         "alfworld/valid_tool_call_count/max": 4,
         "alfworld/valid_tool_call_count/mean": 7 / 3,
@@ -149,6 +151,7 @@ def test_alfworld_rollout_metrics_only_expose_the_two_penalty_series():
         "alfworld_termination/max_steps_count",
         "alfworld_penalty/no_tool_call_count",
         "alfworld_penalty/invalid_tool_call_count",
+        "alfworld_penalty/repeated_action_count",
         "alfworld/valid_tool_call_count/min",
         "alfworld/valid_tool_call_count/max",
         "alfworld/valid_tool_call_count/mean",

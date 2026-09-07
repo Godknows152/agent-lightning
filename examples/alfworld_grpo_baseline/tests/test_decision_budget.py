@@ -107,7 +107,7 @@ def test_full_50_step_run_retains_all_12800_tokens_and_releases_tool():
     assert output.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
     assert output.extra_fields['alfworld_valid_tool_call_count'] == 0
     assert output.extra_fields['tool_rewards'] == [-0.1] * 50
-    assert sum(output.extra_fields['tool_rewards']) == -5.0
+    assert sum(output.extra_fields['tool_rewards']) == pytest.approx(-5.0)
     assert loop.server_manager.generate.await_count == 50
     for call in loop.server_manager.generate.await_args_list:
         assert call.kwargs['sampling_params']['max_new_tokens'] == 256
@@ -184,7 +184,7 @@ def test_valid_actions_finish_only_on_done_or_max_steps_and_ignore_long_observat
     assert len(executed) == n
     assert len(data.response_mask) == n * len(CALL)
     assert data.extra_fields['alfworld_terminal_reason'] == ('done' if done_at else 'max_steps')
-    assert sum(data.tool_rewards) == (1.0 if done_at else 0.0)
+    assert sum(data.tool_rewards) == pytest.approx((1.0 if done_at else 0.0) - 0.1 * n * (n - 1) / 2)
     assert data.extra_fields['alfworld_valid_tool_call_count'] == n
     assert data.successful_action_history == ['look'] * n
     assert len(data.extra_fields['alfworld_turn_contexts']) == n
@@ -357,3 +357,78 @@ def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
 
     outputs = asyncio.run(run())
     assert [out.extra_fields["alfworld_decision_steps"] for out in outputs] == [2, 2]
+
+
+def test_multiple_generated_calls_are_trimmed_and_feedback_precedes_next_generation():
+    """Flattened rollout output is not evidence of concurrent tool execution."""
+    loop = make_loop(max_steps=2)
+    data = make_data(loop)
+    set_server(loop, CALL + CALL)
+    events = []
+    original_generate = loop.server_manager.generate
+
+    async def generate(*args, **kwargs):
+        events.append("generate")
+        if len(events) > 1:
+            assert data.alfworld_current_observation == "feedback after action 1"
+        return await original_generate(*args, **kwargs)
+
+    loop.server_manager.generate = generate
+
+    class Tool:
+        async def execute(self, instance, args, **kwargs):
+            events.append("tool")
+            return ToolResponse(text="feedback"), 0.0, {
+                "action": "look", "done": False,
+                "observation": "feedback after action 1", "admissible_commands": ["look"],
+            }
+
+    loop.tools = {"alfworld_action": Tool()}
+    loop._get_or_create_tool_instance = AsyncMock(return_value="instance")
+
+    async def run():
+        for _ in range(2):
+            assert await loop._handle_generating_state(data, {}) == AgentState.PROCESSING_TOOLS
+            assert loop.tokenizer.decode(data.response_ids) == CALL
+            await loop._handle_processing_tools_state(data)
+
+    asyncio.run(run())
+    assert events == ["generate", "tool", "generate", "tool"]
+    assert data.total_tool_calls == 2
+    assert len(data.extra_fields["alfworld_turn_contexts"]) == 2
+    assert loop.tokenizer.decode(data.prompt_ids[2:]) == CALL + CALL
+
+
+def test_repeated_action_penalties_are_trajectory_local_and_mutually_exclusive():
+    loop = make_loop(max_steps=10)
+    data = make_data(loop)
+    loop._get_or_create_tool_instance = AsyncMock(return_value="instance")
+
+    class Tool:
+        async def execute(self, instance, args, **kwargs):
+            action = args["action"]
+            return ToolResponse(text="feedback"), 1.0, {
+                "action": action, "error": "invalid_action" if action == "bad" else None,
+                "observation": "room", "admissible_commands": ["look", "inventory", "bad"],
+            }
+
+    loop.tools = {"alfworld_action": Tool()}
+    data.alfworld_current_actions = ("look", "inventory", "bad")
+
+    async def step(target, action):
+        target.tool_calls = [] if action is None else [
+            FunctionCall(name="alfworld_action", arguments='{"action":"' + action + '"}')
+        ]
+        return await loop._process_environment_decision(target)
+
+    for action in ["look", "inventory", "look", "bad", None, "look", "inventory", "bad"]:
+        asyncio.run(step(data, action))
+    assert data.tool_rewards == pytest.approx([1, 1, .9, -.1, -.1, .8, .9, -.1])
+    assert data.extra_fields["alfworld_repeated_action_penalty_count"] == 3
+    assert data.extra_fields["alfworld_invalid_tool_call_penalty_count"] == 2
+    assert data.extra_fields["alfworld_no_tool_call_penalty_count"] == 1
+    assert data.alfworld_action_occurrences == {"look": 3, "inventory": 2}
+    other = make_data(loop)
+    asyncio.run(step(other, "look"))
+    assert other.tool_rewards == [1.0]
+    assert other.extra_fields.get("alfworld_repeated_action_penalty_count", 0) == 0

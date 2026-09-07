@@ -9,6 +9,7 @@ import numpy as np
 _PENALTY_COUNT_FIELDS = {
     "alfworld_no_tool_call_penalty_count": "alfworld_penalty/no_tool_call_count",
     "alfworld_invalid_tool_call_penalty_count": "alfworld_penalty/invalid_tool_call_count",
+    "alfworld_repeated_action_penalty_count": "alfworld_penalty/repeated_action_count",
 }
 
 
