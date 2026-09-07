@@ -21,8 +21,8 @@ data:
   # Qwen3.5-2B only: emit a tool call directly, without generated reasoning.
   apply_chat_template_kwargs:
     enable_thinking: false
-  train_batch_size: 4
-  val_batch_size: 4
+  train_batch_size: 2
+  val_batch_size: 2
   # Storage only: recomputed from tool max_steps * max_new_tokens_per_turn
   # by the ALFWorld entrypoint before worker creation. Not a rollout cutoff.
   max_response_length: 4096
@@ -38,7 +38,7 @@ actor_rollout_ref:
   actor:
     # Replay expands every trajectory into per-turn prompts; use a small actor
     # update batch because backward activations dominate memory.
-    ppo_mini_batch_size: 2
+    ppo_mini_batch_size: 1
     ppo_micro_batch_size_per_gpu: 1
     entropy_coeff: 0.02
     fsdp_config:

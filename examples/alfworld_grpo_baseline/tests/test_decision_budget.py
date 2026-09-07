@@ -294,9 +294,9 @@ def test_composed_config_disables_thinking_and_derives_storage_only_for_opted_in
     assert config.data.apply_chat_template_kwargs.enable_thinking is False
     assert config.trainer.enable_penalty_logging is False
     if enabled:
-        assert budget == ALFWorldDecisionBudget(16, 256)
-        assert config.data.max_response_length == 4096
-        assert config.actor_rollout_ref.rollout.response_length == 4096
+        assert budget == ALFWorldDecisionBudget(16, 128)
+        assert config.data.max_response_length == 2048
+        assert config.actor_rollout_ref.rollout.response_length == 2048
         assert config.actor_rollout_ref.rollout.multi_turn.max_generated_response_length is None
         assert config.actor_rollout_ref.rollout.multi_turn.max_assistant_turns is None
     else:
