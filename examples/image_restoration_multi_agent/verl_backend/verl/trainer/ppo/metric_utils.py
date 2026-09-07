@@ -109,7 +109,7 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
             - critic/vf_explained_var: Explained variance of the value function (if use_critic=True)
             - response_length/mean, max, min, clip_ratio: Statistics about response lengths
             - prompt_length/mean, max, min, clip_ratio: Statistics about prompt lengths
-            - num_turns/mean, max, min: Actual tool-call statistics when available, otherwise chat-turn statistics
+            - num_turns/mean, max, min: Non-ALFWorld agent-loop turn statistics
     """
     sequence_score = batch.batch["token_level_scores"].sum(-1)
     sequence_reward = batch.batch["token_level_rewards"].sum(-1)
@@ -255,23 +255,28 @@ def compute_data_metrics(batch: DataProto, use_critic: bool = True) -> dict[str,
         "prompt_length/clip_ratio": torch.mean(torch.eq(prompt_length, max_prompt_length).float()).detach().item(),
     }
 
-    # Keep the existing SwanLab key stable while making it report actual tool calls
-    # for agent-loop batches. Other workflows without tool-call data retain the
-    # original chat-turn fallback.
-    tool_call_counts = batch.non_tensor_batch.get("tool_call_counts")
-    if tool_call_counts is not None:
-        tool_call_counts = np.asarray(tool_call_counts, dtype=np.int64)
-        metrics["num_turns/min"] = tool_call_counts.min()
-        metrics["num_turns/max"] = tool_call_counts.max()
-        metrics["num_turns/mean"] = tool_call_counts.mean()
-        metrics["tool_call_counts/min"] = tool_call_counts.min()
-        metrics["tool_call_counts/max"] = tool_call_counts.max()
-        metrics["tool_call_counts/mean"] = tool_call_counts.mean()
-    elif "__num_turns__" in batch.non_tensor_batch:
-        num_turns = batch.non_tensor_batch["__num_turns__"]
-        metrics["num_turns/min"] = num_turns.min()
-        metrics["num_turns/max"] = num_turns.max()
-        metrics["num_turns/mean"] = num_turns.mean()
+    # ALFWorld has a task-specific valid-call metric. Do not emit the legacy
+    # num_turns/tool_call_counts aliases for those batches; preserve them for
+    # other agent-loop workflows that still use the shared metric utility.
+    data_sources = batch.non_tensor_batch.get("data_source")
+    is_alfworld = data_sources is not None and np.any(
+        np.asarray(data_sources, dtype=object).reshape(-1) == "alfworld"
+    )
+    if not is_alfworld:
+        tool_call_counts = batch.non_tensor_batch.get("tool_call_counts")
+        if tool_call_counts is not None:
+            tool_call_counts = np.asarray(tool_call_counts, dtype=np.int64)
+            metrics["num_turns/min"] = tool_call_counts.min()
+            metrics["num_turns/max"] = tool_call_counts.max()
+            metrics["num_turns/mean"] = tool_call_counts.mean()
+            metrics["tool_call_counts/min"] = tool_call_counts.min()
+            metrics["tool_call_counts/max"] = tool_call_counts.max()
+            metrics["tool_call_counts/mean"] = tool_call_counts.mean()
+        elif "__num_turns__" in batch.non_tensor_batch:
+            num_turns = batch.non_tensor_batch["__num_turns__"]
+            metrics["num_turns/min"] = num_turns.min()
+            metrics["num_turns/max"] = num_turns.max()
+            metrics["num_turns/mean"] = num_turns.mean()
 
     return metrics
 

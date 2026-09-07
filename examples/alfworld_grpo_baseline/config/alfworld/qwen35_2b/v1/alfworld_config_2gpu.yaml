@@ -18,11 +18,13 @@ variables:
   NUM_ROLLOUTS: 4
 
 data:
-  # Qwen3.5-2B only: reason before emitting the single XML tool call.
+  # Qwen3.5-2B only: emit a tool call directly, without generated reasoning.
   apply_chat_template_kwargs:
-    enable_thinking: true
+    enable_thinking: false
   train_batch_size: 8
   val_batch_size: 8
+  # Storage only: recomputed from tool max_steps * max_new_tokens_per_turn
+  # by the ALFWorld entrypoint before worker creation. Not a rollout cutoff.
   max_response_length: 4096
 
 actor_rollout_ref:
@@ -30,24 +32,23 @@ actor_rollout_ref:
     agent:
       num_workers: 4
     multi_turn:
-      max_user_turns: 30
-      max_assistant_turns: 30
-      max_generated_response_length: 4096
+      max_user_turns: null
+      max_assistant_turns: null
+      max_generated_response_length: null
   actor:
     ppo_mini_batch_size: 8
-    ppo_micro_batch_size_per_gpu: 2
+    # Replay expands every trajectory into per-turn prompts; keep backward batches small.
+    ppo_micro_batch_size_per_gpu: 1
     entropy_coeff: 0.02
-    # Apply a conservative explicit KL penalty against the frozen reference
-    # policy. Keep reward-side KL disabled to avoid penalizing the same drift
-    # twice.
-    use_kl_loss: true
-    kl_loss_coef: 0.004
-    kl_loss_type: low_var_kl
     fsdp_config:
       param_offload: true
       optimizer_offload: true
+      # Recompute entropy intermediates instead of keeping them through the actor forward.
+      entropy_checkpointing: true
   ref:
     fsdp_config:
       param_offload: true
   model:
     enable_gradient_checkpointing: true
+    # Keep checkpointed layer activations on CPU between forward and backward.
+    enable_activation_offload: true

@@ -1,6 +1,6 @@
 # ALFWorld structured-tool baseline
 
-本目录隔离 ALFWorld 文本环境与 old-VERL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。公共的 ALFWorld 环境、奖励、Validator 与 GRPO 参数保持共用。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
+本目录隔离 ALFWorld 文本环境与 old-VERL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 FSDP offload/梯度检查点和更大的 PPO batch；Qwen3.5-9B 与 Qwen2.5-1.5B 不受本次优化影响。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
 
 ## Qwen2.5 工具提示词
 
@@ -81,23 +81,22 @@ PYTHONPATH=examples/alfworld_grpo_baseline/src \
 
 环境接受的最终动作始终是 ALFWorld 原生文本字符串，例如 `go to cabinet 1`，不是完整 JSON/XML，也不是 `alfworld_action` 函数名。
 
-该 baseline 是多步轨迹级 GRPO：一次工具调用对应一次环境 `step`，随后把新的 observation 和 admissible actions 回传给模型继续决策；单条轨迹的环境交互理论上限为 50 次，但会在任务 `done`、工具循环终止条件或累计生成 token 上限时提前结束。当前配置的 `max_generated_response_length=4096` 是整条轨迹累计生成预算，实际交互次数通常会低于 50。外层 `data.max_response_length` 同步设为 `4096`，避免 rollout 响应张量容量低于多轮累计生成预算。`single prompt` 只描述每轮 prompt 组织方式。
+该 baseline 是多步轨迹级 GRPO：一次合法工具调用对应一次环境 `step`，随后把新的 observation 和 admissible actions 回传给模型继续决策。`single prompt` 只描述每轮 prompt 组织方式。
 
-当前 ALFWorld 使用原生环境奖励加协议惩罚：GRPO 最终奖励为 `ALFWorldTool.execute()` 从 `env.step()` 返回的 reward 与协议错误单步惩罚之和。格式错误、无工具调用、未知工具、非法 JSON 参数、以及不在当前 admissible actions 中的动作，各自按实际发生的 assistant turn 计一次 `-0.05`；合法动作的环境 reward 不变。惩罚原因和次数会以 `alfworld_penalty/*` 指标记录到 SwanLab，包含 `format_error_count`、`malformed_tool_call_count`、`no_tool_call_count`、`unknown_tool_count`、`invalid_action_count`、`total_count` 和 `total_value`。
+**Qwen3.5-2B 当前配置：关闭 thinking，每次决策最多生成 256 tokens，没有额外的轨迹累计 token 终止条件。**
 
-SwanLab 指标含义：
+- 专用工具配置 `config/alfworld_tool_config_qwen35_2b.yaml` 中设置 `environment_driven: true`、`max_new_tokens_per_turn: 256`、`max_steps: 16`。
+- 仅因环境 `done` 或耗尽上述 Max Steps 额度正常结束；`max_assistant_turns`、`max_user_turns`、`max_generated_response_length` 不再控制该模式。
+- **一次模型决策占用一步额度，包括无工具调用、截断/损坏调用、未知工具或非法动作。** 每一步先判断是否解析到工具调用：没有解析到（无工具、schema 不完整、malformed XML 等）记为惩罚 1 并加入 `-0.1`；只有解析到工具调用后，才判断工具名、参数名/参数 schema 和动作是否合法，非法时记为惩罚 2 并加入 `-0.1`。单步两类惩罚互斥，但同一轨迹的不同决策步可以累计。失败时不伪造合法动作、不调用 TextWorld `env.step()`，因此原生环境执行步数可以小于决策步数。这避免了连续非法输出导致无限重试。
+- 输出训练槽位只保存模型生成 token；每轮真实 observation/schema/prompt 保存在 `alfworld_turn_contexts`，由现有 FSDP 回放路径用于训练。没有丢弃模型实际看到的上下文，也没有把拼接后的各轮输出当成一个长上下文训练。
+- VERL 仍需固定形状的训练张量。ALFWorld 入口在创建 worker 前自动将 `data.max_response_length` 和 rollout `response_length` 设为 `max_steps × max_new_tokens_per_turn`，默认 **4096**。它是容纳所有可能输出的容量，不是额外的轨迹终止预算；修改工具配置中的步数/单步预算会自动重算，不能通过缩小张量来静默截断。
+- SwanLab 记录 `alfworld/valid_tool_call_count/min`、`max`、`mean`，统计每条轨迹中真正调用环境的有效工具调用次数；无工具调用和非法工具调用不会计入该指标。另记录 `alfworld_penalty/no_tool_call_count` 和 `alfworld_penalty/invalid_tool_call_count`，不写入旧的 `num_turns/*` 或其它 penalty series。另保留 `alfworld_termination/done_count` 和 `alfworld_termination/max_steps_count`，统计当前 batch 的结束原因。`done` 表示环境结束，不应直接等同于 `won`。原有 `response_length/clip_ratio` 只是输出是否填满预分配容量，不能作为生成截断率解释。
 
-- `alfworld_penalty/format_error_count`：完整工具调用外夹带文本、重复工具调用等格式错误次数；
-- `alfworld_penalty/malformed_tool_call_count`：包含工具调用标记但 XML/结构无法解析的次数；
-- `alfworld_penalty/no_tool_call_count`：本轮没有任何工具调用的次数；
-- `alfworld_penalty/unknown_tool_count`：调用未注册工具名的次数；
-- `alfworld_penalty/invalid_action_count`：`action` 不在当前 admissible action 列表中的次数；
-- `alfworld_penalty/total_count`：以上惩罚事件总次数；
-- `alfworld_penalty/total_value`：惩罚总值，正常为 `-0.05 × total_count`。
+Qwen3.5-9B、Qwen2.5 等未启用 `environment_driven` 的配置仍保留旧的 4096 累计生成预算及原终止逻辑。此修改不启动训练。
 
-这些指标在每个训练 step 聚合当前 rollout batch 后写入 SwanLab；它们是诊断统计，不改变 ALFWorld 原生 `won`/`score` 的定义。
+当前 ALFWorld 的 GRPO 奖励由 `ALFWorldTool.execute()` 的原生环境 reward 加上两类且仅两类轨迹惩罚组成：无法解析工具调用为惩罚 1，解析后调用非法工具为惩罚 2；两者每次均为 `-0.1`，同一轨迹按决策步累计。SwanLab 记录有效环境工具调用次数及两类惩罚次数，不再记录旧的 `num_turns/*` 系列；同时保留两个环境终止原因计数。
 
-注意：当前隔离 `ALFWorldTool` 已返回 `done/truncated` 指标，但 old-VERL 通用 `ToolAgentLoop` 的提前终止逻辑原生只识别 `stop` 工具。正式 pilot 前必须增加并验证 ALFWorld 专用的 done→TERMINATED 桥接；在该桥接完成前，不能声称“环境成功后必然立即结束”，也不能把 50 次作为实际平均交互次数。
+当前隔离 `ALFWorldTool` 已返回 `done/truncated` 指标，并由 ALFWorld 专用 AgentLoop 完成 `done → TERMINATED` 桥接；环境完成后不会继续生成。Qwen3.5-2B 当前配置的决策上限为 16 次，不能将该上限直接解释为实际平均交互次数。
 
 该桥接已实现为隔离的 `alfworld_tool_agent`，通过 `config/agent_loops.yaml` 注册；图像修复仍使用共享的 `tool_agent`，不会进入 ALFWorld 分支。生成的 VERL parquet 将 `agent_name` 固定为 `alfworld_tool_agent`；手工构造数据时必须同时设置 `agent_name=alfworld_tool_agent` 和 `data_source=alfworld`，否则会回退到共享 loop。
 

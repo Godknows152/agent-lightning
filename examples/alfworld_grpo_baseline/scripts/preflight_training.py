@@ -55,6 +55,7 @@ def main() -> int:
     with initialize_config_dir(config_dir=str(args.config_dir.resolve()), version_base=None):
         cfg = compose(config_name=args.config_name, overrides=overrides)
     assert cfg.trainer.logger == ["console", "swanlab"]
+    assert cfg.trainer.enable_penalty_logging is False
     assert cfg.actor_rollout_ref.rollout.name == "sglang"
     assert cfg.actor_rollout_ref.rollout.agent.default_agent_loop == "alfworld_tool_agent"
     assert str(cfg.variables.MODEL_PROFILE) == args.model_profile

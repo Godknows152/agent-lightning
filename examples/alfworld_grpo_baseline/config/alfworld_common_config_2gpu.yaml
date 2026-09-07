@@ -43,7 +43,7 @@ actor_rollout_ref:
     name: sglang
     tensor_model_parallel_size: ${variables.TENSOR_MODEL_PARALLEL_SIZE}
     n: ${variables.NUM_ROLLOUTS}
-    gpu_memory_utilization: 0.25
+    gpu_memory_utilization: 0.2
     log_prob_micro_batch_size_per_gpu: 2
     enforce_eager: true
     enable_chunked_prefill: false
@@ -66,7 +66,7 @@ actor_rollout_ref:
     optim:
       lr: 1.0e-6
     use_kl_loss: false
-    entropy_coeff: 0.0
+    entropy_coeff: 0.05
     fsdp_config:
       seed: ${variables.SEED}
       # Model-specific protocol and checkpoint settings are composed from a
@@ -89,8 +89,8 @@ trainer:
   nnodes: 1
   total_training_steps: 150
   total_epochs: 1
-  save_freq: 25
-  test_freq: 25
+  save_freq: 10
+  test_freq: 10
   val_before_train: false
   resume_mode: disable
   default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
@@ -101,7 +101,10 @@ trainer:
   logger:
     - console
     - swanlab
-  max_actor_ckpt_to_keep: 3
+  max_actor_ckpt_to_keep: 6
+  # ALFWorld logs its two task-specific penalty counters through the isolated
+  # rollout-metrics hook; do not enable generic restoration penalty telemetry.
+  enable_penalty_logging: false
   ray_kwargs:
     ray_init:
       runtime_env:

@@ -26,26 +26,72 @@ class ALFWorldTool(BaseTool):
         self.tool_schema = tool_schema
         self.name = TOOL_NAME
         self._instances: dict[str, Any] = {}
+        # This cache is intentionally opt-in.  The Qwen3.5-2B profile enables
+        # it in its private tool config; other model profiles retain the old
+        # close-per-trajectory behavior.  A cached object is never shared by
+        # two active instances and is reloaded with the requested game file on
+        # every acquire.
+        self._env_pool_size = max(0, int(self.config.get("env_pool_size", 0)))
+        self._idle_envs: list[Any] = []
 
-    async def create(self, instance_id: Optional[str] = None, **kwargs: Any) -> tuple[str, Any]:
+    @staticmethod
+    def _load_game_without_rebuilding(env: Any, game_file: str) -> tuple[Any, Any]:
+        """Load and reset a one-game TextWorld batch without recreating it.
+
+        ``TextworldBatchGymEnv.reset`` closes and recreates its underlying
+        environment before loading the next game.  For a pooled ALFWorld
+        instance this is unnecessary: the existing ``SyncBatchEnv`` can load a
+        new game directly and then reset its existing wrapper chain.
+        """
+        batch_env = getattr(env, "batch_env", None)
+        if batch_env is None or not hasattr(batch_env, "load"):
+            return env.reset()
+        batch_env.load([str(game_file)])
+        env.last_commands = [None]
+        env.obs, info = batch_env.reset()
+        return env.obs, info
+
+    def _build_env(self, game_file: str) -> Any:
+        """Construct one fresh ALFWorld TextWorld environment."""
         from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv
         import yaml
 
-        create_kwargs = kwargs.get("create_kwargs", {})
-        game_file = create_kwargs.get("game_file")
-        if not game_file:
-            raise ValueError("ALFWorldTool.create requires create_kwargs.game_file")
         data_root = Path(os.environ.get("ALFWORLD_DATA", ""))
         if not data_root.is_dir():
             raise FileNotFoundError("ALFWORLD_DATA is not configured")
         with (data_root / "base_config.yaml").open(encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
         AlfredTWEnv.collect_game_files = lambda self, verbose=False: None
-        env = AlfredTWEnv(config, train_eval="train")
-        env.game_files, env.num_games = [str(game_file)], 1
-        env = env.init_env(batch_size=1)
+        alfred = AlfredTWEnv(config, train_eval="train")
+        alfred.game_files, alfred.num_games = [str(game_file)], 1
+        return alfred.init_env(batch_size=1)
+
+    async def create(self, instance_id: Optional[str] = None, **kwargs: Any) -> tuple[str, Any]:
+        create_kwargs = kwargs.get("create_kwargs", {})
+        game_file = create_kwargs.get("game_file")
+        if not game_file:
+            raise ValueError("ALFWorldTool.create requires create_kwargs.game_file")
+        game_file = str(game_file)
+        reused = bool(self._idle_envs)
+        env = self._idle_envs.pop() if reused else self._build_env(game_file)
+        try:
+            # Keep the legacy fresh-instance path unchanged for profiles that
+            # do not opt into pooling.  The direct load path is only needed
+            # when reusing an already initialized TextWorld batch.
+            if reused or self._env_pool_size > 0:
+                observation, info = self._load_game_without_rebuilding(env, game_file)
+            else:
+                observation, info = env.reset()
+        except Exception:
+            # A poisoned/closed pooled instance must not take down the rollout
+            # batch.  Replace it with a fresh environment once.
+            try:
+                env.close()
+            except Exception:
+                pass
+            env = self._build_env(game_file)
+            observation, info = self._load_game_without_rebuilding(env, game_file)
         instance = instance_id or str(uuid4())
-        observation, info = env.reset()
         self._instances[instance] = {"env": env, "observation": observation[0], "info": info, "steps": 0}
         return instance, ToolResponse()
 
@@ -68,12 +114,7 @@ class ALFWorldTool(BaseTool):
         registry = ALFWorldToolRegistry(actions)
         try:
             action = registry.validate_action(action)
-        except ValueError as exc:
-            # Protocol penalty is emitted once for this assistant turn.  It is
-            # deliberately separate from the native TextWorld reward.
-            penalty = float(
-                self.config.get("invalid_action_penalty", self.config.get("format_penalty", -0.05))
-            )
+        except ValueError:
             current_observation = str(state["observation"])
             current_actions = tuple(str(a) for a in info["admissible_commands"][0])
             text = (
@@ -83,7 +124,7 @@ class ALFWorldTool(BaseTool):
                 "Current admissible actions (copy exactly one):\n"
                 + "\n".join(current_actions)
             )
-            return ToolResponse(text=text), penalty, {
+            return ToolResponse(text=text), 0.0, {
                 "error": "invalid_action",
                 "action": action,
                 "observation": current_observation,
@@ -108,4 +149,10 @@ class ALFWorldTool(BaseTool):
     async def release(self, instance_id: str, **kwargs: Any) -> None:
         state = self._instances.pop(instance_id, None)
         if state is not None:
-            state["env"].close()
+            env = state["env"]
+            if len(self._idle_envs) < self._env_pool_size:
+                # Do not close a pooled object.  The next acquire reloads its
+                # game file and resets the wrapper state before use.
+                self._idle_envs.append(env)
+            else:
+                env.close()

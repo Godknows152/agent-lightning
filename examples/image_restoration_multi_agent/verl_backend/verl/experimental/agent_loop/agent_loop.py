@@ -1498,6 +1498,18 @@ class AgentLoopManager:
                 for worker, chunk in zip(self.agent_loop_workers, chunkes, strict=True)
             ]
         )
+
+        # Each worker builds optional extra fields from the trajectories in its
+        # own chunk.  A field that is produced by only some trajectories can
+        # therefore be absent from some worker outputs.  Normalize the worker
+        # schemas before concatenation so DataProto receives one batch-aligned
+        # array for every non-tensor key.
+        all_non_tensor_keys = set().union(*(output.non_tensor_batch.keys() for output in outputs))
+        for output in outputs:
+            batch_size = len(output)
+            for key in all_non_tensor_keys:
+                if key not in output.non_tensor_batch:
+                    output.non_tensor_batch[key] = np.full(batch_size, None, dtype=object)
         output = DataProto.concat(outputs)
 
         # calculate performance metrics

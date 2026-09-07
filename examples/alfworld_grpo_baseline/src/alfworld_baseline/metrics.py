@@ -1,4 +1,4 @@
-"""ALFWorld-only rollout penalty metrics for the isolated trainer entrypoint."""
+"""ALFWorld-only rollout metrics for the isolated trainer entrypoint."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,49 +6,64 @@ from typing import Any
 import numpy as np
 
 
-_REASONS = {
-    "no_tool_call": "no_tool_call_count",
-    "malformed_tool_call_xml": "malformed_tool_call_count",
-    "invalid_json_arguments": "format_error_count",
-    "invalid_arguments_schema": "format_error_count",
-    "format_error": "format_error_count",
-    "invalid_action": "invalid_action_count",
-    "invalid_restoration_action": "invalid_action_count",
-    "unknown_tool_name": "unknown_tool_count",
+_PENALTY_COUNT_FIELDS = {
+    "alfworld_no_tool_call_penalty_count": "alfworld_penalty/no_tool_call_count",
+    "alfworld_invalid_tool_call_penalty_count": "alfworld_penalty/invalid_tool_call_count",
 }
 
 
-def compute_alfworld_penalty_metrics(batch: Any) -> dict[str, float | int]:
-    """Count explicit per-occurrence ALFWorld protocol penalties in a batch."""
+def _sum_count_field(value: Any) -> int:
+    """Sum per-trajectory scalar counters from a VERL non-tensor field."""
+    if value is None:
+        return 0
+    values = np.asarray(value, dtype=object).reshape(-1)
+    total = 0
+    for item in values:
+        if item is None:
+            continue
+        try:
+            total += int(item)
+        except (TypeError, ValueError):
+            # Be tolerant of a nested/object value produced by an older batch
+            # collation path while keeping malformed telemetry non-fatal.
+            nested = np.asarray(item, dtype=object).reshape(-1)
+            total += sum(int(nested_item) for nested_item in nested if nested_item is not None)
+    return total
 
-    counts = {name: 0 for name in sorted(set(_REASONS.values()))}
-    total_value = 0.0
-    records = batch.non_tensor_batch.get("penalty_records")
-    if records is not None:
-        array = np.asarray(records, dtype=object)
-        for trajectory in array.reshape(-1):
-            if not isinstance(trajectory, (list, tuple, np.ndarray)):
-                continue
-            for record in trajectory:
-                if not isinstance(record, dict):
-                    continue
-                reason = str(record.get("reason", ""))
-                metric_name = _REASONS.get(reason)
-                if metric_name is None:
-                    continue
-                try:
-                    occurrences = max(1, int(record.get("occurrences", 1)))
-                    value = float(record.get("value", 0.0))
-                except (TypeError, ValueError):
-                    continue
-                if value >= 0:
-                    continue
-                counts[metric_name] += occurrences
-                total_value += value * occurrences
 
-    result: dict[str, float | int] = {
-        f"alfworld_penalty/{name}": int(value) for name, value in counts.items()
+def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
+    """Report terminal reasons, penalty counts, and valid tool-call counts.
+
+    The agent loop records one counter per trajectory for each category. The
+    trainer aggregates those counters over the rollout batch for SwanLab. No
+    generic restoration penalty series are emitted here.
+    """
+
+    non_tensor_batch = batch.non_tensor_batch
+    reasons = non_tensor_batch.get("alfworld_terminal_reason")
+    if reasons is None:
+        done_count = 0
+        max_steps_count = 0
+    else:
+        reasons = np.asarray(reasons, dtype=object).reshape(-1)
+        done_count = int(np.count_nonzero(reasons == "done"))
+        max_steps_count = int(np.count_nonzero(reasons == "max_steps"))
+
+    result: dict[str, int | float] = {
+        "alfworld_termination/done_count": done_count,
+        "alfworld_termination/max_steps_count": max_steps_count,
     }
-    result["alfworld_penalty/total_count"] = int(sum(counts.values()))
-    result["alfworld_penalty/total_value"] = float(total_value)
+    for field, metric_name in _PENALTY_COUNT_FIELDS.items():
+        result[metric_name] = _sum_count_field(non_tensor_batch.get(field))
+
+    valid_tool_calls = np.asarray(
+        non_tensor_batch.get("alfworld_valid_tool_call_count", 0), dtype=np.int64
+    ).reshape(-1)
+    result.update(
+        {
+            "alfworld/valid_tool_call_count/min": int(valid_tool_calls.min()),
+            "alfworld/valid_tool_call_count/max": int(valid_tool_calls.max()),
+            "alfworld/valid_tool_call_count/mean": float(valid_tool_calls.mean()),
+        }
+    )
     return result

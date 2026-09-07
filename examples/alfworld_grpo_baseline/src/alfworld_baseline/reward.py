@@ -24,10 +24,10 @@ def compute_score(
     """Return the episode reward emitted by ALFWorldTool.
 
     ALFWorld emits sparse environment rewards (normally 1 on a solved task and
-    0 otherwise). ``tool_rewards`` also contains the isolated per-turn protocol
-    penalties configured for malformed or illegal model outputs. Summing them
-    yields the score optimized by GRPO while explicit ``penalty_records`` keep
-    the native reward and protocol costs auditable.
+    0 otherwise). The agent loop additionally appends exactly one ``-0.1``
+    penalty for each decision that either has no parsed tool call or contains a
+    parsed but invalid tool call. The returned score is therefore the native
+    environment reward plus the two allowed protocol penalties.
     """
     if data_source != "alfworld":
         raise ValueError(f"ALFWorld reward received unexpected data_source={data_source!r}")

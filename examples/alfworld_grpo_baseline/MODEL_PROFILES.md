@@ -2,8 +2,8 @@
 
 Each profile owns its model checkpoint, tokenizer tool protocol, prompt source,
 materialized parquet, Hydra entry configuration, launcher, outputs, logs and SwanLab
-experiment name. Shared ALFWorld environment code, rewards, validator and GRPO
-hyperparameters remain outside profiles.
+experiment name. Shared ALFWorld environment code and rewards remain outside profiles;
+profile-specific runtime/performance overrides are kept in the profile's Hydra file.
 
 | Profile | Model | Parser | Prompt source | Data | Launcher |
 | --- | --- | --- | --- | --- | --- |
@@ -32,6 +32,12 @@ ALFWORLD_SKIP_SWANLAB_VERIFY=1 ALFWORLD_SWANLAB_MODE=offline \
 The respective full-run outputs are `outputs/alfworld/<profile>/v1/2gpu/` and
 `log/alfworld/<profile>/v1/2gpu/`; their SwanLab experiments use
 `alfworld_<profile>_v1_seedN`.
+
+The Qwen3.5-2B profile currently enables its isolated performance configuration:
+eight AgentLoop workers, a bounded ALFWorld TextWorld environment pool, no Actor/Ref
+parameter or optimizer offload, disabled gradient checkpointing, and larger PPO
+mini/micro batches (`16`/`4`). Qwen3.5-9B and Qwen2.5-1.5B continue to use the
+shared baseline settings and `alfworld_tool_config.yaml`.
 
 SGLang JIT kernels require C++20. The ALFWorld launcher uses `/usr/bin/gcc-10`
 and `/usr/bin/g++-10` through `CC`, `CXX`, `CUDAHOSTCXX` and `NVCC_CCBIN`, and

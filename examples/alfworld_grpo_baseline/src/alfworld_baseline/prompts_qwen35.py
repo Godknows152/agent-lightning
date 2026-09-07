@@ -81,7 +81,7 @@ Current observation:
 Current admissible actions (the action value must be copied exactly from this list):
 {action_text}
 
-After thinking, choose exactly one next action character-for-character from the current admissible actions."""
+Choose exactly one next action character-for-character from the current admissible actions."""
 
 
 def build_messages(

@@ -9,14 +9,14 @@ class ALFWorldTaskRunner(_base_main.TaskRunner):
 
     def run(self, config):
         from verl.trainer.ppo import ray_trainer
-        from alfworld_baseline.metrics import compute_alfworld_penalty_metrics
+        from alfworld_baseline.metrics import compute_alfworld_rollout_metrics
+        from alfworld_baseline.budget import configure_environment_driven_rollout
 
-        # Ray executes TaskRunner in another process, so the hook must be
-        # installed here rather than only in the launcher process.
-        # The call site in old-VERL is shared with restoration experiments;
-        # replace its result only in this remote ALFWorld trainer process so
-        # SwanLab receives ALFWorld names rather than restoration names.
-        ray_trainer.compute_restoration_penalty_metrics = compute_alfworld_penalty_metrics
+        configure_environment_driven_rollout(config)
+
+        # Ray executes TaskRunner in another process, so install the
+        # task-specific ALFWorld rollout metrics in that remote trainer.
+        ray_trainer.compute_rollout_metrics = compute_alfworld_rollout_metrics
         return super().run(config)
 
 

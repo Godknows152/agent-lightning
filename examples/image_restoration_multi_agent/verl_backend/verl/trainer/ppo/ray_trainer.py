@@ -79,6 +79,17 @@ from verl.utils.debug import marked_timer
 from verl.utils.import_utils import load_class_from_fqn
 from verl.utils.metric import reduce_metrics
 from verl.utils.py_functional import rename_dict
+
+
+def compute_rollout_metrics(batch: DataProto) -> dict[str, Any]:
+    """Return task-specific rollout metrics.
+
+    ALFWorld replaces this hook with its termination and two-category penalty
+    counters. Restoration keeps the default empty hook and its existing generic
+    penalty metrics behind the opt-in ``trainer.enable_penalty_logging`` flag.
+    """
+
+    return {}
 from verl.utils.rollout_skip import RolloutSkip
 from verl.utils.seqlen_balancing import calculate_workload, get_seqlen_balanced_partitions, log_seqlen_unbalance
 from verl.utils.torch_functional import masked_mean
@@ -89,6 +100,12 @@ from verl.workers.utils.padding import left_right_2_no_padding, no_padding_2_pad
 
 def _select_validation_turn_counts(non_tensor_batch: dict[str, Any]) -> tuple[np.ndarray | None, bool]:
     """Select validation counts while preserving compatibility with non-agent rollouts."""
+    data_sources = non_tensor_batch.get("data_source")
+    if data_sources is not None and np.any(np.asarray(data_sources, dtype=object).reshape(-1) == "alfworld"):
+        # ALFWorld validation exposes its task-specific valid-call metric
+        # through the rollout hook; do not create legacy num_turns aliases.
+        return None, False
+
     tool_call_counts = non_tensor_batch.get("tool_call_counts")
     if tool_call_counts is not None:
         return np.asarray(tool_call_counts, dtype=np.int64), True
@@ -2434,9 +2451,10 @@ class RayPPOTrainer:
                     rollout_data_dir = self.config.trainer.get("rollout_data_dir", None)
                     if rollout_data_dir:
                         self._log_rollout_data(batch, reward_extra_infos_dict, timing_raw, rollout_data_dir)
-                    with marked_timer("dump_penalized_samples", timing_raw, color="green"):
-                        penalized_samples = self._dump_penalized_samples(batch)
-                        self._log_penalized_samples_to_swanlab(penalized_samples)
+                    if self.config.trainer.get("enable_penalty_logging", True):
+                        with marked_timer("dump_penalized_samples", timing_raw, color="green"):
+                            penalized_samples = self._dump_penalized_samples(batch)
+                            self._log_penalized_samples_to_swanlab(penalized_samples)
 
                 # validate
                 if self.config.trainer.test_freq > 0 and (
@@ -2476,7 +2494,9 @@ class RayPPOTrainer:
                 # collect metrics
                 metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
                 metrics.update(compute_restoration_action_entropy_metrics(batch=batch))
-                metrics.update(compute_restoration_penalty_metrics(batch=batch))
+                metrics.update(compute_rollout_metrics(batch=batch))
+                if self.config.trainer.get("enable_penalty_logging", True):
+                    metrics.update(compute_restoration_penalty_metrics(batch=batch))
                 metrics.update(compute_restoration_reward_metrics(batch=batch))
                 # GDPO per-component reward metrics
                 gdpo_reward_keys = self.config.algorithm.get("gdpo_reward_keys", None)

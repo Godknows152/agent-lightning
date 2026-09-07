@@ -752,6 +752,13 @@ class ToolAgentLoop(AgentLoopBase):
                     "tool_reward_sum": trajectory_reward,
                 }
 
+            # `_terminate_after_tool` is an internal state-machine flag.  It is
+            # intentionally allowed to differ between trajectories while the
+            # loop is running, but must not leak into the per-worker
+            # non-tensor batch: DataProto.concat requires identical key sets
+            # across worker outputs.
+            agent_data.extra_fields.pop("_terminate_after_tool", None)
+
             # Finalize output
             response_ids = agent_data.prompt_ids[-len(agent_data.response_mask) :]
             prompt_ids = agent_data.prompt_ids[: len(agent_data.prompt_ids) - len(agent_data.response_mask)]

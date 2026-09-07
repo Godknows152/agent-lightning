@@ -1,6 +1,8 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+
+import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT.parent / "image_restoration_multi_agent" / "verl_backend"))
@@ -53,15 +55,18 @@ def test_qwen35_prompt_profile_defers_tool_protocol_to_chat_template():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
-    assert profile.PROMPT_VERSION == "alfworld_qwen35_state_v3"
+    assert profile.PROMPT_VERSION == "alfworld_qwen35_state_v4_current_state_only"
     assert profile.SYSTEM_PROMPT == ""
     user_prompt = profile.build_user_prompt(
         mission="put the apple in the drawer",
         observation="You see a drawer.",
         admissible_actions=["open drawer 1"],
     )
+    assert "Task goal (not an executable action):" in user_prompt
     assert "current admissible actions" in user_prompt
-    assert "alfworld_action tool exactly once" in user_prompt
+    assert "alfworld_action" not in user_prompt
+    assert "Recent action/tool history" not in user_prompt
+    assert "Your task is:" not in user_prompt
 
 def test_qwen35_dynamic_schema_enum_matches_latest_admissible_actions():
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
@@ -71,19 +76,39 @@ def test_qwen35_dynamic_schema_enum_matches_latest_admissible_actions():
     assert action["enum"] == ["look", "open drawer 1"]
 
 
+def test_qwen35_prompt_is_current_state_only_and_template_has_one_protocol():
+    from alfworld_baseline.prompt_profiles import get_prompt_profile
+
+    profile = get_prompt_profile("qwen35")
+    user_prompt = profile.build_user_prompt(
+        mission="put the apple in the drawer",
+        observation="You see a drawer.\nYour task is: put the apple in the drawer.",
+        admissible_actions=["open drawer 1"],
+    )
+    assert "Task goal (not an executable action):" in user_prompt
+    assert "Your task is:" not in user_prompt
+    assert "Recent action/tool history" not in user_prompt
+    assert "example_function_name" not in profile.QWEN35_ALFWORLD_CHAT_TEMPLATE
+    assert "If you choose to call a function" not in profile.QWEN35_ALFWORLD_CHAT_TEMPLATE
+
+
 def test_alfworld_agent_loop_marks_environment_terminal(monkeypatch):
     import asyncio
     from types import SimpleNamespace
     from alfworld_baseline.agent_loop import ALFWorldToolAgentLoop
-    from verl.experimental.agent_loop.tool_agent_loop import ToolAgentLoop
     from verl.experimental.agent_loop.tool_parser import FunctionCall
 
-    async def fake_call(self, tool_call, tools_kwargs, agent_data):
-        return "response", 1.0, {"done": True, "action": "look"}
+    class FakeTool:
+        async def execute(self, instance_id, parameters, **kwargs):
+            return "response", 1.0, {"done": True, "action": "look"}
 
-    monkeypatch.setattr(ToolAgentLoop, "_call_tool", fake_call)
     loop = ALFWorldToolAgentLoop.__new__(ALFWorldToolAgentLoop)
-    data = SimpleNamespace(data_source="alfworld", extra_fields={})
+    loop._get_or_create_tool_instance = lambda *args, **kwargs: _ready_instance()
+    data = SimpleNamespace(data_source="alfworld", extra_fields={}, _active_tools={"alfworld_action": FakeTool()})
+
+    async def _ready_instance():
+        return "instance"
+
     response = asyncio.run(
         loop._call_tool(
             FunctionCall(name="alfworld_action", arguments='{"action":"look"}'),
@@ -96,23 +121,62 @@ def test_alfworld_agent_loop_marks_environment_terminal(monkeypatch):
     assert data.extra_fields["alfworld_terminal_reason"] == "done"
 
 
+def test_alfworld_rollout_metrics_only_expose_the_two_penalty_series():
+    from types import SimpleNamespace
+    from alfworld_baseline.metrics import compute_alfworld_rollout_metrics
+
+    metrics = compute_alfworld_rollout_metrics(
+        SimpleNamespace(
+            non_tensor_batch={
+                "alfworld_terminal_reason": ["done", "max_steps", "max_steps"],
+                "alfworld_no_tool_call_penalty_count": [2, 0, 1],
+                "alfworld_invalid_tool_call_penalty_count": [0, 3, 1],
+                "alfworld_valid_tool_call_count": [4, 1, 2],
+            }
+        )
+    )
+    assert metrics == {
+        "alfworld_termination/done_count": 1,
+        "alfworld_termination/max_steps_count": 2,
+        "alfworld_penalty/no_tool_call_count": 3,
+        "alfworld_penalty/invalid_tool_call_count": 4,
+        "alfworld/valid_tool_call_count/min": 1,
+        "alfworld/valid_tool_call_count/max": 4,
+        "alfworld/valid_tool_call_count/mean": 7 / 3,
+    }
+    assert set(metrics) <= {
+        "alfworld_termination/done_count",
+        "alfworld_termination/max_steps_count",
+        "alfworld_penalty/no_tool_call_count",
+        "alfworld_penalty/invalid_tool_call_count",
+        "alfworld/valid_tool_call_count/min",
+        "alfworld/valid_tool_call_count/max",
+        "alfworld/valid_tool_call_count/mean",
+    }
+
+
+def test_alfworld_validation_does_not_select_legacy_num_turns():
+    from verl.trainer.ppo.ray_trainer import _select_validation_turn_counts
+
+    counts, are_tool_calls = _select_validation_turn_counts(
+        {
+            "data_source": np.array(["alfworld", "alfworld"], dtype=object),
+            "__num_turns__": np.array([5, 7]),
+            "tool_call_counts": np.array([3, 4]),
+        }
+    )
+    assert counts is None
+    assert are_tool_calls is False
+
+
 def test_alfworld_reward_sums_tool_rewards():
     from alfworld_baseline.reward import compute_score
 
     assert compute_score("alfworld", extra_info={"tool_rewards": [0.0, 1.0]}) == 1.0
+    assert compute_score("alfworld", extra_info={"tool_rewards": [-0.1, 1.0]}) == 0.9
 
 
-def test_alfworld_loop_uses_isolated_protocol_penalties():
-    from alfworld_baseline.agent_loop import ALFWorldToolAgentLoop
-
-    assert ALFWorldToolAgentLoop.NO_TOOL_CALL_PENALTY == -0.05
-    assert ALFWorldToolAgentLoop.INVALID_TOOL_CALL_PENALTY == -0.05
-    assert ALFWorldToolAgentLoop.MALFORMED_TOOL_CALL_PENALTY == -0.05
-    assert ALFWorldToolAgentLoop.FORGED_ROLE_AFTER_TOOL_CALL_PENALTY == 0.0
-    assert ALFWorldToolAgentLoop.TRAJECTORY_REPEAT_PENALTY_SCALE == 0.0
-
-
-def test_invalid_action_has_isolated_single_step_penalty(monkeypatch):
+def test_invalid_action_is_reported_to_agent_loop_without_tool_level_reward(monkeypatch):
     import asyncio
     import pandas as pd
     from alfworld_baseline.alfworld_tool import ALFWorldTool
@@ -125,7 +189,7 @@ def test_invalid_action_has_isolated_single_step_penalty(monkeypatch):
     )
 
     async def run():
-        tool = ALFWorldTool({"max_steps": 2, "invalid_action_penalty": -0.05})
+        tool = ALFWorldTool({"max_steps": 2})
         instance, _ = await tool.create(create_kwargs={"game_file": game_file})
         try:
             _, reward, metrics = await tool.execute(instance, {"action": "not admissible"})
@@ -134,35 +198,51 @@ def test_invalid_action_has_isolated_single_step_penalty(monkeypatch):
             await tool.release(instance)
 
     reward, metrics = asyncio.run(run())
-    assert reward == -0.05
+    assert reward == 0.0
     assert metrics["error"] == "invalid_action"
 
 
-def test_alfworld_penalty_metrics_count_explicit_reasons():
-    from types import SimpleNamespace
-    from alfworld_baseline.metrics import compute_alfworld_penalty_metrics
+def test_alfworld_tool_reuses_pooled_environment_without_sharing_state(monkeypatch):
+    import asyncio
+    from alfworld_baseline.alfworld_tool import ALFWorldTool
 
-    batch = SimpleNamespace(
-        non_tensor_batch={
-            "penalty_records": [
-                [
-                    {"reason": "no_tool_call", "value": -0.05, "occurrences": 1},
-                    {"reason": "malformed_tool_call_xml", "value": -0.05, "occurrences": 1},
-                    {"reason": "format_error", "value": -0.05, "occurrences": 1},
-                    {"reason": "invalid_action", "value": -0.05, "occurrences": 1},
-                ],
-                [{"reason": "unknown_tool_name", "value": -0.05, "occurrences": 1}],
-            ]
-        }
-    )
-    metrics = compute_alfworld_penalty_metrics(batch)
-    assert metrics["alfworld_penalty/no_tool_call_count"] == 1
-    assert metrics["alfworld_penalty/malformed_tool_call_count"] == 1
-    assert metrics["alfworld_penalty/format_error_count"] == 1
-    assert metrics["alfworld_penalty/invalid_action_count"] == 1
-    assert metrics["alfworld_penalty/unknown_tool_count"] == 1
-    assert metrics["alfworld_penalty/total_count"] == 5
-    assert metrics["alfworld_penalty/total_value"] == -0.25
+    class FakeBatch:
+        def __init__(self):
+            self.loaded = []
+
+        def load(self, game_files):
+            self.loaded = list(game_files)
+
+        def reset(self):
+            return ["initial observation"], {"admissible_commands": [["look"]]}
+
+    class FakeEnv:
+        def __init__(self):
+            self.batch_env = FakeBatch()
+            self.last_commands = None
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake = FakeEnv()
+    game_file = "/tmp/example.tw-pddl"
+
+    async def run():
+        tool = ALFWorldTool({"env_pool_size": 1})
+        monkeypatch.setattr(tool, "_build_env", lambda _: fake)
+        first, _ = await tool.create(create_kwargs={"game_file": game_file})
+        first_env = tool._instances[first]["env"]
+        await tool.release(first)
+        second, _ = await tool.create(create_kwargs={"game_file": game_file})
+        second_env = tool._instances[second]["env"]
+        await tool.release(second)
+        return first_env, second_env, fake.batch_env.loaded
+
+    first_env, second_env, loaded = asyncio.run(run())
+    assert first_env is second_env
+    assert loaded == [game_file]
+    assert fake.closed is False
 
 
 def test_dataset_loader_accepts_verl_nested_game_file(tmp_path):

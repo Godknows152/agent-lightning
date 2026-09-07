@@ -4,13 +4,15 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Literal
 
 from verl.experimental.agent_loop.agent_loop import register
 from verl.experimental.agent_loop.tool_agent_loop import AgentData, AgentState, ToolAgentLoop
 from verl.experimental.agent_loop.tool_parser import FunctionCall
-from verl.tools.schemas import ToolResponse
+from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
+from verl.utils.profiler import simple_timer
 
+from .budget import ALFWorldDecisionBudget
 from .prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
 from .tool_registry import ALFWorldToolRegistry
 from .thinking import ThinkingToolParser, tool_output
@@ -25,13 +27,6 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     observations, action lists, tool responses, and assistant turns are never
     sent as context for the next ALFWorld decision.
     """
-
-    NO_TOOL_CALL_PENALTY = -0.05
-    INVALID_TOOL_CALL_PENALTY = -0.05
-    MALFORMED_TOOL_CALL_PENALTY = -0.05
-    FORMAT_PENALTY = -0.05
-    FORGED_ROLE_AFTER_TOOL_CALL_PENALTY = 0.0
-    TRAJECTORY_REPEAT_PENALTY_SCALE = 0.0
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
@@ -51,13 +46,12 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             self.tool_parser = ThinkingToolParser(self.tool_parser, self.tokenizer)
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
-        self.NO_TOOL_CALL_PENALTY = float(tool_config.get("no_tool_call_penalty", self.NO_TOOL_CALL_PENALTY))
-        self.INVALID_TOOL_CALL_PENALTY = float(tool_config.get("unknown_tool_penalty", self.INVALID_TOOL_CALL_PENALTY))
-        self.MALFORMED_TOOL_CALL_PENALTY = float(
-            tool_config.get("malformed_tool_call_penalty", self.MALFORMED_TOOL_CALL_PENALTY)
-        )
-        self.FORMAT_PENALTY = float(tool_config.get("format_penalty", self.FORMAT_PENALTY))
-        self.invalid_action_penalty = float(tool_config.get("invalid_action_penalty", self.FORMAT_PENALTY))
+        self._environment_budget = ALFWorldDecisionBudget.from_tool_config(tool_config)
+        if self._environment_budget is not None and self.response_length < self._environment_budget.response_capacity:
+            raise ValueError(
+                "ALFWorld response storage is too small for max_steps * max_new_tokens_per_turn. "
+                "Launch via alfworld_baseline.main_ppo to derive capacity before creating workers."
+            )
 
     @staticmethod
     def _mission_from_messages(messages: list[dict[str, Any]]) -> str:
@@ -117,7 +111,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
     async def _set_authoritative_initial_prompt(self, agent_data: AgentData) -> None:
         """Create the tool first and build turn zero from its actual state."""
-        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        active_tools = getattr(agent_data, "_active_tools", None) or getattr(self, "tools", {})
         tool = active_tools.get("alfworld_action")
         if tool is None or not hasattr(tool, "get_state"):
             return
@@ -143,6 +137,15 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
         if getattr(agent_data, "data_source", "") == "alfworld":
             await self._set_authoritative_initial_prompt(agent_data)
+            agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
+            agent_data.extra_fields.setdefault("alfworld_invalid_tool_call_penalty_count", 0)
+            agent_data.extra_fields.setdefault("alfworld_valid_tool_call_count", 0)
+            if getattr(self, "_environment_budget", None) is not None:
+                agent_data.extra_fields.update({
+                    "alfworld_decision_steps": 0,
+                    "alfworld_terminal_reason": "running",
+                    "alfworld_environment_finished": False,
+                })
         return await super()._handle_pending_state(agent_data, sampling_params)
 
     async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
@@ -180,13 +183,85 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             videos=None,
         )
 
+    ALFWORLD_NO_TOOL_CALL_PENALTY = -0.1
+    ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.1
+
+    def _record_alfworld_penalty(
+        self,
+        agent_data: AgentData,
+        kind: Literal["no_tool_call", "invalid_tool_call"],
+        *,
+        append_reward: bool,
+    ) -> float:
+        """Record exactly one ALFWorld protocol penalty.
+
+        ALFWorld deliberately keeps its protocol accounting separate from the
+        restoration loop's generic ``penalty_records`` mechanism. There are
+        only two mutually exclusive categories: no parsed tool call and a
+        parsed but invalid tool call. ``append_reward`` is false when the
+        caller returns the penalty to VERL, whose processing phase appends the
+        returned value to ``tool_rewards`` itself.
+        """
+        if kind == "no_tool_call":
+            count_key = "alfworld_no_tool_call_penalty_count"
+            value = self.ALFWORLD_NO_TOOL_CALL_PENALTY
+        elif kind == "invalid_tool_call":
+            count_key = "alfworld_invalid_tool_call_penalty_count"
+            value = self.ALFWORLD_INVALID_TOOL_CALL_PENALTY
+        else:  # pragma: no cover - Literal callers should make this unreachable.
+            raise ValueError(f"unknown ALFWorld penalty kind: {kind!r}")
+
+        extra_fields = getattr(agent_data, "extra_fields", None)
+        if extra_fields is None:
+            extra_fields = {}
+            agent_data.extra_fields = extra_fields
+        extra_fields[count_key] = int(extra_fields.get(count_key, 0) or 0) + 1
+        if append_reward:
+            agent_data.tool_rewards.append(value)
+        return value
+
+    def _invalid_tool_call_penalty(self, agent_data: AgentData) -> float:
+        """Count an invalid parsed call and return its synthetic reward."""
+        return self._record_alfworld_penalty(agent_data, "invalid_tool_call", append_reward=False)
+
+    def _has_complete_tool_call_schema(self, token_ids: list[int]) -> bool:
+        """Check the structural envelope before trusting parser output.
+
+        Qwen XML parsing intentionally has a back-off path for partially
+        generated calls. Such a fragment can still become a ``FunctionCall``
+        with empty arguments, but it is category 1 (unparseable/incomplete),
+        not category 2. Semantic argument errors are left for ``_call_tool``.
+        """
+        text, _ = tool_output(
+            self.tokenizer.decode(token_ids, skip_special_tokens=False),
+            enable_thinking=getattr(self, "_thinking_enabled", False),
+        )
+        start_token = self.TOOL_CALL_START_TOKEN
+        end_token = self.TOOL_CALL_END_TOKEN
+        start = text.find(start_token)
+        if start < 0:
+            return False
+        end = text.find(end_token, start + len(start_token))
+        if end < 0:
+            return False
+
+        payload = text[start + len(start_token) : end].strip()
+        if payload.startswith("<function="):
+            if payload.count("<function=") != payload.count("</function>"):
+                return False
+            if payload.count("<parameter=") != payload.count("</parameter>"):
+                return False
+        return True
+
     async def _handle_generating_state(
         self,
         agent_data: AgentData,
         sampling_params: dict[str, Any],
         ignore_termination: bool = False,
     ) -> AgentState:
-        """Apply one protocol penalty when this turn emitted no parsed call."""
+        """Use per-decision generation for opted-in ALFWorld runs; preserve legacy behavior."""
+        if getattr(self, "_environment_budget", None) is not None and agent_data.data_source == "alfworld":
+            return await self._generate_environment_decision(agent_data, sampling_params)
         is_alfworld = getattr(agent_data, "data_source", "") == "alfworld"
         if is_alfworld:
             prompt = list(agent_data.generation_prompt_ids or agent_data.prompt_ids)
@@ -199,23 +274,21 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 "response_ids": list(agent_data.response_ids),
                 "response_offset": offset,
             })
+            # The legacy loop terminates immediately when extraction yields no
+            # call. Classify that turn after extraction so malformed XML, an
+            # incomplete schema, and ordinary text all share category 1.
+            if agent_data.tool_calls and not self._has_complete_tool_call_schema(agent_data.response_ids):
+                agent_data.tool_calls = []
+            if not agent_data.tool_calls:
+                self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
         if getattr(agent_data, "data_source", "") != "alfworld" or agent_data.tool_calls:
             return state
-        response_len = len(agent_data.response_ids)
-        response_text, _ = tool_output(
-            self.tokenizer.decode(agent_data.response_ids),
-            enable_thinking=getattr(self, "_thinking_enabled", False),
-        )
-        if any(marker in response_text for marker in self.TOOL_CALL_ATTEMPT_MARKERS):
-            self._apply_malformed_tool_call_penalty(agent_data, response_len)
-        else:
-            self._apply_no_tool_call_penalty(agent_data, response_len, reason="turn_without_tool_call")
         return state
 
     def _apply_tool_call_format_guardrails(
         self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
     ) -> tuple[list[int], list[float] | None]:
-        """Penalize extra text or multiple complete calls exactly once."""
+        """Trim after the first complete call without altering ALFWorld reward."""
         if getattr(agent_data, "data_source", "") != "alfworld" or not token_ids:
             return super()._apply_tool_call_format_guardrails(agent_data, token_ids, log_probs)
 
@@ -230,20 +303,6 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             return token_ids, log_probs
 
         call_end = end + len(self.TOOL_CALL_END_TOKEN)
-        prefix = text[:start].strip()
-        suffix = text[call_end:].strip()
-        multiple_calls = text.count(self.TOOL_CALL_START_TOKEN) != 1 or text.count(self.TOOL_CALL_END_TOKEN) != 1
-        if prefix or suffix or multiple_calls:
-            penalty = self.FORMAT_PENALTY
-            agent_data.tool_rewards.append(penalty)
-            self._record_penalty(
-                agent_data,
-                reason="format_error",
-                value=penalty,
-                model_response=text,
-                details={"extra_prefix": bool(prefix), "extra_suffix": bool(suffix), "multiple_calls": multiple_calls},
-            )
-
         if getattr(self, "_thinking_enabled", False):
             # Keep the original reasoning + call IDs and aligned logprobs.
             # XML examples inside reasoning must not truncate the real call.
@@ -263,17 +322,20 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data: AgentData
     ) -> tuple[Any, float, dict]:
-        """Execute a call and apply ALFWorld-only protocol accounting."""
+        """Execute a parsed ALFWorld call and classify execution failures.
+
+        Parsing failures are handled before this method and belong to the
+        no-tool-call category. Any parsed call that cannot be executed is
+        category 2, including unknown tool names, invalid JSON/parameter
+        schemas, invalid actions, and tool exceptions.
+        """
         if getattr(agent_data, "data_source", "") == "alfworld":
             # Failed parsing must not replay the previous turn's feedback.
             agent_data.alfworld_last_tool_metrics = {"action": "unknown", "error": "invalid_tool_call"}
         try:
             decoded_arguments = json.loads(tool_call.arguments)
-        except json.JSONDecodeError:
-            penalty = self.FORMAT_PENALTY
-            response_text = self.tokenizer.decode(agent_data.response_ids)
-            self._record_invalid_tool_call(agent_data, reason="invalid_json_arguments", penalty=penalty)
-            self._record_penalty(agent_data, reason="invalid_json_arguments", value=penalty, model_response=response_text)
+        except (json.JSONDecodeError, TypeError):
+            penalty = self._invalid_tool_call_penalty(agent_data)
             return (
                 ToolResponse(text=f"Error when executing tool: invalid JSON arguments for '{tool_call.name}'"),
                 penalty,
@@ -285,28 +347,37 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             or set(decoded_arguments) != {"action"}
             or not isinstance(decoded_arguments.get("action"), str)
         ):
-            penalty = self.FORMAT_PENALTY
-            response_text = self.tokenizer.decode(agent_data.response_ids)
-            self._record_invalid_tool_call(agent_data, reason="invalid_arguments_schema", penalty=penalty)
-            self._record_penalty(
-                agent_data,
-                reason="format_error",
-                value=penalty,
-                model_response=response_text,
-                details={"argument_keys": sorted(decoded_arguments) if isinstance(decoded_arguments, dict) else None},
-            )
+            penalty = self._invalid_tool_call_penalty(agent_data)
             return (
                 ToolResponse(text=f"Error when executing tool: invalid arguments schema for '{tool_call.name}'"),
                 penalty,
                 {"error": "invalid_arguments_schema", "skip_tool_call_reward": True},
             )
 
-        response, reward, metrics = await super()._call_tool(tool_call, tools_kwargs, agent_data)
-        if isinstance(metrics, dict) and metrics.get("error") == "invalid_action":
-            for record in reversed(agent_data.extra_fields.get("penalty_records", [])):
-                if record.get("reason") == "invalid_restoration_action":
-                    record["reason"] = "invalid_action"
-                    break
+        active_tools = getattr(agent_data, "_active_tools", None) or getattr(self, "tools", {})
+        try:
+            tool = active_tools[tool_call.name]
+            instance_id = await self._get_or_create_tool_instance(tool_call.name, tool, tools_kwargs, agent_data)
+            response, reward, metrics = await tool.execute(instance_id, decoded_arguments, agent_data=agent_data)
+        except KeyError:
+            penalty = self._invalid_tool_call_penalty(agent_data)
+            return (
+                ToolResponse(text=f"Error when executing tool: unknown tool '{tool_call.name}'"),
+                penalty,
+                {"error": "unknown_tool", "requested_tool": tool_call.name, "skip_tool_call_reward": True},
+            )
+        except Exception as exc:
+            penalty = self._invalid_tool_call_penalty(agent_data)
+            return (
+                ToolResponse(text=f"Error when executing tool: {exc}"),
+                penalty,
+                {"error": type(exc).__name__, "skip_tool_call_reward": True},
+            )
+        if isinstance(metrics, dict) and metrics.get("error"):
+            # The parser produced a call, but the environment rejected it
+            # (for example an inadmissible action). This is category 2, and
+            # the returned value is appended by the processing phase.
+            reward = self._invalid_tool_call_penalty(agent_data)
         if getattr(agent_data, "data_source", "") == "alfworld" and isinstance(metrics, dict):
             agent_data.alfworld_last_tool_metrics = dict(metrics)
             if metrics.get("admissible_commands"):
@@ -321,9 +392,137 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         return response, reward, metrics
 
     async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
+        if getattr(self, "_environment_budget", None) is not None and agent_data.data_source == "alfworld":
+            return await self._process_environment_decision(agent_data)
         state = await super()._handle_processing_tools_state(agent_data)
         if getattr(agent_data, "data_source", "") == "alfworld" and agent_data.extra_fields.get(
             "alfworld_environment_finished"
         ):
             return AgentState.TERMINATED
         return state
+
+    async def _generate_environment_decision(
+        self, agent_data: AgentData, sampling_params: dict[str, Any]
+    ) -> AgentState:
+        """Generate one bounded decision without trajectory-token/turn cutoffs.
+
+        Only model tokens occupy loss slots. Observations live in the recorded
+        real inference prompts and are replayed by the ALFWorld FSDP path.
+        This keeps storage provably bounded by max_steps * per-turn tokens,
+        rather than dropping tool feedback or truncating the final decision.
+        """
+        budget = self._environment_budget
+        assert budget is not None
+        prompt = list(agent_data.generation_prompt_ids or agent_data.prompt_ids)
+        generation_params = dict(sampling_params)
+        generation_params.pop("max_tokens", None)
+        generation_params.pop("max_generated_response_length", None)
+        generation_params["max_new_tokens"] = budget.max_new_tokens_per_turn
+        with simple_timer("generate_sequences", agent_data.metrics):
+            output = await self.server_manager.generate(
+                request_id=agent_data.request_id,
+                prompt_ids=prompt,
+                sampling_params=generation_params,
+                image_data=agent_data.image_data,
+                video_data=agent_data.video_data,
+            )
+        # Fail loudly on backend contract violations instead of silently
+        # clipping training tokens or accepting a trajectory with no loss slots.
+        if not output.token_ids or len(output.token_ids) > budget.max_new_tokens_per_turn:
+            raise RuntimeError("ALFWorld generation must return 1..max_new_tokens_per_turn tokens")
+        if output.log_probs is not None and len(output.log_probs) != len(output.token_ids):
+            raise RuntimeError("ALFWorld generation returned misaligned token log probabilities")
+        if agent_data.metrics.get("num_preempted") is None:
+            agent_data.metrics["num_preempted"] = output.num_preempted if output.num_preempted is not None else -1
+        if output.routed_experts is not None:
+            raise NotImplementedError("Environment-driven ALFWorld currently supports dense models only")
+
+        agent_data.assistant_turns += 1
+        response_ids, log_probs = self._apply_tool_call_format_guardrails(
+            agent_data, output.token_ids, output.log_probs
+        )
+        offset = len(agent_data.response_mask)
+        if offset + len(response_ids) > self.response_length:
+            raise RuntimeError("ALFWorld response storage invariant violated; refusing to truncate trajectory")
+        agent_data.response_ids = list(response_ids)
+        agent_data.prompt_ids.extend(response_ids)
+        agent_data.response_mask.extend([1] * len(response_ids))
+        if log_probs is not None:
+            agent_data.response_logprobs.extend(log_probs)
+        agent_data.extra_fields.setdefault("alfworld_turn_contexts", []).append({
+            "prompt_ids": prompt,
+            "response_ids": list(response_ids),
+            "response_offset": offset,
+        })
+
+        schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+        typed_schemas = [OpenAIFunctionToolSchema.model_validate(schema) for schema in schemas]
+        try:
+            _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(response_ids, typed_schemas)
+        except Exception:
+            # Parser-level failures are indistinguishable from an incomplete or
+            # malformed schema at the task level: category 1, not category 2.
+            agent_data.tool_calls = []
+        if agent_data.tool_calls and not self._has_complete_tool_call_schema(response_ids):
+            agent_data.tool_calls = []
+        if agent_data.tool_calls:
+            return AgentState.PROCESSING_TOOLS
+
+        # A missing or malformed call is a failed decision, not a terminal state.
+        agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
+        # Still pass through the tool phase: shared phase coordinators require
+        # one after_tool arrival for every nonterminal generation, even a no-op.
+        return AgentState.PROCESSING_TOOLS
+
+    async def _process_environment_decision(self, agent_data: AgentData) -> AgentState:
+        """Execute at most one call and retain rewards, not tool-text loss slots."""
+        if not agent_data.tool_calls:
+            self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
+            agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
+            return await self._finish_environment_decision(agent_data)
+        tool_call = agent_data.tool_calls[0]
+        agent_data.total_tool_calls += 1
+        with simple_timer("tool_calls", agent_data.metrics):
+            _, reward, metrics = await self._call_tool(tool_call, agent_data.tools_kwargs, agent_data)
+        metrics = metrics or {}
+        agent_data.alfworld_last_tool_metrics = dict(metrics)
+        if not metrics.get("error"):
+            # This increment is deliberately in the environment-driven
+            # decision path: _finish_environment_decision increments
+            # alfworld_decision_steps for the same step immediately after it.
+            extra_fields = agent_data.extra_fields
+            extra_fields["alfworld_valid_tool_call_count"] = int(
+                extra_fields.get("alfworld_valid_tool_call_count", 0) or 0
+            ) + 1
+        if reward is not None:
+            agent_data.tool_rewards.append(float(reward))
+        action = metrics.get("action")
+        if action:
+            agent_data.action_history.append(action)
+            if not metrics.get("error"):
+                agent_data.successful_action_history.append(action)
+        agent_data.tool_calls = []
+        return await self._finish_environment_decision(agent_data)
+
+    async def _finish_environment_decision(self, agent_data: AgentData) -> AgentState:
+        """Share the tool's Max Steps budget across valid and failed decisions.
+
+        Invalid output leaves TextWorld state unchanged, contributes no reward,
+        and consumes one decision step. It cannot create an unbounded retry
+        loop. Environment completion takes precedence on the last allowed step,
+        so a last-step success is not labelled truncated.
+        """
+        budget = self._environment_budget
+        assert budget is not None
+        steps = int(agent_data.extra_fields.get("alfworld_decision_steps", 0)) + 1
+        agent_data.extra_fields["alfworld_decision_steps"] = steps
+        agent_data.user_turns += 1
+        if agent_data.extra_fields.get("alfworld_environment_finished"):
+            if agent_data.extra_fields.get("alfworld_terminal_reason") == "truncated":
+                agent_data.extra_fields["alfworld_terminal_reason"] = "max_steps"
+            return AgentState.TERMINATED
+        if steps >= budget.max_steps:
+            agent_data.extra_fields["alfworld_terminal_reason"] = "max_steps"
+            return AgentState.TERMINATED
+        await self._rebuild_generation_prompt_after_tool(agent_data)
+        return AgentState.GENERATING
