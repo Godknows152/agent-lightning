@@ -397,3 +397,34 @@ def test_history_context_retains_assistant_and_feedback_with_single_static_schem
     asyncio.run(loop._rebuild_generation_prompt_after_tool(data))
     assert [m['role'] for m in data.messages] == ['user', 'assistant', 'tool', 'assistant', 'tool']
     assert 'New room' in data.messages[-1]['content']
+
+
+def test_history_context_bounds_replayed_pairs_but_keeps_initial_protocol():
+    loop = make_loop(max_steps=6)
+    loop._history_context = True
+    loop._history_max_turns = 2
+    data = make_data(loop)
+    data.messages = [{'role': 'user', 'content': 'initial protocol and task'}]
+    data.alfworld_mission = 'finish task'
+    data._active_tool_schemas = loop.tool_schemas
+    data.alfworld_protocol_schemas = loop.tool_schemas
+
+    async def add_turn(index):
+        data.messages.append({'role': 'assistant', 'content': f'assistant-{index}'})
+        data.alfworld_last_tool_metrics = {
+            'observation': f'room-{index}',
+            'admissible_commands': ['look'],
+        }
+        await loop._rebuild_generation_prompt_after_tool(data)
+
+    async def run():
+        for index in range(1, 5):
+            await add_turn(index)
+
+    asyncio.run(run())
+    assert [message['role'] for message in data.messages] == ['user', 'assistant', 'tool', 'assistant', 'tool']
+    assert data.messages[0]['content'] == 'initial protocol and task'
+    assert data.messages[1]['content'] == 'assistant-3'
+    assert 'room-3' in data.messages[2]['content']
+    assert data.messages[3]['content'] == 'assistant-4'
+    assert 'room-4' in data.messages[4]['content']

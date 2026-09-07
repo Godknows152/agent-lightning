@@ -47,6 +47,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         tool_config = getattr(tool, "config", {}) or {}
         self._environment_budget = ALFWorldDecisionBudget.from_tool_config(tool_config)
         self._history_context = bool(tool_config.get("history_context", False))
+        self._history_max_turns = int(tool_config.get("history_max_turns", 4))
+        if self._history_max_turns <= 0:
+            raise ValueError("ALFWorld history_max_turns must be positive")
         if self._environment_budget is not None and self.response_length < self._environment_budget.response_capacity:
             raise ValueError(
                 "ALFWorld response storage is too small for max_steps * max_new_tokens_per_turn. "
@@ -185,11 +188,23 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         # complete VERL trajectory and its response mask for training. Per-turn
         # contexts are replayed by FSDP for actor/ref logprobs and gradients.
         if getattr(self, "_history_context", False):
-            # Keep the initial user message and every assistant/feedback pair.
+            # Keep the protocol-bearing initial user message and only the most
+            # recent complete assistant/feedback pairs.  The generated
+            # trajectory remains complete in prompt_ids; this bound controls
+            # the replay inputs and prevents quadratic context growth.
             feedback = messages[0]["content"].split("\n\nChoose exactly one next action", 1)[0]
             agent_data.messages.append({"role": "tool", "content": feedback})
+            history = agent_data.messages
+            pair_count = (len(history) - 1) // 2
+            history_max_turns = getattr(self, "_history_max_turns", 4)
+            if pair_count > history_max_turns:
+                first = history[:1]
+                recent = history[-(history_max_turns * 2) :]
+                agent_data.messages = first + recent
             messages = agent_data.messages
-            prompt_schemas = agent_data.alfworld_protocol_schemas
+            prompt_schemas = getattr(
+                agent_data, "alfworld_protocol_schemas", getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+            )
         else:
             agent_data.messages = messages
             prompt_schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)

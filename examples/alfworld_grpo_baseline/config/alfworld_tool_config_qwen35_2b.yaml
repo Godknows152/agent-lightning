@@ -8,6 +8,10 @@ tools:
       max_steps: 16
       environment_driven: true
       history_context: true
+      # Keep the protocol-bearing first turn plus the latest complete pairs.
+      # Older pairs remain represented in the trajectory loss, but are not
+      # replayed as ever-growing model inputs.
+      history_max_turns: 2
       # Bound replay memory together with the 16-decision budget.
       max_new_tokens_per_turn: 256
       # Reuse initialized TextWorld instances in the 2B AgentLoop workers.
