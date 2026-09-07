@@ -13,16 +13,16 @@ defaults:
 # profile continues to inherit the unmodified shared ALFWorld configuration.
 variables:
   TOOL_CONFIG: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/alfworld_tool_config_qwen35_2b.yaml
-  # Keep each GRPO update small enough for a fast first step while retaining
-  # multiple samples per prompt for a useful group-relative advantage.
-  NUM_ROLLOUTS: 4
+  # Keep the replay-expanded GRPO update within the 80-GiB GPU budget.
+  # Two samples still provide a valid group-relative comparison.
+  NUM_ROLLOUTS: 2
 
 data:
   # Qwen3.5-2B only: emit a tool call directly, without generated reasoning.
   apply_chat_template_kwargs:
     enable_thinking: false
-  train_batch_size: 8
-  val_batch_size: 8
+  train_batch_size: 4
+  val_batch_size: 4
   # Storage only: recomputed from tool max_steps * max_new_tokens_per_turn
   # by the ALFWorld entrypoint before worker creation. Not a rollout cutoff.
   max_response_length: 4096
@@ -36,8 +36,9 @@ actor_rollout_ref:
       max_assistant_turns: null
       max_generated_response_length: null
   actor:
-    ppo_mini_batch_size: 8
-    # Replay expands every trajectory into per-turn prompts; keep backward batches small.
+    # Replay expands every trajectory into per-turn prompts; use a small actor
+    # update batch because backward activations dominate memory.
+    ppo_mini_batch_size: 2
     ppo_micro_batch_size_per_gpu: 1
     entropy_coeff: 0.02
     fsdp_config:
@@ -46,6 +47,7 @@ actor_rollout_ref:
       # Recompute entropy intermediates instead of keeping them through the actor forward.
       entropy_checkpointing: true
   ref:
+    log_prob_micro_batch_size_per_gpu: 1
     fsdp_config:
       param_offload: true
   model:
