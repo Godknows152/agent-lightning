@@ -104,3 +104,21 @@ Qwen3.5-9B、Qwen2.5 等未启用 `environment_driven` 的配置仍保留旧的 
 
 目前只完成隔离组件和无 GPU smoke/preflight；尚未启动正式 baseline 训练。默认只训练一个 `seed0`；
 `seed1/seed2` 和三 seed 串行脚本仅用于后续需要均值/方差时的可选重复实验。
+
+## Qwen3.5-2B history-context training (2026-09-07)
+
+The 2B tool config now enables `history_context: true`. In environment-driven
+mode each inference request contains the initial prompt and every prior
+assistant/feedback pair. A single static tool schema and XML format instruction
+are rendered at the beginning of the conversation, not repeated between turns.
+The static schema deliberately omits the initial action enum: the latest
+feedback's `Current admissible actions` is authoritative. Runtime parser schemas
+and environment validation still refresh against the latest action list.
+Feedback contains only the task goal, current observation, and admissible actions.
+Failed decisions preserve the current state and also enter conversation history.
+Per-turn prompt/response tokens remain in `alfworld_turn_contexts` for policy
+replay; the existing flattened validation table is not a full conversation view.
+
+The 16-decision / 256-generated-tokens-per-decision limits are unchanged.
+History increases replay/KV memory use; no history truncation is introduced.
+Other model profiles retain their previous behavior unless explicitly enabled.

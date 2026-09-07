@@ -357,3 +357,43 @@ def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
 
     outputs = asyncio.run(run())
     assert [out.extra_fields["alfworld_decision_steps"] for out in outputs] == [2, 2]
+
+
+def test_history_context_retains_assistant_and_feedback_with_single_static_schema():
+    loop = make_loop(max_steps=3)
+    loop._history_context = True
+    data = make_data(loop)
+    tool = SimpleNamespace(get_state=lambda _: ('Initial room', ('look',)))
+    data._active_tools = {'alfworld_action': tool}
+    loop._get_or_create_tool_instance = AsyncMock(return_value='instance')
+    asyncio.run(loop._set_authoritative_initial_prompt(data))
+    schema = data.alfworld_protocol_schemas[0]
+    assert 'enum' not in schema['function']['parameters']['properties']['action']
+    set_server(loop, CALL)
+    asyncio.run(loop._generate_environment_decision(data, {}))
+    data.alfworld_last_tool_metrics = {'observation': 'New room', 'admissible_commands': ['open drawer 1']}
+    asyncio.run(loop._rebuild_generation_prompt_after_tool(data))
+    assert [m['role'] for m in data.messages] == ['user', 'assistant', 'tool']
+    assert data.messages[1]['content'] == CALL
+    assert 'New room' in data.messages[2]['content']
+    assert 'open drawer 1' in data.messages[2]['content']
+    assert '<tools>' not in data.messages[2]['content']
+    assert loop.apply_chat_template.call_args.kwargs['tools'] == [schema]
+    assert data._active_tool_schemas[0]['function']['parameters']['properties']['action']['enum'] == ['open drawer 1']
+    # Render the actual template: protocol appears once, history is retained.
+    from jinja2 import Environment
+    from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
+    rendered = Environment().from_string(QWEN35_ALFWORLD_CHAT_TEMPLATE).render(
+        messages=data.messages, tools=[schema], add_generation_prompt=True, enable_thinking=False,
+    )
+    assert rendered.count('<tools>') == 1
+    assert rendered.count('Return exactly one tool call') == 1
+    assert 'Initial room' in rendered and 'New room' in rendered
+    assert '<tool_response>' in rendered
+    set_server(loop, CALL)
+    asyncio.run(loop._generate_environment_decision(data, {}))
+    assert len(data.extra_fields['alfworld_turn_contexts']) == 2
+    data.alfworld_last_tool_metrics = {'error': 'invalid_tool_call'}
+    asyncio.run(loop._rebuild_generation_prompt_after_tool(data))
+    assert [m['role'] for m in data.messages] == ['user', 'assistant', 'tool', 'assistant', 'tool']
+    assert 'New room' in data.messages[-1]['content']

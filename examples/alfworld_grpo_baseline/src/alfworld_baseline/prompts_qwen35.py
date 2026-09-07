@@ -28,7 +28,7 @@ QWEN35_ALFWORLD_CHAT_TEMPLATE = r"""
 {%- if enable_thinking is defined and enable_thinking %}
 {{- 'Reason inside <think>...</think> about the current goal and state as needed. Close </think>, then emit exactly one tool call. Do not execute tools inside thinking. The following output restrictions apply only after </think>.\n\n' }}
 {%- endif %}
-{{- 'Return exactly one tool call and no other visible text. Use this exact XML structure, replacing ACTION with one exact value from the current action enum:\n\n<tool_call>\n<function=alfworld_action>\n<parameter=action>\nACTION\n</parameter>\n</function>\n</tool_call>\n\nDo not output ACTION literally. Do not output a plain-text action, explanation, plan, or suffix.\n<|im_end|>\n' }}
+{{- 'Return exactly one tool call and no other visible text. Use this exact XML structure, replacing ACTION with one exact value from the latest Current admissible actions list:\n\n<tool_call>\n<function=alfworld_action>\n<parameter=action>\nACTION\n</parameter>\n</function>\n</tool_call>\n\nDo not output ACTION literally. Do not output a plain-text action, explanation, plan, or suffix.\n<|im_end|>\n' }}
 {%- endif %}
 {%- for message in messages %}
 {%- if message.role == 'system' %}

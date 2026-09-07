@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 import re
 from typing import Any, Literal
@@ -20,12 +21,10 @@ from .thinking import ThinkingToolParser, tool_output
 
 @register("alfworld_tool_agent")
 class ALFWorldToolAgentLoop(ToolAgentLoop):
-    """ALFWorld loop with authoritative state prompts and bounded history.
+    """ALFWorld loop with authoritative state and optional full conversation history.
 
-    The full VERL trajectory remains available for policy-loss accounting, but
-    every inference request uses a fresh current-state-only prompt. Previous
-    observations, action lists, tool responses, and assistant turns are never
-    sent as context for the next ALFWorld decision.
+    History mode retains all assistant/feedback pairs with one static protocol
+    schema. Per-turn inference contexts are replayed for policy training.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
@@ -47,6 +46,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
         self._environment_budget = ALFWorldDecisionBudget.from_tool_config(tool_config)
+        self._history_context = bool(tool_config.get("history_context", False))
         if self._environment_budget is not None and self.response_length < self._environment_budget.response_capacity:
             raise ValueError(
                 "ALFWorld response storage is too small for max_steps * max_new_tokens_per_turn. "
@@ -133,6 +133,15 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         # prose in the prompt. Rebuild it from the authoritative environment
         # state. Execution still validates membership (no constrained decoder).
         agent_data._active_tool_schemas = [ALFWorldToolRegistry(actions).build_tool_schema()]
+        if getattr(self, "_history_context", False):
+            # A persistent protocol schema must not freeze the initial state's enum.
+            schema = copy.deepcopy(agent_data._active_tool_schemas[0])
+            action = schema["function"]["parameters"]["properties"]["action"]
+            action.pop("enum", None)
+            action["description"] = "Copy exactly one action from the latest Current admissible actions list."
+            agent_data.alfworld_protocol_schemas = [schema]
+            agent_data._active_tool_schemas = [schema]
+
 
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
         if getattr(agent_data, "data_source", "") == "alfworld":
@@ -149,7 +158,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         return await super()._handle_pending_state(agent_data, sampling_params)
 
     async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
-        """Rebuild the next request from only the latest environment state."""
+        """Refresh state and build a history-aware or current-state-only request."""
         if getattr(agent_data, "data_source", "") != "alfworld":
             return
         if agent_data.extra_fields.get("alfworld_environment_finished"):
@@ -175,10 +184,18 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         # Only the next inference context is compacted. prompt_ids retains the
         # complete VERL trajectory and its response mask for training. Per-turn
         # contexts are replayed by FSDP for actor/ref logprobs and gradients.
-        agent_data.messages = messages
+        if getattr(self, "_history_context", False):
+            # Keep the initial user message and every assistant/feedback pair.
+            feedback = messages[0]["content"].split("\n\nChoose exactly one next action", 1)[0]
+            agent_data.messages.append({"role": "tool", "content": feedback})
+            messages = agent_data.messages
+            prompt_schemas = agent_data.alfworld_protocol_schemas
+        else:
+            agent_data.messages = messages
+            prompt_schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
         agent_data.generation_prompt_ids = await self.apply_chat_template(
             messages,
-            tools=getattr(agent_data, "_active_tool_schemas", self.tool_schemas),
+            tools=prompt_schemas,
             images=None,
             videos=None,
         )
@@ -445,6 +462,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if offset + len(response_ids) > self.response_length:
             raise RuntimeError("ALFWorld response storage invariant violated; refusing to truncate trajectory")
         agent_data.response_ids = list(response_ids)
+        if getattr(self, "_history_context", False):
+            agent_data.messages.append({
+                "role": "assistant",
+                "content": self.tokenizer.decode(response_ids, skip_special_tokens=False),
+            })
         agent_data.prompt_ids.extend(response_ids)
         agent_data.response_mask.extend([1] * len(response_ids))
         if log_probs is not None:
