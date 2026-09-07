@@ -444,6 +444,17 @@ def compute_restoration_action_entropy_metrics(batch: DataProto) -> dict[str, An
         logger.warning("Cannot compute restoration action entropy metrics: %s", exc)
         return {}
 
+    # ALFWorld histories contain full, state-dependent commands (including
+    # object IDs), not choices from the fixed restoration action set. Pooling
+    # them across tasks obscures per-episode loops and saturates path entropy.
+    # Exclude only those samples so mixed batches retain restoration metrics.
+    data_sources = batch.non_tensor_batch.get("data_source")
+    if data_sources is not None:
+        sources = np.asarray(data_sources, dtype=object).reshape(-1)
+        histories = [history for history, source in zip(histories, sources, strict=True) if source != "alfworld"]
+        if not histories:
+            return {}
+
     valid_histories = [history for history in histories if history]
     action_choices = [action for history in valid_histories for action in history]
     return {

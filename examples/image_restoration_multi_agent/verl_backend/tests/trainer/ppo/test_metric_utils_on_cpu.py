@@ -179,6 +179,32 @@ class TestRestorationActionEntropyMetrics(unittest.TestCase):
         self.assertAlmostEqual(metrics["actor/tool_choice_entropy"], expected_choice_entropy)
         self.assertAlmostEqual(metrics["actor/action_path_entropy"], expected_path_entropy)
 
+    def test_alfworld_does_not_emit_restoration_entropies(self):
+        histories = np.empty(2, dtype=object)
+        histories[:] = [["look", "look"], ["examine desk 1"]]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[2]),
+            non_tensor_batch={
+                "action_history": histories,
+                "data_source": np.array(["alfworld", "alfworld"], dtype=object),
+            },
+        )
+        self.assertEqual(compute_restoration_action_entropy_metrics(batch), {})
+
+    def test_mixed_batch_excludes_only_alfworld_histories(self):
+        histories = np.empty(3, dtype=object)
+        histories[:] = [["look"] * 16, ["ridcp", "stop"], ["scunet", "stop"]]
+        batch = DataProto(
+            batch=TensorDict({}, batch_size=[3]),
+            non_tensor_batch={
+                "action_history": histories,
+                "data_source": np.array(["alfworld", "restoration", "restoration"], dtype=object),
+            },
+        )
+        metrics = compute_restoration_action_entropy_metrics(batch)
+        self.assertAlmostEqual(metrics["actor/tool_choice_entropy"], np.log(2.0))
+        self.assertAlmostEqual(metrics["actor/action_path_entropy"], np.log(2.0))
+
     def test_empty_histories_report_zero_entropy(self):
         action_histories = np.empty(2, dtype=object)
         action_histories[:] = [["stop"], None]
