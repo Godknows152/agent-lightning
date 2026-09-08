@@ -184,7 +184,7 @@ def test_valid_actions_finish_only_on_done_or_max_steps_and_ignore_long_observat
     assert len(executed) == n
     assert len(data.response_mask) == n * len(CALL)
     assert data.extra_fields['alfworld_terminal_reason'] == ('done' if done_at else 'max_steps')
-    assert sum(data.tool_rewards) == pytest.approx((1.0 if done_at else 0.0) - sum(min(0.02 * i, 0.1) for i in range(n)))
+    assert sum(data.tool_rewards) == pytest.approx((1.0 if done_at else 0.0) - 0.1 * max(n - 1, 0))
     assert data.extra_fields['alfworld_valid_tool_call_count'] == n
     assert data.successful_action_history == ['look'] * n
     assert len(data.extra_fields['alfworld_turn_contexts']) == n
@@ -423,7 +423,7 @@ def test_repeated_action_penalties_are_trajectory_local_and_mutually_exclusive()
 
     for action in ["look", "inventory", "look", "bad", None, "look", "inventory", "bad"]:
         asyncio.run(step(data, action))
-    assert data.tool_rewards == pytest.approx([1, 1, .98, -.1, -.1, .96, .98, -.1])
+    assert data.tool_rewards == pytest.approx([1, 1, .9, -.1, -.1, .9, .9, -.1])
     assert data.extra_fields["alfworld_repeated_action_penalty_count"] == 3
     assert data.extra_fields["alfworld_invalid_tool_call_penalty_count"] == 2
     assert data.extra_fields["alfworld_no_tool_call_penalty_count"] == 1
@@ -434,20 +434,19 @@ def test_repeated_action_penalties_are_trajectory_local_and_mutually_exclusive()
     assert other.extra_fields.get("alfworld_repeated_action_penalty_count", 0) == 0
 
 
-@pytest.mark.parametrize("prior,expected", [(1, -.02), (2, -.04), (4, -.08), (5, -.1), (6, -.1), (15, -.1)])
-def test_repeat_penalty_escalates_then_caps(prior, expected):
+@pytest.mark.parametrize("prior", [1, 2, 4, 5, 6, 15])
+def test_repeat_penalty_is_fixed_for_every_repeated_occurrence(prior):
     loop = make_loop()
     data = make_data(loop)
     value = loop._record_alfworld_penalty(data, "repeated_action", append_reward=True, prior_occurrences=prior)
-    assert value == pytest.approx(expected)
-    assert data.tool_rewards == pytest.approx([expected])
+    assert value == pytest.approx(-0.1)
+    assert data.tool_rewards == pytest.approx([-0.1])
     assert data.extra_fields["alfworld_repeated_action_penalty_count"] == 1
 
-
-def test_sixteen_identical_actions_cost_at_most_no_call_trajectory():
+def test_sixteen_identical_actions_match_no_call_trajectory_penalty():
     loop = make_loop()
     data = make_data(loop)
     penalties = [loop._record_alfworld_penalty(data, "repeated_action", append_reward=False,
                                               prior_occurrences=i) for i in range(1, 16)]
-    assert sum(penalties) == pytest.approx(-1.3)
-    assert sum(penalties) > 16 * loop.ALFWORLD_NO_TOOL_CALL_PENALTY
+    assert sum(penalties) == pytest.approx(-1.5)
+    assert sum(penalties) == pytest.approx(15 * loop.ALFWORLD_NO_TOOL_CALL_PENALTY)

@@ -187,8 +187,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
     ALFWORLD_NO_TOOL_CALL_PENALTY = -0.1
     ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.1
-    ALFWORLD_REPEATED_ACTION_PENALTY = -0.02
-    ALFWORLD_REPEATED_ACTION_PENALTY_FLOOR = -0.1
+    ALFWORLD_REPEATED_ACTION_PENALTY = -0.1
 
     def _record_alfworld_penalty(
         self,
@@ -200,9 +199,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     ) -> float:
         """Record one of three mutually exclusive decision penalties.
 
-        Valid repeated actions pay -0.02 per prior valid occurrence of that
-        exact command in this trajectory, capped at -0.1 per decision.
-        Invalid attempts never enter this
+        Each valid repeated action pays -0.1, regardless of how many prior
+        occurrences of that exact command are in this trajectory. Invalid
+        attempts never enter this
         count. Returned penalties are appended by the processing phase.
         """
         if kind == "no_tool_call":
@@ -215,10 +214,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             if prior_occurrences < 1:
                 raise ValueError("Repeated actions require at least one prior valid occurrence")
             count_key = "alfworld_repeated_action_penalty_count"
-            value = max(
-                self.ALFWORLD_REPEATED_ACTION_PENALTY * prior_occurrences,
-                self.ALFWORLD_REPEATED_ACTION_PENALTY_FLOOR,
-            )
+            value = self.ALFWORLD_REPEATED_ACTION_PENALTY
         else:  # pragma: no cover - Literal callers should make this unreachable.
             raise ValueError(f"unknown ALFWorld penalty kind: {kind!r}")
 

@@ -109,8 +109,8 @@ Qwen3.5-9B、Qwen2.5 等未启用 `environment_driven` 的配置仍保留旧的 
 
 Valid executions of the same exact ALFWorld command are counted across the entire
 trajectory, including nonconsecutive repetitions. Occurrence `k` contributes
-`-min(0.02 * (k - 1), 0.1)` in addition to its native environment reward (first execution: 0;
-second: -0.02; third: -0.04; sixth and later: -0.1). Invalid attempts do not enter the count,
+`-0.1` in addition to its native environment reward (first execution: 0;
+second and every later valid occurrence: -0.1). Invalid attempts do not enter the count,
 and counters reset per trajectory, including when reusing pooled environments.
 Each decision receives at most one category: no call (-0.1), invalid call (-0.1),
 or valid repeated action. Terminal success reward is preserved. The third counter
