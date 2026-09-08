@@ -29,7 +29,7 @@ def compute_score(
     parsed but invalid tool call. The returned score is therefore the native
     environment reward plus the two protocol penalties and a mutually
     exclusive repeated-action penalty for valid decisions: occurrence k of an
-    exact command costs 0.1 * (k - 1), counting only valid executions within
+    exact command costs min(0.02 * (k - 1), 0.1), counting only valid executions within
     the same trajectory.
     """
     if data_source != "alfworld":
