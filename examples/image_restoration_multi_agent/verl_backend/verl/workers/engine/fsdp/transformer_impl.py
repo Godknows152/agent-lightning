@@ -61,6 +61,7 @@ from verl.utils.fsdp_utils import (
     replace_lora_wrapper,
 )
 from verl.utils.model import convert_weight_keys, extract_multi_modal_inputs
+from verl.utils.metric import Metric
 from verl.utils.py_functional import convert_to_regular_types
 from verl.utils.torch_functional import logprobs_from_logits
 from verl.utils.ulysses import (
@@ -771,7 +772,7 @@ class FSDPEngine(BaseEngine):
             with ctx:
                 loss, meta_info = self.forward_step(micro_batch, loss_function=loss_function, forward_only=forward_only)
 
-                if not forward_only:
+                if not forward_only and not meta_info.pop("_loss_already_backwarded", False):
                     loss.backward()
 
             output_lst.append(meta_info)
@@ -1035,7 +1036,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
         use_remove_padding = tu.get_non_tensor_data(data=micro_batch, key="use_remove_padding", default=True)
         pad_mode = tu.get_non_tensor_data(data=micro_batch, key="pad_mode", default=DatasetPadMode.NO_PADDING)
         use_fused_kernels = tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False)
-        temperature = micro_batch["temperature"]
+        temperature = tu.get_non_tensor_data(data=micro_batch, key="temperature", default=1.0)
         temperature_item = temperature
         if use_fused_kernels:
             assert not isinstance(temperature, torch.Tensor), (
@@ -1490,11 +1491,164 @@ class FSDPEngineWithLMHead(FSDPEngine):
             torch.nested.nested_tensor_from_jagged(normalized_entropy, offsets),
         )
 
+    def _forward_turn_context_chunks(self, micro_batch: TensorDict, loss_function, forward_only):
+        """Run ALFWorld replay in bounded turn chunks and accumulate gradients eagerly.
+
+        Every data-parallel rank must execute the same number of FSDP forwards
+        and backwards.  ALFWorld trajectories have rank-local context lengths,
+        so their local chunk counts may differ.  Missing local chunks therefore
+        run a differentiable zero-loss placeholder using the final valid chunk.
+        """
+
+        from .turn_context import chunk_response_mask, iter_turn_context_chunks, restore_trajectory_outputs
+
+        if any(
+            key in micro_batch
+            for key in (
+                "decision_action_token_ids",
+                "decision_first_token_ids",
+                "decision_point_mask",
+            )
+        ):
+            raise ValueError("Turn-context chunking does not support decision-level entropy metadata")
+
+        chunk_tokens = tu.get_non_tensor_data(micro_batch, "turn_context_chunk_tokens", None)
+        chunks = iter_turn_context_chunks(micro_batch, chunk_tokens)
+        local_chunk_count = len(chunks)
+        chunk_count = torch.tensor(local_chunk_count, dtype=torch.int64, device=get_device_id())
+        torch.distributed.all_reduce(
+            chunk_count,
+            op=torch.distributed.ReduceOp.MAX,
+            group=self.get_data_parallel_group(),
+        )
+        max_chunk_count = int(chunk_count.item())
+        if max_chunk_count < 1:
+            raise RuntimeError("ALFWorld turn-context replay produced no chunks")
+
+        combined_values: dict[str, torch.Tensor] = {}
+        original_offsets = micro_batch["input_ids"].offsets()
+        total_loss = 0.0
+        aggregated_metrics: dict[str, Metric] = {}
+
+        for chunk_index in range(max_chunk_count):
+            has_local_chunk = chunk_index < local_chunk_count
+            if has_local_chunk:
+                forward_batch, replay_source, replay_target = chunks[chunk_index]
+            else:
+                # Reuse a valid local input only to preserve FSDP's collective
+                # schedule.  Its output is excluded from replay and metrics.
+                forward_batch, _, _ = chunks[-1]
+
+            model_inputs, output_args = self.prepare_model_inputs(micro_batch=forward_batch)
+            with torch.autocast(device_type=get_device_name(), dtype=torch.bfloat16):
+                raw_output = self.module(
+                    **model_inputs,
+                    use_cache=False,
+                )
+
+                if has_local_chunk:
+                    model_output = self.prepare_model_outputs(
+                        output=raw_output,
+                        output_args=output_args,
+                        micro_batch=forward_batch,
+                        logits_processor_func=loss_function,
+                    )
+
+            if has_local_chunk:
+                restored_output = restore_trajectory_outputs(
+                    model_output,
+                    micro_batch,
+                    replay_source,
+                    replay_target,
+                )
+                if loss_function is not None:
+                    chunk_data = micro_batch.clone()
+                    chunk_data["response_mask"] = chunk_response_mask(micro_batch, replay_target)
+                    loss, metrics = loss_function(
+                        model_output=restored_output,
+                        data=chunk_data,
+                        dp_group=self.get_data_parallel_group(),
+                    )
+                    total_loss += float(loss.detach().item())
+                    for key, value in metrics.items():
+                        if isinstance(value, Metric):
+                            aggregated_metrics.setdefault(key, Metric(aggregation=value.aggregation)).extend(value)
+                        else:
+                            # Keep compatibility with custom loss functions returning raw scalars.
+                            aggregated_metrics.setdefault(key, Metric(aggregation="mean")).append(value)
+
+                if forward_only:
+                    for key, value in restored_output.items():
+                        if not isinstance(value, torch.Tensor) or not value.is_nested:
+                            raise ValueError(f"Unsupported turn-context output: {key}")
+                        flat = value.values().detach()
+                        if key not in combined_values:
+                            combined_values[key] = torch.zeros(
+                                (micro_batch["input_ids"].values().numel(), *flat.shape[1:]),
+                                dtype=flat.dtype,
+                                device=flat.device,
+                            )
+                        combined_values[key] += flat
+            elif not forward_only:
+                # Fused Qwen PPO heads may return log_probs instead of logits.
+                # The placeholder output is never used for metrics or replay;
+                # it only keeps the FSDP collective and autograd schedules
+                # identical on ranks with fewer local chunks.
+                placeholder_tensor = None
+                for output_key in ("logits", "log_probs"):
+                    candidate = getattr(raw_output, output_key, None)
+                    if isinstance(candidate, torch.Tensor):
+                        placeholder_tensor = candidate
+                        break
+                if placeholder_tensor is None and isinstance(raw_output, dict):
+                    for output_key in ("logits", "log_probs"):
+                        candidate = raw_output.get(output_key)
+                        if isinstance(candidate, torch.Tensor):
+                            placeholder_tensor = candidate
+                            break
+                if not isinstance(placeholder_tensor, torch.Tensor):
+                    raise RuntimeError(
+                        "FSDP placeholder replay forward did not return differentiable logits or log_probs"
+                    )
+                placeholder_values = (
+                    placeholder_tensor.values() if placeholder_tensor.is_nested else placeholder_tensor
+                )
+                loss = placeholder_values.sum() * 0.0
+
+            if not forward_only:
+                # Only the final *global* chunk may synchronize gradients.
+                # This remains valid when the final chunk is a placeholder.
+                backward_context = (
+                    nullcontext() if chunk_index == max_chunk_count - 1 else self.module.no_sync()
+                )
+                with backward_context:
+                    loss.backward()
+
+            if has_local_chunk:
+                del model_output, restored_output
+            del raw_output, model_inputs, output_args
+
+        combined_output = {
+            key: torch.nested.nested_tensor_from_jagged(value, original_offsets)
+            for key, value in combined_values.items()
+        }
+        return (
+            torch.tensor(total_loss if loss_function is not None else 1.0, device=get_device_name()),
+            {
+                "model_output": combined_output,
+                "loss": total_loss,
+                "metrics": aggregated_metrics,
+                "_loss_already_backwarded": not forward_only,
+            },
+        )
+
     def forward_step(self, micro_batch: TensorDict, loss_function, forward_only):
         device_name = get_device_name()
         # actually, we should avoid assigning like this...
         micro_batch = micro_batch.to(get_device_id())
         replay_contexts = "alfworld_turn_contexts" in micro_batch
+        if replay_contexts and tu.get_non_tensor_data(micro_batch, "turn_context_chunk_tokens", None):
+            return self._forward_turn_context_chunks(micro_batch, loss_function, forward_only)
         forward_batch = micro_batch
         if replay_contexts:
             from .turn_context import expand_turn_contexts, restore_trajectory_outputs

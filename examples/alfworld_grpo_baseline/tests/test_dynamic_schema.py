@@ -94,6 +94,7 @@ def make_replay_batch():
     batch["input_ids"] = torch.nested.as_nested_tensor([torch.tensor([10,11,12,13,14,15,16]),
                                                        torch.tensor([20,21,22])], layout=torch.jagged)
     batch["loss_mask"] = torch.tensor([[1,1,0,1,1], [1,0,0,0,0]])
+    batch["response_mask"] = torch.tensor([[1,1,0,1,1], [1,0,0,0,0]])
     batch["temperature"] = torch.tensor([1., 0.7])
     tu.assign_non_tensor(batch, multi_modal_inputs=[None, {}], alfworld_turn_contexts=[
         [{"prompt_ids": [10,11], "response_ids": [12,13], "response_offset": 0},
@@ -120,6 +121,41 @@ def test_training_replays_actual_prompts_and_preserves_loss_slots_and_gradients(
     assert values.grad.nonzero().flatten().tolist() == source.tolist()
 
 
+def test_training_replay_keeps_uniform_temperature_as_scalar_for_fused_ppo():
+    import torch
+    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
+    from verl.utils import tensordict_utils as tu
+
+    batch = make_replay_batch()
+    batch["temperature"] = torch.tensor([1.0, 1.0])
+    expanded, _, _ = expand_turn_contexts(batch)
+
+    assert tu.get_non_tensor_data(expanded, "temperature", None) == 1.0
+
+
+def test_training_replay_turn_chunks_keep_turns_atomic_and_masks_disjoint():
+    from verl.workers.engine.fsdp.turn_context import chunk_response_mask, iter_turn_context_chunks
+
+    batch = make_replay_batch()
+    chunks = iter_turn_context_chunks(batch, max_tokens=5)
+
+    assert [[row.tolist() for row in expanded["input_ids"].unbind()] for expanded, _, _ in chunks] == [
+        [[10, 11, 12, 13]],
+        [[30, 31, 32, 15, 16]],
+        [[20, 21, 22]],
+    ]
+    assert [source.tolist() for _, source, _ in chunks] == [[1, 2], [2, 3], [1]]
+    assert [target.tolist() for _, _, target in chunks] == [[1, 2], [4, 5], [8]]
+
+    masks = [chunk_response_mask(batch, target) for _, _, target in chunks]
+    assert [mask.tolist() for mask in masks] == [
+        [[1, 1, 0, 0, 0], [0, 0, 0, 0, 0]],
+        [[0, 0, 0, 1, 1], [0, 0, 0, 0, 0]],
+        [[0, 0, 0, 0, 0], [1, 0, 0, 0, 0]],
+    ]
+    assert sum(masks).tolist() == batch["response_mask"].tolist()
+
+
 def test_training_replay_rejects_nonempty_multimodal_payload():
     from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
     batch = make_replay_batch()
@@ -135,3 +171,33 @@ def test_training_replay_fails_closed_on_missing_or_mismatched_context():
     batch["input_ids"].values()[2] = 99
     with pytest.raises(ValueError, match="does not match"):
         expand_turn_contexts(batch)
+
+
+def test_sglang_lora_target_modules_preserve_all_linear_sentinel():
+    from verl.workers.rollout.sglang_rollout.sglang_rollout import _normalize_sglang_lora_target_modules
+
+    assert _normalize_sglang_lora_target_modules("all-linear") == ["all"]
+    assert _normalize_sglang_lora_target_modules("all") == ["all"]
+    assert _normalize_sglang_lora_target_modules("q_proj") == ["q_proj"]
+    assert _normalize_sglang_lora_target_modules(["q_proj", "v_proj"]) == ["q_proj", "v_proj"]
+
+
+def test_qwen35_9b_lora_targets_are_supported_by_sglang_dynamic_loading():
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+
+    config_dir = Path(__file__).resolve().parents[1] / "config" / "alfworld" / "qwen35_9b" / "v1"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        config = compose(config_name="alfworld_config_2gpu")
+
+    assert config.actor_rollout_ref.model.target_modules == [
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
+    ]
+    assert config.actor_rollout_ref.model.enable_activation_offload is False

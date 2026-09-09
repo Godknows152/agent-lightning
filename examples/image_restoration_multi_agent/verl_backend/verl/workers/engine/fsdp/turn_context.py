@@ -7,6 +7,111 @@ from tensordict import TensorDict
 from verl.utils import tensordict_utils as tu
 
 
+def _select_expanded_rows(expanded: TensorDict, row_indices: list[int]) -> TensorDict:
+    """Select nested replay rows while preserving the scalar non-tensor metadata."""
+
+    device = expanded["input_ids"].device
+    chunk = TensorDict({}, batch_size=[len(row_indices)], device=device)
+    for key in ("input_ids", "position_ids"):
+        rows = [expanded[key][index] for index in row_indices]
+        chunk[key] = torch.nested.as_nested_tensor(rows, layout=torch.jagged)
+
+    temperature = tu.get_non_tensor_data(expanded, "temperature", None)
+    if temperature is not None:
+        # Uniform temperatures are stored as scalar non-tensor metadata so the
+        # fused PPO head can consume them without a per-sample tensor.
+        tu.assign_non_tensor_data(chunk, "temperature", temperature)
+    elif "temperature" in expanded.keys():
+        chunk["temperature"] = expanded["temperature"][row_indices]
+
+    for key, default in (
+        ("use_remove_padding", True),
+        ("use_fused_kernels", False),
+        ("calculate_entropy", False),
+        ("pad_mode", "no_padding"),
+    ):
+        tu.assign_non_tensor_data(chunk, key, tu.get_non_tensor_data(expanded, key, default))
+    return chunk
+
+
+def iter_turn_context_chunks(
+    batch: TensorDict, max_tokens: int | None
+) -> list[tuple[TensorDict, torch.Tensor, torch.Tensor]]:
+    """Split replay turns into bounded token chunks.
+
+    A turn is kept atomic so its prompt and generated action are always scored
+    together. A turn longer than ``max_tokens`` is emitted as a single chunk;
+    splitting inside an action would invalidate the replay mapping.
+    """
+
+    expanded, source_indices, target_indices = expand_turn_contexts(batch)
+    if max_tokens is None or max_tokens <= 0:
+        return [(expanded, source_indices, target_indices)]
+
+    sequence_lengths = expanded["input_ids"].offsets().diff().tolist()
+    chunks: list[tuple[TensorDict, torch.Tensor, torch.Tensor]] = []
+    current_rows: list[int] = []
+    current_tokens = 0
+    source_sequence_ids = torch.bucketize(
+        source_indices,
+        expanded["input_ids"].offsets()[1:-1],
+        right=True,
+    )
+    for row, sequence_length in enumerate(sequence_lengths):
+        if current_rows and current_tokens + sequence_length > max_tokens:
+            row_mask = (source_sequence_ids >= current_rows[0]) & (source_sequence_ids <= current_rows[-1])
+            # Source indices address the flattened full expanded batch. The
+            # selected TensorDict starts at zero, so rebase them to this chunk.
+            source_start = expanded["input_ids"].offsets()[current_rows[0]]
+            chunks.append(
+                (
+                    _select_expanded_rows(expanded, current_rows),
+                    source_indices[row_mask] - source_start,
+                    target_indices[row_mask],
+                )
+            )
+            current_rows = []
+            current_tokens = 0
+        current_rows.append(row)
+        current_tokens += sequence_length
+
+    if current_rows:
+        row_mask = (source_sequence_ids >= current_rows[0]) & (source_sequence_ids <= current_rows[-1])
+        source_start = expanded["input_ids"].offsets()[current_rows[0]]
+        chunks.append(
+            (
+                _select_expanded_rows(expanded, current_rows),
+                source_indices[row_mask] - source_start,
+                target_indices[row_mask],
+            )
+        )
+    return chunks
+
+
+def chunk_response_mask(batch: TensorDict, target_indices: torch.Tensor) -> torch.Tensor:
+    """Build the response mask for one replay chunk in original trajectory space."""
+
+    response_mask = batch["response_mask"]
+    if response_mask.is_nested:
+        response_mask = response_mask.to_padded_tensor(0)
+    chunk_mask = torch.zeros_like(response_mask)
+    records = batch["alfworld_turn_contexts"]
+    if hasattr(records, "tolist"):
+        records = records.tolist()
+    sequence_offsets = batch["input_ids"].offsets()
+    for row, turns in enumerate(records):
+        row_start = int(sequence_offsets[row])
+        row_end = int(sequence_offsets[row + 1])
+        row_targets = target_indices[(target_indices >= row_start) & (target_indices < row_end)]
+        if row_targets.numel() == 0:
+            continue
+        prompt_length = len(turns[0]["prompt_ids"])
+        response_positions = row_targets - row_start - prompt_length + 1
+        valid = (response_positions >= 0) & (response_positions < chunk_mask.shape[1])
+        chunk_mask[row, response_positions[valid].long()] = 1
+    return chunk_mask
+
+
 def expand_turn_contexts(batch: TensorDict) -> tuple[TensorDict, torch.Tensor, torch.Tensor]:
     """Pack each recorded prompt+answer independently; map predictions back to the trajectory.
 
@@ -93,7 +198,14 @@ def expand_turn_contexts(batch: TensorDict) -> tuple[TensorDict, torch.Tensor, t
     expanded["position_ids"] = torch.nested.nested_tensor_from_jagged(
         torch.cat(positions), expanded["input_ids"].offsets()
     )
-    expanded["temperature"] = torch.as_tensor(temperatures, dtype=torch.float32, device=device)
+    temperature_tensor = torch.as_tensor(temperatures, dtype=torch.float32, device=device)
+    # The fused PPO head accepts one scalar temperature. ALFWorld normally uses
+    # one rollout temperature for every trajectory, so preserve that value as a
+    # scalar instead of materializing an equivalent per-sample tensor.
+    if temperature_tensor.numel() and torch.all(temperature_tensor == temperature_tensor[0]):
+        tu.assign_non_tensor_data(expanded, "temperature", float(temperature_tensor[0].item()))
+    else:
+        expanded["temperature"] = temperature_tensor
     for key, default in (
         ("use_remove_padding", True), ("use_fused_kernels", False),
         ("calculate_entropy", False), ("pad_mode", "no_padding"),

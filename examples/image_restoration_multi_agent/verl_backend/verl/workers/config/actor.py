@@ -181,6 +181,9 @@ class ActorConfig(BaseConfig):
     use_dynamic_bsz: bool = False
     ppo_max_token_len_per_gpu: int = 16384
     ppo_infer_max_token_len_per_gpu: int = 16384
+    # Maximum tokens in one ALFWorld turn-replay forward/backward chunk.
+    # A turn is kept atomic; zero disables turn-level chunking.
+    turn_context_chunk_tokens: Optional[int] = None
     clip_ratio: float = 0.2
     clip_ratio_low: float = 0.2
     clip_ratio_high: float = 0.2

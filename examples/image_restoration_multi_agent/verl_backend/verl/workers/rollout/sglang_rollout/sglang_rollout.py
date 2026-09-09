@@ -49,6 +49,18 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 
+def _normalize_sglang_lora_target_modules(target_modules):
+    """Convert PEFT target-module forms to the suffix list expected by SGLang."""
+    if isinstance(target_modules, str):
+        # PEFT accepts both ``all-linear`` and a single string. SGLang uses the
+        # canonical ``all`` sentinel and requires adapter configs to contain a
+        # list, not a string (which must not be converted into characters).
+        return ["all"] if target_modules in {"all", "all-linear"} else [target_modules]
+    if target_modules is not None and not isinstance(target_modules, list):
+        return list(target_modules)
+    return target_modules
+
+
 # patch to avoid issue https://github.com/sgl-project/sglang/issues/6723
 def _set_envs_and_config(server_args: ServerArgs):
     # Set global environments
@@ -272,9 +284,9 @@ class ServerAdapter(BaseRollout):
             value = peft_config_json.get(key)
             if hasattr(value, "value"):
                 peft_config_json[key] = value.value
-        target_modules = peft_config_json.get("target_modules")
-        if target_modules is not None and not isinstance(target_modules, list):
-            peft_config_json["target_modules"] = list(target_modules)
+        peft_config_json["target_modules"] = _normalize_sglang_lora_target_modules(
+            peft_config_json.get("target_modules")
+        )
 
         # lora weights
         processed_weights: dict[str, torch.Tensor] = {

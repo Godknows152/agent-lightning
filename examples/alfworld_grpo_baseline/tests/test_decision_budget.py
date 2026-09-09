@@ -284,24 +284,19 @@ def test_invalid_budget_rejected(key, value):
         ALFWorldDecisionBudget.from_tool_config({'environment_driven': True, key: value})
 
 
-@pytest.mark.parametrize('profile,enabled', [('qwen35_2b', True), ('qwen35_9b', False)])
-def test_composed_config_disables_thinking_and_derives_storage_only_for_opted_in_profile(profile, enabled):
+@pytest.mark.parametrize('profile,expected_steps', [('qwen35_2b', 16), ('qwen35_9b', 50)])
+def test_composed_config_disables_thinking_and_derives_storage_from_shared_tool_budget(profile, expected_steps):
     path = ROOT / 'config' / 'alfworld' / profile / 'v1'
     with initialize_config_dir(config_dir=str(path), version_base=None):
         config = compose(config_name='alfworld_config_2gpu')
-    previous = OmegaConf.to_container(config, resolve=False)
     budget = configure_environment_driven_rollout(config)
     assert config.data.apply_chat_template_kwargs.enable_thinking is False
     assert config.trainer.enable_penalty_logging is False
-    if enabled:
-        assert budget == ALFWorldDecisionBudget(16, 256)
-        assert config.data.max_response_length == 4096
-        assert config.actor_rollout_ref.rollout.response_length == 4096
-        assert config.actor_rollout_ref.rollout.multi_turn.max_generated_response_length is None
-        assert config.actor_rollout_ref.rollout.multi_turn.max_assistant_turns is None
-    else:
-        assert budget is None
-        assert OmegaConf.to_container(config, resolve=False) == previous
+    assert budget == ALFWorldDecisionBudget(expected_steps, 256)
+    assert config.data.max_response_length == expected_steps * 256
+    assert config.actor_rollout_ref.rollout.response_length == expected_steps * 256
+    assert config.actor_rollout_ref.rollout.multi_turn.max_generated_response_length is None
+    assert config.actor_rollout_ref.rollout.multi_turn.max_assistant_turns is None
 
 
 def test_storage_resizes_when_tool_budget_changes(tmp_path):

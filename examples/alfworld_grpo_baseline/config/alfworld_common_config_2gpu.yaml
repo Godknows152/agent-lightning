@@ -19,7 +19,7 @@ algorithm:
 data:
   train_files: ${variables.DATA_DIR}/train.parquet
   val_files: ${variables.DATA_DIR}/test.parquet
-  train_batch_size: 16
+  train_batch_size: 8
   val_batch_size: 32
   max_prompt_length: 2048
   max_response_length: 4096

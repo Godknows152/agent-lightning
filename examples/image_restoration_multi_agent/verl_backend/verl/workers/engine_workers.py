@@ -338,6 +338,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
             max_token_len_per_gpu=self.engine_config.max_token_len_per_gpu,
             micro_batch_size_per_gpu=self.engine_config.micro_batch_size_per_gpu,
             use_fused_kernels=self.engine_config.use_fused_kernels,
+            turn_context_chunk_tokens=self.config.turn_context_chunk_tokens,
         )
 
         for key, val in default_keys.items():
@@ -392,6 +393,7 @@ class TrainingWorker(Worker, DistProfilerExtension):
             max_token_len_per_gpu=self.engine_config.infer_max_token_len_per_gpu,
             micro_batch_size_per_gpu=self.engine_config.infer_micro_batch_size_per_gpu,
             use_fused_kernels=self.engine_config.use_fused_kernels,
+            turn_context_chunk_tokens=self.config.turn_context_chunk_tokens,
         )
 
         for key, val in default_keys.items():
@@ -517,6 +519,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 engine_config=ref_config.engine,
                 optimizer_config=ref_config.optim,
                 checkpoint_config=ref_config.checkpoint,
+                turn_context_chunk_tokens=ref_config.turn_context_chunk_tokens,
             )
 
             # assign engine configs
@@ -545,6 +548,7 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
                 engine_config=actor_config.engine,
                 optimizer_config=actor_config.optim,
                 checkpoint_config=actor_config.checkpoint,
+                turn_context_chunk_tokens=actor_config.turn_context_chunk_tokens,
             )
 
             assert self.config.actor.use_dynamic_bsz == self.config.rollout.log_prob_use_dynamic_bsz

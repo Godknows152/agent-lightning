@@ -8,3 +8,59 @@ defaults:
   - /alfworld_common_config_2gpu
   - /model_profiles@_global_: qwen35_9b
   - _self_
+
+# Match the 2B profile's sampling scale and selected memory-saving settings.
+variables:
+  NUM_ROLLOUTS: 4
+
+data:
+  train_batch_size: 8
+
+actor_rollout_ref:
+  rollout:
+    # Preserve token log-probs produced during rollout so old-log-prob
+    # recomputation can be bypassed for this experiment.
+    calculate_log_probs: true
+    agent:
+      num_workers: 4
+  actor:
+    ppo_mini_batch_size: 8
+    # Keep each backward micro-batch small; replay chunking bounds its tokens.
+    ppo_micro_batch_size_per_gpu: 1
+    # Keep replay bounded while intermediate chunks accumulate gradients
+    # locally; the final chunk performs the single FSDP gradient sync.
+    turn_context_chunk_tokens: 8192
+    fsdp_config:
+      # LoRA leaves only adapter parameters trainable, so CPU offload is no
+      # longer needed for the optimizer and costs a host-device transfer.
+      param_offload: false
+      optimizer_offload: false
+      entropy_checkpointing: true
+  model:
+    # Train adapters instead of the full 9B parameter set.
+    lora_rank: 16
+    lora_alpha: 32
+    # Keep PEFT's adapter set within SGLang's LoRA memory-pool support.
+    # ``all-linear`` also selects Qwen3.5 Mamba projections, which SGLang's
+    # current dynamic LoRA path cannot load from tensors.
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+    # The activation-offload handler assumes one forward per training micro
+    # batch. Turn replay intentionally performs multiple chunk forwards, so
+    # retain checkpointing but disable incompatible CPU activation offload.
+    enable_activation_offload: false
+    # Compute PPO log-probs and entropy with the memory-efficient fused head.
+    use_fused_kernels: true
+    fused_kernel_options:
+      impl_backend: torch
+
+algorithm:
+  rollout_correction:
+    # Use rollout_log_probs as old_log_probs and skip a second actor pass.
+    bypass_mode: true

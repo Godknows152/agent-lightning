@@ -576,6 +576,7 @@ class TrainingWorkerConfig(BaseConfig):
     optimizer_config: OptimizerConfig = None
     checkpoint_config: CheckpointConfig = None
     profiler_config: ProfilerConfig = None
+    turn_context_chunk_tokens: int | None = None
     # automatically select engine and optimizer function.
     # This function takes model config and the device name as parameter.
     # Users can pass in a higher-order function to take more parameters

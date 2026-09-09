@@ -1,8 +1,17 @@
+# Shared ALFWorld tool configuration. Keep its execution budget and environment
+# reuse settings aligned with the Qwen3.5-2B profile for comparable rollouts.
 tools:
   - class_name: "alfworld_baseline.alfworld_tool.ALFWorldTool"
     config:
       type: native
+      # One shared decision budget, including failed/invalid attempts.
       max_steps: 50
+      environment_driven: true
+      # Bound replay memory together with the 16-decision budget.
+      max_new_tokens_per_turn: 256
+      # Reuse initialized TextWorld instances in AgentLoop workers. Each acquire
+      # reloads the requested game file, so trajectory state is never shared.
+      env_pool_size: 16
     tool_schema:
       type: function
       function:
