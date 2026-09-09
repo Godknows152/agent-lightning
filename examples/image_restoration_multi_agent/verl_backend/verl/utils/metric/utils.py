@@ -141,10 +141,19 @@ class Metric:
             raise ValueError("Cannot aggregate an empty list of metrics.")
         value_lists = [ml.values for ml in metric_lists]
         if not all(len(ls) == len(value_lists[0]) for ls in value_lists):
-            raise ValueError(
-                f"All Metric instances must have the same number of values "
-                f"for dp aggregation: {[len(ls) for ls in value_lists]}"
+            # Turn-context replay can produce a different number of local
+            # replay chunks on each DP rank.  The values are therefore not
+            # positionally aligned, so aggregate each rank locally first and
+            # then combine the rank-level results.  Equal-length inputs keep
+            # the original path below unchanged.
+            aggregation = metric_lists[0].aggregation
+            if not all(ml.aggregation == aggregation for ml in metric_lists):
+                raise ValueError("Aggregation type mismatch during DP metric aggregation")
+            rank_values = [cls._aggregate(ml.values, aggregation) for ml in metric_lists]
+            combine_aggregation = (
+                aggregation if aggregation in (AggregationType.MIN, AggregationType.MAX) else AggregationType.MEAN
             )
+            return cls._aggregate(rank_values, combine_aggregation)
         value_arrays = np.array(value_lists)  # [num_dp, num_grad_accumulation]
         aggregation = metric_lists[0].aggregation
         match aggregation:

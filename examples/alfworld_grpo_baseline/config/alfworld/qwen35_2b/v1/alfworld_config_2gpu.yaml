@@ -1,4 +1,4 @@
-# ALFWorld GRPO v1 for Qwen3.5-2B and its native XML tool calls.
+# ALFWorld GRPO v1 for Qwen3.5-2B, aligned with the current Qwen3.5-9B training settings.
 hydra:
   searchpath:
     - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
@@ -9,46 +9,53 @@ defaults:
   - /model_profiles@_global_: qwen35_2b
   - _self_
 
-# All performance changes in this file are Qwen3.5-2B-specific.  The Qwen3.5-9B
-# profile continues to inherit the unmodified shared ALFWorld configuration.
+# Keep non-model training settings aligned with the Qwen3.5-9B profile.
 variables:
-  TOOL_CONFIG: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/alfworld_tool_config_qwen35_2b.yaml
-  # Keep each GRPO update small enough for a fast first step while retaining
-  # multiple samples per prompt for a useful group-relative advantage.
   NUM_ROLLOUTS: 4
 
 data:
-  # Qwen3.5-2B only: emit a tool call directly, without generated reasoning.
-  apply_chat_template_kwargs:
-    enable_thinking: false
   train_batch_size: 8
-  val_batch_size: 8
-  # Storage only: recomputed from tool max_steps * max_new_tokens_per_turn
-  # by the ALFWorld entrypoint before worker creation. Not a rollout cutoff.
-  max_response_length: 4096
 
 actor_rollout_ref:
   rollout:
+    # Preserve token log-probs produced during rollout so old-log-prob
+    # recomputation can be bypassed for this experiment.
+    calculate_log_probs: true
     agent:
       num_workers: 4
-    multi_turn:
-      max_user_turns: null
-      max_assistant_turns: null
-      max_generated_response_length: null
   actor:
     ppo_mini_batch_size: 8
-    # Replay expands every trajectory into per-turn prompts; keep backward batches small.
+    # Keep each backward micro-batch small for the standard FSDP training path.
     ppo_micro_batch_size_per_gpu: 1
-    entropy_coeff: 0.02
     fsdp_config:
-      param_offload: true
-      optimizer_offload: true
-      # Recompute entropy intermediates instead of keeping them through the actor forward.
+      # LoRA leaves only adapter parameters trainable, so CPU offload is no
+      # longer needed for the optimizer and costs a host-device transfer.
+      param_offload: false
+      optimizer_offload: false
       entropy_checkpointing: true
-  ref:
-    fsdp_config:
-      param_offload: true
   model:
-    enable_gradient_checkpointing: true
-    # Keep checkpointed layer activations on CPU between forward and backward.
-    enable_activation_offload: true
+    # Train adapters instead of the full model parameter set.
+    lora_rank: 16
+    lora_alpha: 32
+    # Keep PEFT's adapter set within SGLang's LoRA memory-pool support.
+    # ``all-linear`` also selects Qwen3.5 Mamba projections, which SGLang's
+    # current dynamic LoRA path cannot load from tensors.
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+    # Keep activation checkpointing without CPU activation transfers.
+    enable_activation_offload: false
+    # Compute PPO log-probs and entropy with the memory-efficient fused head.
+    use_fused_kernels: true
+    fused_kernel_options:
+      impl_backend: torch
+
+algorithm:
+  rollout_correction:
+    # Use rollout_log_probs as old_log_probs and skip a second actor pass.
+    bypass_mode: true

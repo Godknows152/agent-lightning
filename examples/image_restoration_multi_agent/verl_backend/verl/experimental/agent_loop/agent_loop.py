@@ -270,20 +270,26 @@ class AsyncLLMServerManager:
         self,
         config: DictConfig,
         servers: list[tuple[str, ray.actor.ActorHandle]],
-        load_balancer_handle: ray.actor.ActorHandle,
+        load_balancer_handle: Optional[ray.actor.ActorHandle],
     ):
         """Initialize the AsyncLLMServerManager.
 
         Args:
             config (DictConfig): whole config for main entrypoint.
             servers (list[tuple[str, ray.actor.ActorHandle]]): (address, handle) pairs for each LLM server.
-            load_balancer_handle (ray.actor.ActorHandle): shared global load balancer actor.
+            load_balancer_handle (ray.actor.ActorHandle | None): shared global load balancer actor.
         """
         self.config = config
         self._load_balancer = load_balancer_handle
         self._server_id_to_handle: dict[str, ray.actor.ActorHandle] = dict(servers)
 
     async def _acquire_server(self, request_id: str) -> tuple[str, ray.actor.ActorHandle]:
+        if self._load_balancer is None:
+            if len(self._server_id_to_handle) != 1:
+                raise RuntimeError("A load balancer is required when multiple LLM servers are configured")
+            server_id, handle = next(iter(self._server_id_to_handle.items()))
+            return server_id, handle
+
         server_id = await self._load_balancer.acquire_server.remote(request_id=request_id)
         handle = self._server_id_to_handle.get(server_id)
         if handle is None:
@@ -291,6 +297,8 @@ class AsyncLLMServerManager:
         return server_id, handle
 
     def _release_server(self, server_id: str) -> None:
+        if self._load_balancer is None:
+            return
         # Fire-and-forget: release is just a counter decrement, no need to await.
         # Awaiting here risks blocking the finally clause if the LB actor is unresponsive.
         self._load_balancer.release_server.remote(server_id=server_id)
@@ -654,7 +662,7 @@ class AgentLoopWorker:
         self,
         config: DictConfig,
         servers: list[tuple[str, ray.actor.ActorHandle]],
-        load_balancer_handle: ray.actor.ActorHandle,
+        load_balancer_handle: Optional[ray.actor.ActorHandle],
         teacher_servers: Optional[dict[str, list[tuple[str, ray.actor.ActorHandle]]]] = None,
         teacher_load_balancer_handle: Optional[dict[str, ray.actor.ActorHandle]] = None,
         reward_loop_worker_handles: list[ray.actor.ActorHandle] = None,
@@ -1476,6 +1484,14 @@ class AgentLoopManager:
             )
 
     async def _init_global_load_balancer(self) -> None:
+        # A single rollout replica has no routing decision to make.  Avoid
+        # creating an extra Ray actor in this common case; besides reducing
+        # overhead, this bypasses a native Ray worker that is unnecessary for
+        # single-server inference.
+        if len(self.server_addresses) == 1:
+            self.global_load_balancer = None
+            return
+
         self.global_load_balancer = GlobalRequestLoadBalancer.remote(
             server_actor_ids=self.server_addresses,
             max_cache_size=DEFAULT_ROUTING_CACHE_SIZE,

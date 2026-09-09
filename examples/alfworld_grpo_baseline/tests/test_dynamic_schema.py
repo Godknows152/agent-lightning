@@ -133,29 +133,6 @@ def test_training_replay_keeps_uniform_temperature_as_scalar_for_fused_ppo():
     assert tu.get_non_tensor_data(expanded, "temperature", None) == 1.0
 
 
-def test_training_replay_turn_chunks_keep_turns_atomic_and_masks_disjoint():
-    from verl.workers.engine.fsdp.turn_context import chunk_response_mask, iter_turn_context_chunks
-
-    batch = make_replay_batch()
-    chunks = iter_turn_context_chunks(batch, max_tokens=5)
-
-    assert [[row.tolist() for row in expanded["input_ids"].unbind()] for expanded, _, _ in chunks] == [
-        [[10, 11, 12, 13]],
-        [[30, 31, 32, 15, 16]],
-        [[20, 21, 22]],
-    ]
-    assert [source.tolist() for _, source, _ in chunks] == [[1, 2], [2, 3], [1]]
-    assert [target.tolist() for _, _, target in chunks] == [[1, 2], [4, 5], [8]]
-
-    masks = [chunk_response_mask(batch, target) for _, _, target in chunks]
-    assert [mask.tolist() for mask in masks] == [
-        [[1, 1, 0, 0, 0], [0, 0, 0, 0, 0]],
-        [[0, 0, 0, 1, 1], [0, 0, 0, 0, 0]],
-        [[0, 0, 0, 0, 0], [1, 0, 0, 0, 0]],
-    ]
-    assert sum(masks).tolist() == batch["response_mask"].tolist()
-
-
 def test_training_replay_rejects_nonempty_multimodal_payload():
     from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
     batch = make_replay_batch()

@@ -20,11 +20,13 @@ case "${MODEL_PROFILE}" in
     ;;
   qwen35_9b)
     MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
-    DATA_DIR="${ROOT}/data/qwen35_9b"
+    # Share the newer v4 dataset; model-specific output directories remain isolated.
+    DATA_DIR="${ROOT}/data/qwen35_2b"
     CONFIG_PATH="${ROOT}/config/alfworld/qwen35_9b/v1"
     ;;
   qwen35_2b)
     MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-2B"
+    # Share the newer v4 dataset; model-specific output directories remain isolated.
     DATA_DIR="${ROOT}/data/qwen35_2b"
     CONFIG_PATH="${ROOT}/config/alfworld/qwen35_2b/v1"
     ;;

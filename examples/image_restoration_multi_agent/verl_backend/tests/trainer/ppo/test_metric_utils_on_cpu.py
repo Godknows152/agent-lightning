@@ -838,3 +838,16 @@ class TestProcessValidationMetrics(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestMetricUnevenDpAggregation(unittest.TestCase):
+    """Regression tests for turn-replay metrics with uneven local chunk counts."""
+
+    def test_mean_aggregation_accepts_uneven_rank_value_counts(self):
+        rank0 = Metric("mean", [1.0, 2.0, 3.0])
+        rank1 = Metric("mean", [4.0, 5.0])
+        self.assertAlmostEqual(Metric.aggregate_dp([rank0, rank1]), 3.0)
+
+    def test_sum_aggregation_accepts_uneven_rank_value_counts(self):
+        rank0 = Metric("sum", [1.0, 2.0, 3.0])
+        rank1 = Metric("sum", [4.0, 5.0])
+        self.assertAlmostEqual(Metric.aggregate_dp([rank0, rank1]), 7.5)
