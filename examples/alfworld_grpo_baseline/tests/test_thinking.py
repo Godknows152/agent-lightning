@@ -83,7 +83,8 @@ def test_template_modes(thinking):
         enable_thinking=thinking, add_generation_prompt=True,
     )
     assert rendered.endswith('<think>\n' if thinking else '<think>\n\n</think>\n\n')
-    assert ('restrictions apply only after </think>' in rendered) == thinking
+    assert 'restrictions apply only after </think>' in rendered
+    assert '<tools>' not in rendered and '<function=' not in rendered
 
 
 @pytest.mark.parametrize('prefix', ['Choose look.\n</think>\n', '<think>Choose look.</think>\n', CALL + '\n</think>\n'])

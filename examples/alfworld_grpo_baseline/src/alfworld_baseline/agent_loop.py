@@ -13,40 +13,42 @@ from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
 from verl.utils.profiler import simple_timer
 
 from .budget import ALFWorldDecisionBudget
-from .prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
+from .prompts_qwen35 import PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
 from .tool_registry import ALFWorldToolRegistry
 from .thinking import ThinkingToolParser, tool_output
+from .text_actions import parse_text_action
 
 
 @register("alfworld_tool_agent")
 class ALFWorldToolAgentLoop(ToolAgentLoop):
-    """ALFWorld loop with authoritative state prompts and bounded history.
+    """ALFWorld loop with exact per-turn replay and v5 text-action decisions.
 
-    The full VERL trajectory remains available for policy-loss accounting, but
-    every inference request uses a fresh current-state-only prompt. Previous
-    observations, action lists, tool responses, and assistant turns are never
-    sent as context for the next ALFWorld decision.
+    Qwen3.5 sees the latest observation plus chronological decision history.
+    Environment execution retains the internal tool interface, never a schema
+    in the model prompt. Legacy non-Qwen3.5 tool protocols remain supported.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
-        # Replace the stock Qwen3.5 template only for Qwen3.5 ALFWorld runs.
-        # The stock template contains a generic example_function_name and
-        # normal-answer branch that compete with the dynamic schema. Qwen2.5
-        # keeps its existing Hermes path unchanged.
+        # Qwen3.5 v5 bypasses the native tool-output protocol.
+        # Qwen2.5 keeps its existing Hermes path unchanged.
         model_profile = os.environ.get("ALFWORLD_MODEL_PROFILE", "").lower()
         self._is_qwen35_alfworld = model_profile.startswith("qwen35") or self.processor is not None
-        if self._is_qwen35_alfworld:
+        self._text_actions = self._is_qwen35_alfworld
+        if self._text_actions:
             self.apply_chat_template_kwargs = dict(self.apply_chat_template_kwargs)
             self.apply_chat_template_kwargs["chat_template"] = QWEN35_ALFWORLD_CHAT_TEMPLATE
+            self.apply_chat_template_kwargs["enable_thinking"] = True
         self._thinking_enabled = self._is_qwen35_alfworld and bool(
             self.apply_chat_template_kwargs.get("enable_thinking", False)
         )
-        if self._thinking_enabled:
+        if self._thinking_enabled and not self._text_actions:
             self.tool_parser = ThinkingToolParser(self.tool_parser, self.tokenizer)
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
         self._environment_budget = ALFWorldDecisionBudget.from_tool_config(tool_config)
+        if self._text_actions and self._environment_budget is None:
+            raise ValueError("Qwen3.5 v5 text actions require environment-driven decision budgeting")
         if self._environment_budget is not None and self.response_length < self._environment_budget.response_capacity:
             raise ValueError(
                 "ALFWorld response storage is too small for max_steps * max_new_tokens_per_turn. "
@@ -95,8 +97,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         mission: str,
         observation: str,
         actions: tuple[str, ...],
+        history: tuple[str, ...] = (),
     ) -> list[dict[str, str]]:
-        """Build the next request from the goal and latest state only."""
+        """Build the next request from current state and optional decision history."""
 
         return [
             {
@@ -105,6 +108,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                     mission=mission,
                     observation=observation,
                     admissible_actions=actions,
+                    history=history,
                 ),
             }
         ]
@@ -122,6 +126,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         mission = self._mission_from_observation(observation) or self._mission_from_messages(agent_data.messages)
         agent_data.alfworld_mission = mission
         agent_data.alfworld_recent_history = []
+        agent_data.alfworld_decision_history = []
         agent_data.alfworld_current_observation = observation
         agent_data.alfworld_current_actions = actions
         # Remove the dataset's possibly stale state and any custom system
@@ -129,19 +134,23 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         agent_data.messages = self._state_prompt_messages(
             mission=mission, observation=observation, actions=actions
         )
-        # The action enum is part of the model-facing tool schema, not merely
-        # prose in the prompt. Rebuild it from the authoritative environment
-        # state. Execution still validates membership (no constrained decoder).
-        agent_data._active_tool_schemas = [ALFWorldToolRegistry(actions).build_tool_schema()]
+        # v5 has no model-facing schema; execution still validates exact
+        # membership against the authoritative environment (no fuzzy repair).
+        agent_data._active_tool_schemas = (
+            [] if getattr(self, "_text_actions", False) else [ALFWorldToolRegistry(actions).build_tool_schema()]
+        )
 
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
         if getattr(agent_data, "data_source", "") == "alfworld":
             await self._set_authoritative_initial_prompt(agent_data)
+            if getattr(self, "_text_actions", False):
+                agent_data.extra_fields["alfworld_prompt_version"] = PROMPT_VERSION
             agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_invalid_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_valid_tool_call_count", 0)
             agent_data.extra_fields.setdefault("alfworld_repeated_action_penalty_count", 0)
-            agent_data.alfworld_action_occurrences = {}
+            agent_data.alfworld_last_valid_action = None
+            agent_data.alfworld_action_streak_length = 0
             if getattr(self, "_environment_budget", None) is not None:
                 agent_data.extra_fields.update({
                     "alfworld_decision_steps": 0,
@@ -151,7 +160,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         return await super()._handle_pending_state(agent_data, sampling_params)
 
     async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
-        """Rebuild the next request from only the latest environment state."""
+        """Refresh current state, keeping v5 action history but no past reasoning."""
         if getattr(agent_data, "data_source", "") != "alfworld":
             return
         if agent_data.extra_fields.get("alfworld_environment_finished"):
@@ -161,18 +170,21 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         actions = tuple(
             str(a) for a in tool_metrics.get("admissible_commands", agent_data.alfworld_current_actions)
         )
-        # Keep this compatibility field empty: history is retained internally
-        # only for accounting/debugging and is never part of model context.
+        # Store chronological action/status history separately from observations.
+        # Do not replay previous reasoning or obsolete action lists in the prompt.
         agent_data.alfworld_recent_history = []
         agent_data.alfworld_current_observation = observation
         agent_data.alfworld_current_actions = actions
-        # Refresh the enum after every environment transition. The next model
-        # request and the tool parser must use the same latest action list.
-        agent_data._active_tool_schemas = [ALFWorldToolRegistry(actions).build_tool_schema()]
+        # Only legacy profiles expose schemas. v5 exposes the action list as text.
+        agent_data._active_tool_schemas = (
+            [] if getattr(self, "_text_actions", False) else [ALFWorldToolRegistry(actions).build_tool_schema()]
+        )
         messages = self._state_prompt_messages(
             mission=agent_data.alfworld_mission,
             observation=observation,
             actions=actions,
+            history=tuple(getattr(agent_data, "alfworld_decision_history", ()))
+            if getattr(self, "_text_actions", False) else (),
         )
         # Only the next inference context is compacted. prompt_ids retains the
         # complete VERL trajectory and its response mask for training. Per-turn
@@ -199,10 +211,14 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     ) -> float:
         """Record one of three mutually exclusive decision penalties.
 
-        Each valid repeated action pays -0.1, regardless of how many prior
-        occurrences of that exact command are in this trajectory. Invalid
-        attempts never enter this
-        count. Returned penalties are appended by the processing phase.
+        Legacy counter names are retained for stored batches/dashboards. In v5
+        no_tool_call means no parseable text action; invalid_tool_call means a
+        parsed text command rejected by the environment. No XML is required.
+        Each valid consecutive repeat of an exact command pays -0.1.
+        ``prior_occurrences`` counts preceding executions in the current streak,
+        not across the trajectory. Protocol failures break the streak and only
+        receive their own penalty. Returned penalties are appended by the
+        processing phase.
         """
         if kind == "no_tool_call":
             count_key = "alfworld_no_tool_call_penalty_count"
@@ -212,12 +228,15 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             value = self.ALFWORLD_INVALID_TOOL_CALL_PENALTY
         elif kind == "repeated_action":
             if prior_occurrences < 1:
-                raise ValueError("Repeated actions require at least one prior valid occurrence")
+                raise ValueError("Repeated actions require at least one preceding valid occurrence in the streak")
             count_key = "alfworld_repeated_action_penalty_count"
             value = self.ALFWORLD_REPEATED_ACTION_PENALTY
         else:  # pragma: no cover - Literal callers should make this unreachable.
             raise ValueError(f"unknown ALFWorld penalty kind: {kind!r}")
 
+        if kind != "repeated_action":
+            agent_data.alfworld_last_valid_action = None
+            agent_data.alfworld_action_streak_length = 0
         extra_fields = getattr(agent_data, "extra_fields", None)
         if extra_fields is None:
             extra_fields = {}
@@ -296,6 +315,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
     ) -> tuple[list[int], list[float] | None]:
         """Trim after the first complete call without altering ALFWorld reward."""
+        if getattr(self, "_text_actions", False):
+            return token_ids, log_probs
         if getattr(agent_data, "data_source", "") != "alfworld" or not token_ids:
             return super()._apply_tool_call_format_guardrails(agent_data, token_ids, log_probs)
 
@@ -388,18 +409,27 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         elif getattr(agent_data, "data_source", "") == "alfworld" and isinstance(metrics, dict):
             action = metrics.get("action")
             if isinstance(action, str) and action:
-                occurrences = getattr(agent_data, "alfworld_action_occurrences", None)
-                if occurrences is None:
-                    occurrences = {}
-                    agent_data.alfworld_action_occurrences = occurrences
-                prior = occurrences.get(action, 0)
-                occurrences[action] = prior + 1
+                # Compare exact environment commands, not the shared tool name
+                # or a trajectory-wide occurrence table. A -> B -> A is normal.
+                prior = (
+                    getattr(agent_data, "alfworld_action_streak_length", 0)
+                    if action == getattr(agent_data, "alfworld_last_valid_action", None)
+                    else 0
+                )
+                agent_data.alfworld_last_valid_action = action
+                agent_data.alfworld_action_streak_length = prior + 1
                 if prior:
                     penalty = self._record_alfworld_penalty(
                         agent_data, "repeated_action", append_reward=False, prior_occurrences=prior
                     )
                     # Preserve native environment reward, including terminal success.
                     reward = float(reward or 0.0) + penalty
+            else:
+                agent_data.alfworld_last_valid_action = None
+                agent_data.alfworld_action_streak_length = 0
+        elif getattr(agent_data, "data_source", "") == "alfworld":
+            agent_data.alfworld_last_valid_action = None
+            agent_data.alfworld_action_streak_length = 0
         if getattr(agent_data, "data_source", "") == "alfworld" and isinstance(metrics, dict):
             agent_data.alfworld_last_tool_metrics = dict(metrics)
             if metrics.get("admissible_commands"):
@@ -477,6 +507,18 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             "response_offset": offset,
         })
 
+        if getattr(self, "_text_actions", False):
+            action = parse_text_action(
+                self.tokenizer.decode(response_ids, skip_special_tokens=False),
+                enable_thinking=self._thinking_enabled,
+            )
+            agent_data.alfworld_pending_text_action = action
+            # Internal adapter only: no serialized tool call enters training tokens.
+            agent_data.tool_calls = [] if action is None else [FunctionCall(
+                name="alfworld_action", arguments=json.dumps({"action": action})
+            )]
+            return AgentState.PROCESSING_TOOLS
+
         schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
         typed_schemas = [OpenAIFunctionToolSchema.model_validate(schema) for schema in schemas]
         try:
@@ -529,11 +571,19 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _finish_environment_decision(self, agent_data: AgentData) -> AgentState:
         """Share the tool's Max Steps budget across valid and failed decisions.
 
-        Invalid output leaves TextWorld state unchanged, contributes no reward,
-        and consumes one decision step. It cannot create an unbounded retry
+        Invalid output leaves TextWorld state unchanged, contributes no native
+        environment reward (but does incur its penalty), and consumes one decision step. It cannot create an unbounded retry
         loop. Environment completion takes precedence on the last allowed step,
         so a last-step success is not labelled truncated.
         """
+        if getattr(self, "_text_actions", False):
+            history = getattr(agent_data, "alfworld_decision_history", [])
+            action = getattr(agent_data, "alfworld_pending_text_action", None)
+            metrics = getattr(agent_data, "alfworld_last_tool_metrics", {}) or {}
+            error = metrics.get("error")
+            status = "no action" if action is None else ("rejected" if error else "executed")
+            history.append(f"{action or '(no parseable action)'} [{status}]")
+            agent_data.alfworld_decision_history = history
         budget = self._environment_budget
         assert budget is not None
         steps = int(agent_data.extra_fields.get("alfworld_decision_steps", 0)) + 1

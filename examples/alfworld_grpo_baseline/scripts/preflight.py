@@ -41,10 +41,9 @@ def main() -> int:
         )
     print(f"cxx20_compiler={cxx} nvcc={nvcc}")
     from transformers import AutoTokenizer
-    from alfworld_baseline.parser import parse_tool_call
+    from alfworld_baseline.text_actions import parse_text_action
     from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
-    from alfworld_baseline.validator import ValidationStatus, validate_tool_call
     model = Path(os.environ.get("ALFWORLD_MODEL", "/home/LXJ/Python_Projects/Models/Qwen3.5-2B"))
     tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True, trust_remote_code=True)
     if not tokenizer.chat_template:
@@ -57,7 +56,7 @@ def main() -> int:
     for thinking in (False, True):
         rendered = tokenizer.apply_chat_template(
             [{"role": "user", "content": "Choose."}],
-            tools=[registry.build_tool_schema()],
+            tools=[],
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=thinking,
@@ -65,12 +64,10 @@ def main() -> int:
         )
         if "example_function_name" in rendered or "If you choose to call a function" in rendered:
             raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
-        xml_example = (
-            "<tool_call>\n<function=alfworld_action>\n<parameter=action>\n"
-            "ACTION\n</parameter>\n</function>\n</tool_call>"
-        )
-        if rendered.count(xml_example) != 1:
-            raise RuntimeError("Qwen3.5 ALFWorld template must contain exactly one canonical XML tool-call example")
+        if "<tools>" in rendered or "<tool_call>" in rendered or "<function=" in rendered:
+            raise RuntimeError("Qwen3.5 v5 must not inject tool schemas or XML examples")
+        if "Action:" not in rendered:
+            raise RuntimeError("Qwen3.5 v5 text-action instructions missing")
         expected_prefix = "<|im_start|>assistant\n<think>\n"
         if not thinking:
             expected_prefix += "\n</think>\n\n"
@@ -78,9 +75,9 @@ def main() -> int:
             raise RuntimeError(f"Qwen3.5 generation prefix mismatch: enable_thinking={thinking}")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
     print(f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} rendered_tokens={len(tokenizer(rendered, add_special_tokens=False)["input_ids"])}")
-    valid = parse_tool_call('<tool_call>\n<function=alfworld_action>\n<parameter=action>\nlook\n</parameter>\n</function>\n</tool_call>')
-    if validate_tool_call(valid, registry).status is not ValidationStatus.VALID:
-        raise AssertionError("component contract failed")
+    valid = parse_text_action("Choose look.</think>\nAction: look<|im_end|>")
+    if valid is None or registry.validate_action(valid) != "look":
+        raise AssertionError("text-action component contract failed")
     print("status=preflight_ok")
     return 0
 

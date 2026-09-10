@@ -1,35 +1,16 @@
-"""Qwen3.5 ALFWorld state prompt and isolated tool template.
-
-The model receives only the task goal, the latest environment observation, and
-that state's admissible actions.  The tool-call wire format is owned by the
-local template below; ALFWorld prompt text never repeats a second protocol.
-"""
+"""Qwen3.5 v5: action history, thinking, plain-text actions; no tool schema."""
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 from .tool_registry import ALFWorldToolRegistry
 
-PROMPT_VERSION = "alfworld_qwen35_state_v4_current_state_only"
+PROMPT_VERSION = "alfworld_qwen35_v5_action_history_text_thinking"
 SYSTEM_PROMPT = ""
 
-# Qwen3.5's stock template contains a generic ``example_function_name`` example
-# and a normal-answer branch.  Both are harmful for this strict ALFWorld task.
-# This template keeps the model's native XML call syntax while removing those
-# competing instructions.  The dynamic schema remains the source of truth for
-# the function name and the current action enum.
+# Deliberately ignores `tools`: environment tools remain internal only.
 QWEN35_ALFWORLD_CHAT_TEMPLATE = r"""
-{%- if tools and tools is iterable and tools is not mapping %}
-{{- '<|im_start|>system\n# Tools\n\n<tools>' }}
-{%- for tool in tools %}
-{{- '\n' + (tool | tojson) }}
-{%- endfor %}
-{{- '\n</tools>\n\n' }}
-{%- if enable_thinking is defined and enable_thinking %}
-{{- 'Reason inside <think>...</think> about the current goal and state as needed. Close </think>, then emit exactly one tool call. Do not execute tools inside thinking. The following output restrictions apply only after </think>.\n\n' }}
-{%- endif %}
-{{- 'Return exactly one tool call and no other visible text. Use this exact XML structure, replacing ACTION with one exact value from the current action enum:\n\n<tool_call>\n<function=alfworld_action>\n<parameter=action>\nACTION\n</parameter>\n</function>\n</tool_call>\n\nDo not output ACTION literally. Do not output a plain-text action, explanation, plan, or suffix.\n<|im_end|>\n' }}
-{%- endif %}
+{{- '<|im_start|>system\nYou are solving an ALFWorld task. Reason inside <think>...</think> about the goal, current observation, and action history. Close </think>, then output exactly one line: Action: followed by one exact command from the current admissible actions. Do not emit XML, JSON, tool calls, additional actions, or explanations. The output restrictions apply only after </think>.\n<|im_end|>\n' }}
 {%- for message in messages %}
 {%- if message.role == 'system' %}
 {{- '<|im_start|>system\n' + (message.content | string) + '<|im_end|>\n' }}
@@ -67,13 +48,18 @@ def build_user_prompt(
     mission: str,
     observation: str,
     admissible_actions: Iterable[str],
+    history: Iterable[str] = (),
 ) -> str:
-    """Build a current-state-only prompt with an explicit goal/action split."""
+    """Build v5 input; history contains past decision actions and execution status."""
 
     actions = tuple(str(action) for action in admissible_actions)
     action_text = "\n".join(f"- {action}" for action in actions)
+    history_text = "\n".join(f"{i}. {entry}" for i, entry in enumerate(history, 1)) or "(none)"
     return f"""Task goal (not an executable action):
 {mission}
+
+Previous actions (chronological; not actions to execute again):
+{history_text}
 
 Current observation:
 {_compact_observation(observation)}
@@ -81,13 +67,13 @@ Current observation:
 Current admissible actions (the action value must be copied exactly from this list):
 {action_text}
 
-Choose exactly one next action character-for-character from the current admissible actions."""
+After thinking, output exactly one line: Action: <one exact current admissible action>."""
 
 
 def build_messages(
     *, mission: str, observation: str, registry: ALFWorldToolRegistry
 ) -> tuple[list[dict[str, str]], list[dict]]:
-    """Return the state-only user message and the authoritative dynamic schema."""
+    """Return v5 user input and no model-facing tool schema."""
 
     messages = [
         {
@@ -99,4 +85,4 @@ def build_messages(
             ),
         }
     ]
-    return messages, [registry.build_tool_schema()]
+    return messages, []

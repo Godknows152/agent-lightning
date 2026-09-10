@@ -36,6 +36,7 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
     """Report terminal reasons, penalty counts, and valid tool-call counts.
 
     The agent loop records one counter per trajectory for each category. The
+    repeated-action counter counts only consecutive valid repeats. The
     trainer aggregates those counters over the rollout batch for SwanLab. No
     generic restoration penalty series are emitted here.
     """
@@ -67,4 +68,10 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
             "alfworld/valid_tool_call_count/mean": float(valid_tool_calls.mean()),
         }
     )
+    # Text-action names for v5; retain old dashboard keys as aliases, not
+    # additional penalties. Both use the same per-decision counters.
+    result["alfworld_penalty/no_action_count"] = result["alfworld_penalty/no_tool_call_count"]
+    result["alfworld_penalty/invalid_action_count"] = result["alfworld_penalty/invalid_tool_call_count"]
+    for stat in ("min", "max", "mean"):
+        result[f"alfworld/valid_action_count/{stat}"] = result[f"alfworld/valid_tool_call_count/{stat}"]
     return result

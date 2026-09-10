@@ -25,12 +25,14 @@ def compute_score(
 
     ALFWorld emits sparse environment rewards (normally 1 on a solved task and
     0 otherwise). The agent loop additionally appends exactly one ``-0.1``
-    penalty for each decision that either has no parsed tool call or contains a
-    parsed but invalid tool call. The returned score is therefore the native
+    penalty for each decision that either has no parseable action or contains an
+    invalid action. Qwen3.5 v5 parses post-thinking text, not XML/schema calls;
+    legacy profiles retain their tool parser. The returned score is therefore the native
     environment reward plus the two protocol penalties and a mutually
-    exclusive repeated-action penalty for valid decisions: occurrence k of an
-    exact command costs 0.1, counting only valid executions within
-    the same trajectory.
+    exclusive repeated-action penalty for valid decisions: starting from the
+    second consecutive execution of an identical command, each repeat costs
+    0.1. A different command or a protocol failure breaks the streak;
+    nonconsecutive repetitions are not penalized.
     """
     if data_source != "alfworld":
         raise ValueError(f"ALFWorld reward received unexpected data_source={data_source!r}")

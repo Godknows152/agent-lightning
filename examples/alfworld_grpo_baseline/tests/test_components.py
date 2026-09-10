@@ -51,11 +51,11 @@ def test_prompt_requires_qwen25_json_and_overrides_generic_template_guidance():
     assert '"name":"alfworld_action"' in SYSTEM_PROMPT
 
 
-def test_qwen35_prompt_profile_defers_tool_protocol_to_chat_template():
+def test_qwen35_prompt_profile_uses_text_actions():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
-    assert profile.PROMPT_VERSION == "alfworld_qwen35_state_v4_current_state_only"
+    assert profile.PROMPT_VERSION == "alfworld_qwen35_v5_action_history_text_thinking"
     assert profile.SYSTEM_PROMPT == ""
     user_prompt = profile.build_user_prompt(
         mission="put the apple in the drawer",
@@ -63,7 +63,7 @@ def test_qwen35_prompt_profile_defers_tool_protocol_to_chat_template():
         admissible_actions=["open drawer 1"],
     )
     assert "Task goal (not an executable action):" in user_prompt
-    assert "current admissible actions" in user_prompt
+    assert "Current admissible actions" in user_prompt
     assert "alfworld_action" not in user_prompt
     assert "Recent action/tool history" not in user_prompt
     assert "Your task is:" not in user_prompt
@@ -76,7 +76,7 @@ def test_qwen35_dynamic_schema_enum_matches_latest_admissible_actions():
     assert action["enum"] == ["look", "open drawer 1"]
 
 
-def test_qwen35_prompt_is_current_state_only_and_template_has_one_protocol():
+def test_qwen35_prompt_has_history_and_text_protocol():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
@@ -136,6 +136,10 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
             }
         )
     )
+    assert metrics.pop("alfworld_penalty/no_action_count") == 3
+    assert metrics.pop("alfworld_penalty/invalid_action_count") == 4
+    for stat in ("min", "max", "mean"):
+        assert metrics.pop(f"alfworld/valid_action_count/{stat}") == metrics[f"alfworld/valid_tool_call_count/{stat}"]
     assert metrics == {
         "alfworld_termination/done_count": 1,
         "alfworld_termination/max_steps_count": 2,

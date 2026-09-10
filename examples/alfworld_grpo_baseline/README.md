@@ -1,4 +1,4 @@
-# ALFWorld structured-tool baseline
+# ALFWorld baseline（Qwen3.5 v5 文本动作 / Qwen2.5 工具协议）
 
 本目录隔离 ALFWorld 文本环境与 old-VERL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 FSDP offload/梯度检查点和更大的 PPO batch；Qwen3.5-9B 与 Qwen2.5-1.5B 不受本次优化影响。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
 
@@ -83,36 +83,96 @@ PYTHONPATH=examples/alfworld_grpo_baseline/src \
 
 该 baseline 是多步轨迹级 GRPO：一次合法工具调用对应一次环境 `step`，随后把新的 observation 和 admissible actions 回传给模型继续决策。`single prompt` 只描述每轮 prompt 组织方式。
 
-**Qwen3.5-2B 当前配置：关闭 thinking，每次决策最多生成 256 tokens，没有额外的轨迹累计 token 终止条件。**
+## Qwen3.5 v5：历史动作 + 文本动作 + thinking（2026-09-10）
 
-- 专用工具配置 `config/alfworld_tool_config_qwen35_2b.yaml` 中设置 `environment_driven: true`、`max_new_tokens_per_turn: 256`、`max_steps: 16`。
-- 仅因环境 `done` 或耗尽上述 Max Steps 额度正常结束；`max_assistant_turns`、`max_user_turns`、`max_generated_response_length` 不再控制该模式。
-- **一次模型决策占用一步额度，包括无工具调用、截断/损坏调用、未知工具或非法动作。** 每一步先判断是否解析到工具调用：没有解析到（无工具、schema 不完整、malformed XML 等）记为惩罚 1 并加入 `-0.1`；只有解析到工具调用后，才判断工具名、参数名/参数 schema 和动作是否合法，非法时记为惩罚 2 并加入 `-0.1`。单步两类惩罚互斥，但同一轨迹的不同决策步可以累计。失败时不伪造合法动作、不调用 TextWorld `env.step()`，因此原生环境执行步数可以小于决策步数。这避免了连续非法输出导致无限重试。
-- 输出训练槽位只保存模型生成 token；每轮真实 observation/schema/prompt 保存在 `alfworld_turn_contexts`，由现有 FSDP 回放路径用于训练。没有丢弃模型实际看到的上下文，也没有把拼接后的各轮输出当成一个长上下文训练。
-- VERL 仍需固定形状的训练张量。ALFWorld 入口在创建 worker 前自动将 `data.max_response_length` 和 rollout `response_length` 设为 `max_steps × max_new_tokens_per_turn`，默认 **4096**。它是容纳所有可能输出的容量，不是额外的轨迹终止预算；修改工具配置中的步数/单步预算会自动重算，不能通过缩小张量来静默截断。
-- SwanLab 记录 `alfworld/valid_tool_call_count/min`、`max`、`mean`，统计每条轨迹中真正调用环境的有效工具调用次数；无工具调用和非法工具调用不会计入该指标。另记录 `alfworld_penalty/no_tool_call_count` 和 `alfworld_penalty/invalid_tool_call_count`，不写入旧的 `num_turns/*` 或其它 penalty series。另保留 `alfworld_termination/done_count` 和 `alfworld_termination/max_steps_count`，统计当前 batch 的结束原因。`done` 表示环境结束，不应直接等同于 `won`。原有 `response_length/clip_ratio` 只是输出是否填满预分配容量，不能作为生成截断率解释。
+提示词版本：`alfworld_qwen35_v5_action_history_text_thinking`，同时应用于 2B/9B。
+定义在 `src/alfworld_baseline/prompts_qwen35.py`。配置 `variables.PROMPT_VERSION`
+和 rollout 的 `alfworld_prompt_version` 记录运行时版本，实验目录中的 `v1` 不代表提示词版本。
 
-Qwen3.5-9B、Qwen2.5 等未启用 `environment_driven` 的配置仍保留旧的 4096 累计生成预算及原终止逻辑。此修改不启动训练。
+每轮输入包含任务目标、**本条轨迹所有已完成决策的动作历史**（按时间排序）、最新观察及
+当前合法动作列表。历史附带 `executed` / `rejected` / `no action` 状态；`executed`
+仅表示环境接受了命令，不保证任务推进。不会重复发送旧 observation、旧合法动作列表或旧思考内容。
+历史在环境重置时清空，每条轨迹独立；最多有 `max_steps - 1` 条历史进入下一轮 prompt。
 
-当前 ALFWorld 的 GRPO 奖励由 `ALFWorldTool.execute()` 的原生环境 reward 加上两类且仅两类轨迹惩罚组成：无法解析工具调用为惩罚 1，解析后调用非法工具为惩罚 2；两者每次均为 `-0.1`，同一轨迹按决策步累计。SwanLab 记录有效环境工具调用次数及两类惩罚次数，不再记录旧的 `num_turns/*` 系列；同时保留两个环境终止原因计数。
+```text
+Task goal (not an executable action):
+{mission}
 
-当前隔离 `ALFWorldTool` 已返回 `done/truncated` 指标，并由 ALFWorld 专用 AgentLoop 完成 `done → TERMINATED` 桥接；环境完成后不会继续生成。Qwen3.5-2B 当前配置的决策上限为 16 次，不能将该上限直接解释为实际平均交互次数。
+Previous actions (chronological; not actions to execute again):
+1. go to cabinet 1 [executed]
+2. open cabinet 1 [executed]
 
-该桥接已实现为隔离的 `alfworld_tool_agent`，通过 `config/agent_loops.yaml` 注册；图像修复仍使用共享的 `tool_agent`，不会进入 ALFWorld 分支。生成的 VERL parquet 将 `agent_name` 固定为 `alfworld_tool_agent`；手工构造数据时必须同时设置 `agent_name=alfworld_tool_agent` 和 `data_source=alfworld`，否则会回退到共享 loop。
+Current observation:
+{latest observation}
+
+Current admissible actions (the action value must be copied exactly from this list):
+- {command}
+
+After thinking, output exactly one line: Action: <one exact current admissible action>.
+```
+
+- 不再注入 Qwen 原生 tools/schema/enum/XML 示例。当前合法动作只作为文本列表提供。
+- 两个 Qwen3.5 profile 均开启 `enable_thinking: true`；v5 loop 也保证开启。
+  模板预填 `<think>`，模型关闭 `</think>` 后输出一行 `Action: <命令>`；也接受单行裸命令。
+- 只解析 `</think>` 后的输出；未闭合 thinking、空输出、多行/多动作、JSON/XML 作为
+  **无可解析动作**处理。单行命令解析后由环境检查当前合法性，不做模糊匹配或动作修复。
+- `alfworld_action`/`FunctionCall` 仍是 VERL 内部的环境适配接口，**不是模型需要生成的协议**。
+  `MULTI_TURN_FORMAT=qwen3_coder` 仅用于满足旧 VERL 基类初始化，v5 决策绕过该 parser。
+- `scripts/prepare_verl_dataset.py --profile qwen35` 新生成的数据自动使用 v5。
+  现有 v4 parquet 的任务顺序与路径无需改变：第一步从真实环境状态重建 v5 prompt，
+  不使用其中旧的系统指令/观察；原 parquet 元数据仍是其制作时的版本。
+  `verify_tool_protocol.py` 对 Qwen3.5 会将保存的首步状态重建成 v5，并按文本动作分类。
+
+### 三类互斥惩罚
+
+| 类别 | v5 判定 | 单次奖励 |
+|---|---|---:|
+| 无动作 | thinking 未闭合或没有可解析的单行文本动作（含多动作、XML/JSON 等） | -0.1 |
+| 非法动作 | 文本命令已解析，但不在当前 admissible 列表中，或环境执行报错 | -0.1 |
+| 连续重复动作 | 连续有效执行相同的完整命令，从第二次开始逐次计数 | -0.1 |
+
+`A → B → A` 不惩罚；`A → A → A` 惩罚两次。无动作/非法动作打断连续计数，
+不会在同一步再扣重复惩罚。合法命令即使返回 `Nothing happens` 也算一次有效执行；
+这不是按动作类别或共享函数名计数。保留原生环境 reward，包括最后一步成功奖励。
+
+SwanLab 新名称：`alfworld_penalty/no_action_count`、`invalid_action_count`，以及
+`alfworld/valid_action_count/{min,max,mean}`。旧的 `no_tool_call_count`、
+`invalid_tool_call_count`、`valid_tool_call_count/*` 保留为同一计数的兼容别名，
+**不是额外扣分**。`repeated_action_count` 仍为 rollout batch 中连续重复次数之和。
+
+### 决策预算与训练回放
+
+当前两个 Qwen3.5 配置均为环境驱动，最多 50 次决策，每次最多生成 256 tokens
+（包含 thinking 和文本动作）。无动作、非法动作也消耗一次决策额度，但不推进 TextWorld。
+环境结束或耗尽决策额度即停止；未闭合思考不会被当成动作执行。
+输出存储容量自动派生为 `max_steps × max_new_tokens_per_turn`，当前为 12800。
+
+完整原始输出 token/log-prob 不因解析而裁剪、重编码或替换为 XML。
+`alfworld_turn_contexts` 保存每轮实际 prompt（含动作历史）及输出 token，
+actor/reference log-prob 和梯度仍使用已有 FSDP turn-context replay。
+历史虽然在后续 prompt 中再次出现，但不是新采样的 response token，不会单独增加 loss mask。
+thinking token 仍在生成 response mask 内参与训练，不是“隐藏所以不训练”。
+
+加入历史会增加每轮上下文长度；开启思考后，256-token 预算内若没有输出 `</think>` 和
+动作会计入无动作惩罚。此次不调整已有步数、KL、entropy 或 PPO 超参数，也不启动训练。
+Qwen2.5 保留其原有工具调用协议与终止路径，图像修复训练不变。
 
 ## 训练边界
 
 目前只完成隔离组件和无 GPU smoke/preflight；尚未启动正式 baseline 训练。默认只训练一个 `seed0`；
 `seed1/seed2` 和三 seed 串行脚本仅用于后续需要均值/方差时的可选重复实验。
 
-### Trajectory-local repeated-action penalty
+### Trajectory-local consecutive-action penalty
 
-Valid executions of the same exact ALFWorld command are counted across the entire
-trajectory, including nonconsecutive repetitions. Occurrence `k` contributes
-`-0.1` in addition to its native environment reward (first execution: 0;
-second and every later valid occurrence: -0.1). Invalid attempts do not enter the count,
-and counters reset per trajectory, including when reusing pooled environments.
+Only consecutive valid executions of the same exact ALFWorld command are penalized.
+Each streak contributes `-0.1` per repeat after its first execution, in addition to
+native environment rewards: `A → A → A` incurs two penalties, but `A → B → A`
+incurs none. Commands are compared including arguments (not just the shared
+`alfworld_action` tool name). A different command, invalid call, or missing call
+breaks the streak. Streak state resets per trajectory, including when reusing
+pooled environments.
 Each decision receives at most one category: no call (-0.1), invalid call (-0.1),
-or valid repeated action. Terminal success reward is preserved. The third counter
-is `alfworld_penalty/repeated_action_count`. No state-change bonus or history
+or valid consecutive repeated action. Terminal success reward is preserved.
+`alfworld_penalty/repeated_action_count` retains its name but now counts only
+penalized consecutive repeats, summed over the rollout batch. No state-change bonus or history
 context is introduced.

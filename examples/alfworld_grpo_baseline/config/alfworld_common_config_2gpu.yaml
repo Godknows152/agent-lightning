@@ -26,9 +26,7 @@ data:
   truncation: error
   return_raw_chat: true
   need_tools_kwargs: true
-  # Qwen's native template may otherwise open a <think> block before the
-  # assistant response.  ALFWorld requires the response itself to be a strict
-  # tool call, so disable visible reasoning for this isolated baseline.
+  # Legacy default; both Qwen3.5 profiles override thinking to true for v5.
   apply_chat_template_kwargs:
     enable_thinking: false
   seed: ${variables.SEED}

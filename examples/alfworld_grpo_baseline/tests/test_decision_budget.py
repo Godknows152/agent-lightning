@@ -284,13 +284,13 @@ def test_invalid_budget_rejected(key, value):
         ALFWorldDecisionBudget.from_tool_config({'environment_driven': True, key: value})
 
 
-@pytest.mark.parametrize('profile,expected_steps', [('qwen35_2b', 16), ('qwen35_9b', 50)])
-def test_composed_config_disables_thinking_and_derives_storage_from_shared_tool_budget(profile, expected_steps):
+@pytest.mark.parametrize('profile,expected_steps', [('qwen35_2b', 50), ('qwen35_9b', 50)])
+def test_composed_config_enables_thinking_and_derives_storage_from_shared_tool_budget(profile, expected_steps):
     path = ROOT / 'config' / 'alfworld' / profile / 'v1'
     with initialize_config_dir(config_dir=str(path), version_base=None):
         config = compose(config_name='alfworld_config_2gpu')
     budget = configure_environment_driven_rollout(config)
-    assert config.data.apply_chat_template_kwargs.enable_thinking is False
+    assert config.data.apply_chat_template_kwargs.enable_thinking is True
     assert config.trainer.enable_penalty_logging is False
     assert budget == ALFWorldDecisionBudget(expected_steps, 256)
     assert config.data.max_response_length == expected_steps * 256
@@ -394,8 +394,20 @@ def test_multiple_generated_calls_are_trimmed_and_feedback_precedes_next_generat
     assert loop.tokenizer.decode(data.prompt_ids[2:]) == CALL + CALL
 
 
-def test_repeated_action_penalties_are_trajectory_local_and_mutually_exclusive():
-    loop = make_loop(max_steps=10)
+@pytest.mark.parametrize("actions, expected_rewards, repeat_count", [
+    (["look", "inventory", "look"], [1, 1, 1], 0),
+    (["look", "look", "look"], [1, .9, .9], 2),
+    (["look", "look", "inventory", "inventory", "look"], [1, .9, 1, .9, 1], 2),
+    (["look", "bad", "look", None, "look"], [1, -.1, 1, -.1, 1], 0),
+    (["look", "look", "bad", "look", "look", None, "look", "look"],
+     [1, .9, -.1, 1, .9, -.1, 1, .9], 3),
+    (["go to desk 1", "go to desk 2", "go to desk 1"], [1, 1, 1], 0),
+    (["look"] * 16, [1] + [.9] * 15, 15),
+])
+def test_consecutive_action_penalties_are_trajectory_local_and_mutually_exclusive(
+    actions, expected_rewards, repeat_count
+):
+    loop = make_loop(max_steps=50)
     data = make_data(loop)
     loop._get_or_create_tool_instance = AsyncMock(return_value="instance")
 
@@ -416,17 +428,37 @@ def test_repeated_action_penalties_are_trajectory_local_and_mutually_exclusive()
         ]
         return await loop._process_environment_decision(target)
 
-    for action in ["look", "inventory", "look", "bad", None, "look", "inventory", "bad"]:
+    for action in actions:
         asyncio.run(step(data, action))
-    assert data.tool_rewards == pytest.approx([1, 1, .9, -.1, -.1, .9, .9, -.1])
-    assert data.extra_fields["alfworld_repeated_action_penalty_count"] == 3
-    assert data.extra_fields["alfworld_invalid_tool_call_penalty_count"] == 2
-    assert data.extra_fields["alfworld_no_tool_call_penalty_count"] == 1
-    assert data.alfworld_action_occurrences == {"look": 3, "inventory": 2}
+    assert data.tool_rewards == pytest.approx(expected_rewards)
+    assert data.extra_fields.get("alfworld_repeated_action_penalty_count", 0) == repeat_count
+    assert data.extra_fields.get("alfworld_invalid_tool_call_penalty_count", 0) == actions.count("bad")
+    assert data.extra_fields.get("alfworld_no_tool_call_penalty_count", 0) == actions.count(None)
     other = make_data(loop)
     asyncio.run(step(other, "look"))
     assert other.tool_rewards == [1.0]
     assert other.extra_fields.get("alfworld_repeated_action_penalty_count", 0) == 0
+
+    # A second trajectory may share the same loop/tool instance, never its streak.
+    asyncio.run(step(data, actions[-1]))
+    assert data.tool_rewards[-1] == pytest.approx(.9)
+    assert other.tool_rewards == [1.0]
+
+
+def test_pending_state_resets_consecutive_action_streak(monkeypatch):
+    loop = make_loop()
+    data = make_data(loop)
+    data.alfworld_last_valid_action = "look"
+    data.alfworld_action_streak_length = 7
+    loop._set_authoritative_initial_prompt = AsyncMock()
+    parent_handler = AsyncMock(return_value=AgentState.GENERATING)
+    monkeypatch.setattr(ALFWorldToolAgentLoop.__mro__[1], "_handle_pending_state", parent_handler)
+
+    assert asyncio.run(loop._handle_pending_state(data, {})) == AgentState.GENERATING
+    assert data.alfworld_last_valid_action is None
+    assert data.alfworld_action_streak_length == 0
+    loop._set_authoritative_initial_prompt.assert_awaited_once_with(data)
+    parent_handler.assert_awaited_once_with(data, {})
 
 
 @pytest.mark.parametrize("prior", [1, 2, 4, 5, 6, 15])

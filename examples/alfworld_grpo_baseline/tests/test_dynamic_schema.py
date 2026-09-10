@@ -12,14 +12,10 @@ from verl.tools.schemas import OpenAIFunctionToolSchema
 
 
 
-def test_qwen35_tool_protocol_has_one_concrete_xml_source():
-    xml_example = (
-        "<tool_call>\n<function=alfworld_action>\n<parameter=action>\n"
-        "ACTION\n</parameter>\n</function>\n</tool_call>"
-    )
-    assert QWEN35_ALFWORLD_CHAT_TEMPLATE.count(xml_example.replace("\n", "\\n")) == 1
-    assert "example_function_name" not in QWEN35_ALFWORLD_CHAT_TEMPLATE
-    assert "Do not output ACTION literally" in QWEN35_ALFWORLD_CHAT_TEMPLATE
+def test_qwen35_template_contains_no_schema_or_xml_example():
+    assert "<tools>" not in QWEN35_ALFWORLD_CHAT_TEMPLATE
+    assert "<tool_call>" not in QWEN35_ALFWORLD_CHAT_TEMPLATE
+    assert "Action:" in QWEN35_ALFWORLD_CHAT_TEMPLATE
 
     user_prompt = build_user_prompt(
         mission="find an apple", observation="A drawer.", admissible_actions=("look", "open drawer 1")
