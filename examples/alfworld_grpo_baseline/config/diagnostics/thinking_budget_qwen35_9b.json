@@ -1,0 +1,16 @@
+{
+  "model_path": "/home/LXJ/Python_Projects/Models/Qwen3.5-9B",
+  "tp_size": 2,
+  "mem_fraction_static": 0.2,
+  "disable_cuda_graph": true,
+  "attention_backend": "fa3",
+  "dtype": "bfloat16",
+  "enable_custom_logit_processor": true,
+  "enable_lora": true,
+  "max_lora_rank": 16,
+  "lora_target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+  "max_running_requests": 8,
+  "sampling": {"max_new_tokens": 256, "temperature": 1.0, "top_p": 1.0, "top_k": -1},
+  "budgets": [0, 32, 64, 128],
+  "tasks": 4
+}

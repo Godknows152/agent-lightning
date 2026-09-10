@@ -176,3 +176,12 @@ or valid consecutive repeated action. Terminal success reward is preserved.
 `alfworld_penalty/repeated_action_count` retains its name but now counts only
 penalized consecutive repeats, summed over the rollout batch. No state-change bonus or history
 context is introduced.
+
+### Thinking budget 独立采样验证
+
+2026-09-10 已添加 Qwen3.5/SGLang 预算对照实验：
+`docs/THINKING_BUDGET_SGLANG_20260910.md`。配置位于
+`config/diagnostics/thinking_budget_qwen35_9b.json`，可用
+`scripts/test_sglang_thinking_budget.sh` 在空闲 GPU 上复现。
+这是独立采样测试，不是正式 PPO 开关：预算强制 token 的 log-prob 与原始模型概率不同，
+在接入当前 bypass + turn replay 训练前需要处理确定性边界的 loss mask/概率一致性。
