@@ -24,12 +24,18 @@ actor_rollout_ref:
     agent:
       num_workers: 4
   actor:
+    calculate_entropy: true
+    # Enable KL against the frozen base policy. With LoRA, VERL computes
+    # reference log-probs by disabling adapters on the shared actor engine.
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
     ppo_mini_batch_size: 8
     # Keep each backward micro-batch small for the standard FSDP training path.
-    ppo_micro_batch_size_per_gpu: 1
+    ppo_micro_batch_size_per_gpu: 2
     # Bound turn-level replay so long ALFWorld histories do not form one
     # oversized forward/backward activation graph.
-    turn_context_chunk_tokens: 8192
+    turn_context_chunk_tokens: 16384
     fsdp_config:
       # LoRA leaves only adapter parameters trainable, so CPU offload is no
       # longer needed for the optimizer and costs a host-device transfer.
@@ -51,7 +57,9 @@ actor_rollout_ref:
       - gate_proj
       - up_proj
       - down_proj
-    # Keep activation checkpointing without CPU activation transfers.
+    # Retain 16384-token replay chunks, but restore checkpointing after actor OOM.
+    enable_gradient_checkpointing: true
+    # Keep CPU activation transfers disabled.
     enable_activation_offload: false
     # Compute PPO log-probs and entropy with the memory-efficient fused head.
     use_fused_kernels: true
@@ -59,6 +67,8 @@ actor_rollout_ref:
       impl_backend: torch
 
 algorithm:
+  # Apply reference KL in the actor loss only, not a second time in rewards.
+  use_kl_in_reward: false
   rollout_correction:
     # Use rollout_log_probs as old_log_probs and skip a second actor pass.
     bypass_mode: true
