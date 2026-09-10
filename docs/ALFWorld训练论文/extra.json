@@ -1,0 +1,46 @@
+[
+  {
+    "key": "AWS",
+    "venue": "CVPR",
+    "year": 2026,
+    "track": "主会",
+    "page_url": "https://openaccess.thecvf.com/content/CVPR2026/html/Bae_Align_While_Search_Belief-Guided_Exploratory_Inference_for_World-Grounded_Embodied_Agents_CVPR_2026_paper.html",
+    "topic": "测试时探索；信念状态；不更新权重",
+    "pdf_url": null,
+    "file": "pdf/CVPR_2026_AWS.pdf",
+    "status": "failed",
+    "error": "404 Client Error: Not Found for url: https://openaccess.thecvf.com/content/CVPR2026/html/Bae_Align_While_Search_Belief-Guided_Exploratory_Inference_for_World-Grounded_Embodied_Agents_CVPR_2026_paper.html"
+  },
+  {
+    "key": "RoboAgent",
+    "venue": "CVPR",
+    "year": 2026,
+    "track": "主会",
+    "page_url": "https://openaccess.thecvf.com/content/CVPR2026/html/Xu_RoboAgent_Chaining_Basic_Capabilities_for_Embodied_Task_Planning_CVPR_2026_paper.html",
+    "topic": "多模态；SFT+RFT；EIPO 对照 GRPO",
+    "pdf_url": "https://openaccess.thecvf.com/content/CVPR2026/papers/Xu_RoboAgent_Chaining_Basic_Capabilities_for_Embodied_Task_Planning_CVPR_2026_paper.pdf",
+    "file": "pdf/CVPR_2026_RoboAgent.pdf",
+    "title": "RoboAgent: Chaining Basic Capabilities for Embodied Task Planning",
+    "alfworld_pages": [
+      6,
+      7,
+      8
+    ],
+    "bytes": 908311,
+    "sha256": "1ac9f926d703c906620f5eef353c0ecd0621c9675849cb96a2b870887dc6ca7d",
+    "status": "downloaded"
+  },
+  {
+    "key": "GLIDER",
+    "venue": "ICML",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://proceedings.mlr.press/v267/hu25q.html",
+    "topic": "离线分层强化学习；长程规划",
+    "pdf_url": "https://raw.githubusercontent.com/mlresearch/v267/main/assets/hu25q/hu25q.pdf",
+    "file": "pdf/ICML_2025_GLIDER.pdf",
+    "title": "Divide and Conquer: Grounding LLMs as Efficient Decision-Making Agents via Offline Hierarchical Reinforcement Learning",
+    "status": "failed",
+    "error": "HTTPSConnectionPool(host='raw.githubusercontent.com', port=443): Read timed out. (read timeout=100)"
+  }
+]

@@ -1,0 +1,146 @@
+[
+  {
+    "key": "EMMA",
+    "venue": "CVPR",
+    "year": 2024,
+    "track": "主会",
+    "page_url": "https://openaccess.thecvf.com/content/CVPR2024/html/Yang_Embodied_Multi-Modal_Agent_trained_by_an_LLM_from_a_Parallel_CVPR_2024_paper.html",
+    "topic": "多模态；DAgger-DPO；跨模态专家蒸馏",
+    "pdf_url": null
+  },
+  {
+    "key": "GFlowVLM",
+    "venue": "CVPR",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://openaccess.thecvf.com/content/CVPR2025/html/Kang_GFlowVLM_Enhancing_Multi-step_Reasoning_in_Vision-Language_Models_with_Generative_Flow_CVPR_2025_paper.html",
+    "topic": "多模态；GFlowNet 微调；轨迹多样性",
+    "pdf_url": null
+  },
+  {
+    "key": "GTR",
+    "venue": "ICCV",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://openaccess.thecvf.com/content/ICCV2025/html/Wei_GTR_Guided_Thought_Reinforcement_Prevents_Thought_Collapse_in_RL-based_VLM_ICCV_2025_paper.html",
+    "topic": "多模态；RL；思考坍缩与过程指导",
+    "pdf_url": null
+  },
+  {
+    "key": "GiGPO",
+    "venue": "NeurIPS",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://proceedings.neurips.cc/paper_files/paper/2025/hash/420c9f777c0b4f78d515e53cf74d58b2-Abstract-Conference.html",
+    "topic": "RL；组内分组；步骤级信用分配",
+    "pdf_url": null
+  },
+  {
+    "key": "Reflexion",
+    "venue": "NeurIPS",
+    "year": 2023,
+    "track": "主会",
+    "page_url": "https://proceedings.neurips.cc/paper_files/paper/2023/hash/1b44b878bb782e6954cd888628510e90-Abstract-Conference.html",
+    "topic": "语言反思与记忆；不更新模型权重",
+    "pdf_url": null
+  },
+  {
+    "key": "ALFWorld",
+    "venue": "ICLR",
+    "year": 2021,
+    "track": "主会",
+    "page_url": "https://openreview.net/forum?id=0IOX0YcCdTn",
+    "topic": "基准；文本策略迁移到具身环境",
+    "pdf_url": "https://openreview.net/pdf?id=0IOX0YcCdTn"
+  },
+  {
+    "key": "ReAct",
+    "venue": "ICLR",
+    "year": 2023,
+    "track": "主会",
+    "page_url": "https://openreview.net/forum?id=WE_vluYUL-X",
+    "topic": "推理与行动交错；提示基线",
+    "pdf_url": "https://openreview.net/pdf?id=WE_vluYUL-X"
+  },
+  {
+    "key": "RAFA",
+    "venue": "ICML",
+    "year": 2024,
+    "track": "主会",
+    "page_url": "https://proceedings.mlr.press/v235/liu24ab.html",
+    "topic": "规划；上下文学习；理论分析",
+    "pdf_url": null
+  },
+  {
+    "key": "AgentTuning",
+    "venue": "ACL",
+    "year": 2024,
+    "track": "Findings",
+    "page_url": "https://aclanthology.org/2024.findings-acl.181/",
+    "topic": "SFT；通用智能体能力",
+    "pdf_url": "https://aclanthology.org/2024.findings-acl.181.pdf"
+  },
+  {
+    "key": "Retrospex",
+    "venue": "EMNLP",
+    "year": 2024,
+    "track": "主会",
+    "page_url": "https://aclanthology.org/2024.emnlp-main.268/",
+    "topic": "离线 RL Critic；动作重评分",
+    "pdf_url": "https://aclanthology.org/2024.emnlp-main.268.pdf"
+  },
+  {
+    "key": "ReflAct",
+    "venue": "EMNLP",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://aclanthology.org/2025.emnlp-main.1697/",
+    "topic": "目标-状态反思；提示方法",
+    "pdf_url": "https://aclanthology.org/2025.emnlp-main.1697.pdf"
+  },
+  {
+    "key": "ETO",
+    "venue": "ACL",
+    "year": 2024,
+    "track": "主会",
+    "page_url": "https://aclanthology.org/2024.acl-long.409/",
+    "topic": "探索与轨迹偏好优化",
+    "pdf_url": "https://aclanthology.org/2024.acl-long.409.pdf"
+  },
+  {
+    "key": "AgentRM",
+    "venue": "ACL",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://aclanthology.org/2025.acl-long.945/",
+    "topic": "奖励模型；智能体推理指导",
+    "pdf_url": "https://aclanthology.org/2025.acl-long.945.pdf"
+  },
+  {
+    "key": "KnowSelf",
+    "venue": "ACL",
+    "year": 2025,
+    "track": "主会",
+    "page_url": "https://aclanthology.org/2025.acl-long.619/",
+    "topic": "知识增强与自知；微调",
+    "pdf_url": "https://aclanthology.org/2025.acl-long.619.pdf"
+  },
+  {
+    "key": "SHADOW",
+    "venue": "AAAI",
+    "year": 2026,
+    "track": "主会",
+    "page_url": "https://ojs.aaai.org/index.php/AAAI/article/view/39570",
+    "topic": "RL；动态感知步骤信用分配",
+    "pdf_url": "https://ojs.aaai.org/index.php/AAAI/article/download/39570/43531"
+  },
+  {
+    "key": "ExpeL",
+    "venue": "AAAI",
+    "year": 2024,
+    "track": "主会",
+    "page_url": "https://ojs.aaai.org/index.php/AAAI/article/view/29936",
+    "topic": "经验总结与检索；不更新策略权重",
+    "pdf_url": null
+  }
+]
