@@ -1,0 +1,535 @@
+{
+  "ok": true,
+  "errmsg": "",
+  "data": {
+    "keys": [
+      "critic/rewards/mean",
+      "alfworld_penalty/no_action_count",
+      "alfworld_penalty/thinking_truncated_no_action_count",
+      "actor/entropy_loss",
+      "actor/kl_loss",
+      "actor/ppo_kl",
+      "val-core/alfworld/acc/mean@1"
+    ],
+    "metricType": "SCALAR",
+    "projectId": "1axrnt7t50fjxu5kdyiqy",
+    "experimentId": "hf5sdq40d75jz7bjhfrdx",
+    "list": [
+      {
+        "key": "critic/rewards/mean",
+        "metrics": [
+          {
+            "step": 1,
+            "value": -4.425000190734863,
+            "timestamp": 1789109181000
+          },
+          {
+            "step": 2,
+            "value": -4.75,
+            "timestamp": 1789110050000
+          },
+          {
+            "step": 3,
+            "value": -4.700000286102295,
+            "timestamp": 1789111480000
+          },
+          {
+            "step": 4,
+            "value": -4.446875095367432,
+            "timestamp": 1789112560000
+          },
+          {
+            "step": 5,
+            "value": -4.299999713897705,
+            "timestamp": 1789113700000
+          },
+          {
+            "step": 6,
+            "value": -4.831249713897705,
+            "timestamp": 1789114867000
+          },
+          {
+            "step": 7,
+            "value": -4.03125,
+            "timestamp": 1789115846000
+          },
+          {
+            "step": 8,
+            "value": -4.256249904632568,
+            "timestamp": 1789116968000
+          },
+          {
+            "step": 9,
+            "value": -4.206250190734863,
+            "timestamp": 1789118012000
+          },
+          {
+            "step": 10,
+            "value": -5.556249618530273,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 10,
+          "data": -5.556249618530273,
+          "timestamp": 1789121548000
+        },
+        "max": {
+          "index": 7,
+          "data": -4.03125,
+          "timestamp": 1789115846000
+        },
+        "avg": {
+          "index": 0,
+          "data": -4.550312471389771,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": -4.4359376430511475,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": -5.556249618530273,
+          "timestamp": 1789121548000
+        }
+      },
+      {
+        "key": "alfworld_penalty/no_action_count",
+        "metrics": [
+          {
+            "step": 1,
+            "value": 25.0,
+            "timestamp": 1789109181000
+          },
+          {
+            "step": 2,
+            "value": 27.0,
+            "timestamp": 1789110050000
+          },
+          {
+            "step": 3,
+            "value": 24.0,
+            "timestamp": 1789111480000
+          },
+          {
+            "step": 4,
+            "value": 25.0,
+            "timestamp": 1789112560000
+          },
+          {
+            "step": 5,
+            "value": 24.0,
+            "timestamp": 1789113700000
+          },
+          {
+            "step": 6,
+            "value": 26.0,
+            "timestamp": 1789114867000
+          },
+          {
+            "step": 7,
+            "value": 23.0,
+            "timestamp": 1789115846000
+          },
+          {
+            "step": 8,
+            "value": 23.0,
+            "timestamp": 1789116968000
+          },
+          {
+            "step": 9,
+            "value": 22.0,
+            "timestamp": 1789118012000
+          },
+          {
+            "step": 10,
+            "value": 30.0,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 9,
+          "data": 22,
+          "timestamp": 1789118012000
+        },
+        "max": {
+          "index": 10,
+          "data": 30,
+          "timestamp": 1789121548000
+        },
+        "avg": {
+          "index": 0,
+          "data": 24.9,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": 24.5,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": 30,
+          "timestamp": 1789121548000
+        }
+      },
+      {
+        "key": "alfworld_penalty/thinking_truncated_no_action_count",
+        "metrics": [
+          {
+            "step": 1,
+            "value": 0.0,
+            "timestamp": 1789109181000
+          },
+          {
+            "step": 2,
+            "value": 3.0,
+            "timestamp": 1789110050000
+          },
+          {
+            "step": 3,
+            "value": 2.0,
+            "timestamp": 1789111480000
+          },
+          {
+            "step": 4,
+            "value": 3.0,
+            "timestamp": 1789112560000
+          },
+          {
+            "step": 5,
+            "value": 1.0,
+            "timestamp": 1789113700000
+          },
+          {
+            "step": 6,
+            "value": 1.0,
+            "timestamp": 1789114867000
+          },
+          {
+            "step": 7,
+            "value": 2.0,
+            "timestamp": 1789115846000
+          },
+          {
+            "step": 8,
+            "value": 0.0,
+            "timestamp": 1789116968000
+          },
+          {
+            "step": 9,
+            "value": 0.0,
+            "timestamp": 1789118012000
+          },
+          {
+            "step": 10,
+            "value": 1.0,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 8,
+          "data": 0,
+          "timestamp": 1789116968000
+        },
+        "max": {
+          "index": 2,
+          "data": 3,
+          "timestamp": 1789110050000
+        },
+        "avg": {
+          "index": 0,
+          "data": 1.3,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": 1,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": 1,
+          "timestamp": 1789121548000
+        }
+      },
+      {
+        "key": "actor/entropy_loss",
+        "metrics": [
+          {
+            "step": 1,
+            "value": 0.7536468505859375,
+            "timestamp": 1789109181000
+          },
+          {
+            "step": 2,
+            "value": 0.78515625,
+            "timestamp": 1789110050000
+          },
+          {
+            "step": 3,
+            "value": 0.7638168334960938,
+            "timestamp": 1789111480000
+          },
+          {
+            "step": 4,
+            "value": 0.788482666015625,
+            "timestamp": 1789112560000
+          },
+          {
+            "step": 5,
+            "value": 0.7682113647460938,
+            "timestamp": 1789113700000
+          },
+          {
+            "step": 6,
+            "value": 0.793121337890625,
+            "timestamp": 1789114867000
+          },
+          {
+            "step": 7,
+            "value": 0.7404327392578125,
+            "timestamp": 1789115846000
+          },
+          {
+            "step": 8,
+            "value": 0.7789840698242188,
+            "timestamp": 1789116968000
+          },
+          {
+            "step": 9,
+            "value": 0.770599365234375,
+            "timestamp": 1789118012000
+          },
+          {
+            "step": 10,
+            "value": 0.7588367462158203,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 7,
+          "data": 0.7404327392578125,
+          "timestamp": 1789115846000
+        },
+        "max": {
+          "index": 6,
+          "data": 0.793121337890625,
+          "timestamp": 1789114867000
+        },
+        "avg": {
+          "index": 0,
+          "data": 0.7701288223266601,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": 0.7694053649902344,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": 0.7588367462158203,
+          "timestamp": 1789121548000
+        }
+      },
+      {
+        "key": "actor/kl_loss",
+        "metrics": [
+          {
+            "step": 1,
+            "value": 0.0,
+            "timestamp": 1789109181000
+          },
+          {
+            "step": 2,
+            "value": 0.0017820149946601305,
+            "timestamp": 1789110050000
+          },
+          {
+            "step": 3,
+            "value": 0.001559227340749203,
+            "timestamp": 1789111480000
+          },
+          {
+            "step": 4,
+            "value": 0.0014174409693623602,
+            "timestamp": 1789112560000
+          },
+          {
+            "step": 5,
+            "value": 0.0016733092418235174,
+            "timestamp": 1789113700000
+          },
+          {
+            "step": 6,
+            "value": 0.001874546908766206,
+            "timestamp": 1789114867000
+          },
+          {
+            "step": 7,
+            "value": 0.0015654705907763855,
+            "timestamp": 1789115846000
+          },
+          {
+            "step": 8,
+            "value": 0.001725813597886372,
+            "timestamp": 1789116968000
+          },
+          {
+            "step": 9,
+            "value": 0.0014183485468493018,
+            "timestamp": 1789118012000
+          },
+          {
+            "step": 10,
+            "value": 0.001972415541047212,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 1,
+          "data": 0,
+          "timestamp": 1789109181000
+        },
+        "max": {
+          "index": 10,
+          "data": 0.001972415541047212,
+          "timestamp": 1789121548000
+        },
+        "avg": {
+          "index": 0,
+          "data": 0.0014988587731920688,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": 0.0016193899162999514,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": 0.001972415541047212,
+          "timestamp": 1789121548000
+        }
+      },
+      {
+        "key": "actor/ppo_kl",
+        "metrics": [
+          {
+            "step": 1,
+            "value": 0.2608733449719454,
+            "timestamp": 1789109181000
+          },
+          {
+            "step": 2,
+            "value": 0.26738643390583056,
+            "timestamp": 1789110050000
+          },
+          {
+            "step": 3,
+            "value": 0.23135363187299976,
+            "timestamp": 1789111480000
+          },
+          {
+            "step": 4,
+            "value": 0.2404140048669745,
+            "timestamp": 1789112560000
+          },
+          {
+            "step": 5,
+            "value": 0.23327686248166876,
+            "timestamp": 1789113700000
+          },
+          {
+            "step": 6,
+            "value": 0.24262553433475376,
+            "timestamp": 1789114867000
+          },
+          {
+            "step": 7,
+            "value": 0.2411217985183803,
+            "timestamp": 1789115846000
+          },
+          {
+            "step": 8,
+            "value": 0.2399797949011536,
+            "timestamp": 1789116968000
+          },
+          {
+            "step": 9,
+            "value": 0.25669069618341467,
+            "timestamp": 1789118012000
+          },
+          {
+            "step": 10,
+            "value": 0.23940266263051185,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 3,
+          "data": 0.23135363187299976,
+          "timestamp": 1789111480000
+        },
+        "max": {
+          "index": 2,
+          "data": 0.26738643390583056,
+          "timestamp": 1789110050000
+        },
+        "avg": {
+          "index": 0,
+          "data": 0.2453124764667633,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": 0.24076790169267742,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": 0.23940266263051185,
+          "timestamp": 1789121548000
+        }
+      },
+      {
+        "key": "val-core/alfworld/acc/mean@1",
+        "metrics": [
+          {
+            "step": 10,
+            "value": -2.882142857142857,
+            "timestamp": 1789121548000
+          }
+        ],
+        "min": {
+          "index": 10,
+          "data": -2.882142857142857,
+          "timestamp": 1789121548000
+        },
+        "max": {
+          "index": 10,
+          "data": -2.882142857142857,
+          "timestamp": 1789121548000
+        },
+        "avg": {
+          "index": 0,
+          "data": -2.882142857142857,
+          "timestamp": 0
+        },
+        "median": {
+          "index": 0,
+          "data": -2.882142857142857,
+          "timestamp": 0
+        },
+        "latest": {
+          "index": 10,
+          "data": -2.882142857142857,
+          "timestamp": 1789121548000
+        }
+      }
+    ]
+  }
+}
