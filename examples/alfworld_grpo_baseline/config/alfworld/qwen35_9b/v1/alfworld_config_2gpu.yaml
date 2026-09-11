@@ -43,6 +43,8 @@ actor_rollout_ref:
       optimizer_offload: false
       entropy_checkpointing: true
   model:
+    # Initialize RL from the completed non-thinking XML-format SFT adapter.
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_9b_xml_nothink_v1_20260911_235833_235341/adapter/checkpoint-320
     # Train adapters instead of the full 9B parameter set.
     lora_rank: 16
     lora_alpha: 32
