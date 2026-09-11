@@ -1,4 +1,4 @@
-# ALFWorld baseline（Qwen3.5 v5 文本动作 / Qwen2.5 工具协议）
+# ALFWorld baseline（Qwen3.5 v7 精简XML / Qwen2.5 工具协议）
 
 本目录隔离 ALFWorld 文本环境与 old-VERL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 FSDP offload/梯度检查点和更大的 PPO batch；Qwen3.5-9B 与 Qwen2.5-1.5B 不受本次优化影响。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
 
@@ -127,7 +127,7 @@ After thinking, output exactly one line: Action: <one exact current admissible a
 
 | 类别 | v5 判定 | 单次奖励 |
 |---|---|---:|
-| 无动作 | thinking 未闭合或没有可解析的单行文本动作（含多动作、XML/JSON 等） | -0.1 |
+| 无动作 | thinking 未闭合或没有可解析的单行文本动作（含多动作、XML/JSON 等） | 首次出现立即终止轨迹，追加一次 -5 |
 | 非法动作 | 文本命令已解析，但不在当前 admissible 列表中，或环境执行报错 | -0.1 |
 | 连续重复动作 | 连续有效执行相同的完整命令，从第二次开始逐次计数 | -0.1 |
 
@@ -135,10 +135,10 @@ After thinking, output exactly one line: Action: <one exact current admissible a
 不会在同一步再扣重复惩罚。合法命令即使返回 `Nothing happens` 也算一次有效执行；
 这不是按动作类别或共享函数名计数。保留原生环境 reward，包括最后一步成功奖励。
 
-SwanLab 新名称：`alfworld_penalty/no_action_count`、`invalid_action_count`，以及
+SwanLab 统一仅记录 action 名称：`alfworld_penalty/no_action_count`、`invalid_action_count`，以及
 `alfworld/valid_action_count/{min,max,mean}`。旧的 `no_tool_call_count`、
-`invalid_tool_call_count`、`valid_tool_call_count/*` 保留为同一计数的兼容别名，
-**不是额外扣分**。`repeated_action_count` 仍为 rollout batch 中连续重复次数之和。
+`invalid_tool_call_count`、`valid_tool_call_count/*` 不再重复上报。
+内部轨迹字段保留旧名称以兼容历史数据，此调整不改变计数或奖励。`repeated_action_count` 仍为 rollout batch 中连续重复次数之和。
 
 ### 决策预算与训练回放
 
@@ -171,7 +171,7 @@ incurs none. Commands are compared including arguments (not just the shared
 `alfworld_action` tool name). A different command, invalid call, or missing call
 breaks the streak. Streak state resets per trajectory, including when reusing
 pooled environments.
-Each decision receives at most one category: no call (-0.1), invalid call (-0.1),
+Each decision receives at most one category: no call (one-time -5, terminates trajectory), invalid call (-0.1),
 or valid consecutive repeated action. Terminal success reward is preserved.
 `alfworld_penalty/repeated_action_count` retains its name but now counts only
 penalized consecutive repeats, summed over the rollout batch. No state-change bonus or history
@@ -185,3 +185,65 @@ context is introduced.
 `scripts/test_sglang_thinking_budget.sh` 在空闲 GPU 上复现。
 这是独立采样测试，不是正式 PPO 开关：预算强制 token 的 log-prob 与原始模型概率不同，
 在接入当前 bypass + turn replay 训练前需要处理确定性边界的 loss mask/概率一致性。
+
+### 无动作立即终止（2026-09-10）
+
+首次无可解析动作后不再采样后续步；失败步 token、log-prob 和 replay 上下文仍参与训练。
+追加一次 -5 惩罚，不覆盖此前环境奖励、非法动作或连续重复动作惩罚。
+终止原因是 `no_tool_call`，统计为 `alfworld_termination/no_action_count`，不计入环境成功或步数耗尽。
+非法动作和连续重复动作仍各扣 -0.1，不因本项规则提前终止。
+
+### v6：简短思考与512-token单步预算
+
+当前 Qwen3.5 提示词版本为 `alfworld_qwen35_v6_action_history_brief_thinking`。
+仅判断下一步，要求1–2句简短思考，不复述任务、观察或枚举候选动作；随后闭合thinking并输出一行 `Action:`。
+保留动作历史、无schema文本动作和thinking模式；这是提示词软约束，不强制插入结束token。
+两份工具配置的 `max_new_tokens_per_turn` 均为768（在原512基础上增加256），包含thinking和最终动作。
+运行时仍按实际 `max_steps * 512` 推导response存储容量；50步配置为38400 token。
+无动作立即终止并追加−5、非法/连续重复动作各−0.1的规则保持不变。
+
+### v7：精简XML工具schema（当前版本）
+
+`alfworld_qwen35_v7_compact_xml_history_thinking` 替代v6的文本动作输出。
+系统模板每个请求仅注入一次 `alfworld_action(action: string)` 工具定义和XML调用格式，
+不序列化动态schema的动作enum；当前合法动作只在用户状态提示中列出。
+保留1–2句简短thinking、历史动作及状态、512-token总生成预算。
+闭合thinking后调用格式为：
+
+```xml
+<tool_call>
+<function=alfworld_action>
+<parameter=action>look</parameter>
+</function>
+</tool_call>
+```
+
+解析只检查thinking之后的调用，执行时仍按当前环境合法动作严格校验。
+无可解析/完整调用立即终止并追加−5；非法调用、连续重复有效动作仍各−0.1。
+SwanLab保持统一action命名；回放保留原始生成token及log-prob。
+
+### v7 惩罚分类与完整输出校验（2026-09-11）
+
+以下规则取代v5/v6的文本动作判定；惩罚系数不变，每步只归入一个类别。
+
+| 输出情况 | 处理 |
+|---|---|
+| thinking未闭合、没有XML调用、调用/函数/参数标签不完整 | 无动作，追加−5，立即结束轨迹 |
+| 完整调用但工具名错误，参数缺失、为空、重复、多余或为多行 | 非法动作，−0.1，不执行环境动作，继续（除非步数耗尽） |
+| 多个调用、一个完整调用后又开始第二个调用 | 非法动作，−0.1；不再截断后执行第一个 |
+| 调用前后有额外说明（thinking内说明除外） | 非法动作，−0.1，不执行 |
+| 合法XML但命令不在当前环境合法列表中或执行失败 | 非法动作，−0.1 |
+| 连续成功执行完全相同的命令 | 第二次起每次−0.1；不同命令/失败打断连续计数 |
+
+校验只读取thinking后的文本；仅在解析视图剥离末尾传输标记，不改训练token。
+XML模式不再裁掉首个调用后的生成内容，避免掩盖多调用和额外说明。
+`alfworld_last_decision_reason` 在轨迹元数据中区分细分原因，不增加tool_call别名指标。
+正式训练、预检和协议诊断共享 `parse_xml_decision`；历史v5测试路径仍保留。
+
+
+### 思考超长无动作统计（2026-09-11）
+
+单步输出预算从512增加到768 token。若XML模式生成达到上限仍未生成 `</think>`，
+该步按无动作规则追加−5并终止轨迹，同时记录 `alfworld_penalty/thinking_truncated_no_action_count`。
+该指标按rollout batch统计轨迹数，不是token数；只有“thinking未闭合”计入，
+已闭合thinking但XML缺失/不完整的无动作不计入。

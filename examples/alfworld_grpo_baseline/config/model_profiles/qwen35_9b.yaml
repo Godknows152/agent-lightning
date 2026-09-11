@@ -1,12 +1,12 @@
-# Qwen3.5 v5: history + plain-text actions; tools are internal adapters only.
+# Qwen3.5 v7: history + brief thinking + compact XML tool schema.
 variables:
   MODEL_PROFILE: qwen35_9b
   BASE_MODEL: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
   # Both Qwen3.5 profiles share the newer v4 dataset and identical task order.
   DATA_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/data/qwen35_2b
   PROMPT_PROFILE: qwen35
-  PROMPT_VERSION: alfworld_qwen35_v5_action_history_text_thinking
-  # VERL base constructor requires a parser name; v5 bypasses its XML parser.
+  PROMPT_VERSION: alfworld_qwen35_v7_compact_xml_history_thinking
+  # Use the Qwen XML parser on post-thinking output.
   MULTI_TURN_FORMAT: qwen3_coder
 
 data:

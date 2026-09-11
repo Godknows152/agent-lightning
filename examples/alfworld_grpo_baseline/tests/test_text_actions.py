@@ -37,17 +37,20 @@ def test_parse_text_action(text, expected):
 def test_v5_template_and_messages_have_no_tool_schema():
     messages, tools = build_messages(mission='find apple', observation='drawer',
                                     registry=ALFWorldToolRegistry(['look']))
-    assert not tools
-    assert 'v5' in PROMPT_VERSION
+    assert tools and "enum" not in str(tools)
+    assert PROMPT_VERSION == 'alfworld_qwen35_v7_compact_xml_history_thinking'
     rendered = Environment().from_string(QWEN35_ALFWORLD_CHAT_TEMPLATE).render(
         # Even an accidental tools argument must never leak native schema.
         tools=[{'function': {'name': 'alfworld_action'}}], messages=messages,
         add_generation_prompt=True, enable_thinking=True,
     )
     assert rendered.endswith('<think>\n')
-    assert 'alfworld_action' not in rendered
-    assert '<tools>' not in rendered and '<tool_call>' not in rendered
-    assert 'Action:' in rendered
+    assert 'alfworld_action(action: string)' in rendered
+    assert rendered.count('<tools>') == 1 and '<tool_call>' in rendered
+    assert '<parameter=action>' in rendered
+    assert 'only the next action, not a complete plan' in rendered
+    assert '1-2 short sentences' in rendered
+    assert 'enumerate available actions' in rendered
     prompt = build_user_prompt(mission='goal', observation='new state', admissible_actions=['look'],
                                history=['open drawer 1 [executed]', 'look [executed]'])
     assert '1. open drawer 1 [executed]\n2. look [executed]' in prompt
@@ -84,21 +87,24 @@ def test_text_decisions_history_penalties_and_unmodified_replay():
             assert replay['response_ids'] == ids
             assert replay['response_offset'] == len(all_ids) - len(ids)
             state = await loop._process_environment_decision(data)
-            assert state == (AgentState.TERMINATED if i == 7 else AgentState.GENERATING)
+            assert state == (AgentState.TERMINATED if i == 5 else AgentState.GENERATING)
             assert data._active_tool_schemas == []
-            if i < 7:
+            if i < 5:
                 assert 'Previous actions' in data.messages[0]['content']
                 assert data.alfworld_decision_history[-1] in data.messages[0]['content']
                 assert loop.apply_chat_template.call_args.kwargs['tools'] == []
+            if state == AgentState.TERMINATED:
+                break
+        assert data.extra_fields["alfworld_terminal_reason"] == "no_tool_call"
         assert data.prompt_ids[2:] == all_ids
         assert data.response_mask == [1] * len(all_ids)
         assert data.response_logprobs == [-0.1] * len(all_ids)
-        assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 2
+        assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 1
         assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 1
         assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
-        assert data.extra_fields['alfworld_valid_tool_call_count'] == 6
-        assert sum(data.tool_rewards) == pytest.approx(-0.4)
-        assert len(data.alfworld_decision_history) == 8
+        assert data.extra_fields['alfworld_valid_tool_call_count'] == 4
+        assert sum(data.tool_rewards) == pytest.approx(-5.2)
+        assert len(data.alfworld_decision_history) == 6
         assert data.alfworld_decision_history[4].endswith('[rejected]')
         assert data.alfworld_decision_history[5].endswith('[no action]')
     asyncio.run(run())

@@ -27,7 +27,7 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageText
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from alfworld_baseline.prompts_qwen35 import PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
-from alfworld_baseline.text_actions import parse_text_action
+from alfworld_baseline.xml_actions import parse_xml_decision
 from alfworld_baseline.thinking import tool_output
 
 PROFILES = {
@@ -39,12 +39,12 @@ PROFILES = {
     "qwen35_9b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen3.5-9B"),
         "data": ROOT / "data" / "qwen35_2b" / "train.parquet",
-        "template": "Qwen3.5 v5 history/text-action chat_template",
+        "template": "Qwen3.5 v7 compact XML/history chat_template",
     },
     "qwen35_2b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen3.5-2B"),
         "data": ROOT / "data" / "qwen35_2b" / "train.parquet",
-        "template": "Qwen3.5 v5 history/text-action chat_template",
+        "template": "Qwen3.5 v7 compact XML/history chat_template",
     },
 }
 RUNTIME_TERMINATION_MARKERS = ("<|im_end|>", "<|endoftext|>")
@@ -142,11 +142,10 @@ def main() -> int:
 
     if not admissible_actions:
         raise RuntimeError("could not extract admissible actions from the prepared prompt")
-    is_text = args.profile.startswith("qwen35")
-    tools = [] if is_text else [ALFWorldToolRegistry(admissible_actions).build_tool_schema()]
-    if is_text:
+    tools = [ALFWorldToolRegistry.static_tool_schema()]
+    if args.profile.startswith("qwen35"):
         # Saved parquet may be v4; runtime rebuilds from the environment. This
-        # first-turn diagnostic rebuilds the same v5 fields from the saved state.
+        # first-turn diagnostic rebuilds the same current state fields from the saved state.
         user = next(str(m["content"]) for m in messages if m["role"] == "user")
         mission = user.split("Task goal (not an executable action):", 1)[1].split("\n\n", 1)[0].strip()
         observation = user.split("Current observation:\n", 1)[1].split("\n\nCurrent admissible actions", 1)[0]
@@ -173,11 +172,11 @@ def main() -> int:
         "rendered_prompt_chars": len(rendered),
         "rendered_prompt_tokens": len(tokenizer(rendered, add_special_tokens=False)["input_ids"]),
         "prompt_contract": {
-            "version": PROMPT_VERSION if is_text else row["extra_info"].get("prompt_version"),
+            "version": PROMPT_VERSION if args.profile.startswith("qwen35") else row["extra_info"].get("prompt_version"),
             "enable_thinking": thinking,
-            "required_function": None if is_text else "alfworld_action",
-            "required_parameter": None if is_text else "action",
-            "output_format": "Action: <command>" if is_text else "Hermes tool call",
+            "required_function": "alfworld_action",
+            "required_parameter": "action",
+            "output_format": "compact XML tool call" if args.profile.startswith("qwen35") else "Hermes tool call",
             "runtime_termination_ignored": list(RUNTIME_TERMINATION_MARKERS),
         },
         "admissible_action_count": len(admissible_actions),
@@ -207,14 +206,16 @@ def main() -> int:
         for seq in generated_ids[:, prompt_len:]:
             text = tokenizer.decode(seq, skip_special_tokens=False)
             executable_text, _ = tool_output(text, enable_thinking=thinking)
-            if is_text:
-                action = parse_text_action(text, enable_thinking=thinking)
-                status = "no_action" if action is None else (
-                    "valid" if action in admissible_actions else "invalid_action"
-                )
-                generations.append({"class": status, "parser_status": status,
-                                    "validation_status": status, "strict_xml": False,
-                                    "action": action, "text": text})
+            if args.profile.startswith("qwen35"):
+                decision = parse_xml_decision(text, enable_thinking=thinking)
+                status = decision.status
+                reason = decision.reason
+                if status == "valid" and decision.action not in admissible_actions:
+                    status, reason = "invalid_action", "inadmissible_action"
+                generations.append({"class": status, "parser_status": decision.status,
+                                    "validation_status": status, "reason": reason,
+                                    "strict_xml": decision.status == "valid",
+                                    "action": decision.action, "text": text})
                 continue
             parsed = parse_tool_call(executable_text)
             visible_text, terminal_tokens = strip_runtime_termination(executable_text)

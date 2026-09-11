@@ -55,7 +55,7 @@ def test_qwen35_prompt_profile_uses_text_actions():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
-    assert profile.PROMPT_VERSION == "alfworld_qwen35_v5_action_history_text_thinking"
+    assert profile.PROMPT_VERSION == "alfworld_qwen35_v7_compact_xml_history_thinking"
     assert profile.SYSTEM_PROMPT == ""
     user_prompt = profile.build_user_prompt(
         mission="put the apple in the drawer",
@@ -136,29 +136,29 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
             }
         )
     )
-    assert metrics.pop("alfworld_penalty/no_action_count") == 3
-    assert metrics.pop("alfworld_penalty/invalid_action_count") == 4
-    for stat in ("min", "max", "mean"):
-        assert metrics.pop(f"alfworld/valid_action_count/{stat}") == metrics[f"alfworld/valid_tool_call_count/{stat}"]
+    assert not any("tool_call" in key for key in metrics)
+    assert metrics.pop("alfworld_penalty/thinking_truncated_no_action_count") == 0
     assert metrics == {
+        "alfworld_termination/no_action_count": 0,
         "alfworld_termination/done_count": 1,
         "alfworld_termination/max_steps_count": 2,
-        "alfworld_penalty/no_tool_call_count": 3,
-        "alfworld_penalty/invalid_tool_call_count": 4,
+        "alfworld_penalty/no_action_count": 3,
+        "alfworld_penalty/invalid_action_count": 4,
         "alfworld_penalty/repeated_action_count": 6,
-        "alfworld/valid_tool_call_count/min": 1,
-        "alfworld/valid_tool_call_count/max": 4,
-        "alfworld/valid_tool_call_count/mean": 7 / 3,
+        "alfworld/valid_action_count/min": 1,
+        "alfworld/valid_action_count/max": 4,
+        "alfworld/valid_action_count/mean": 7 / 3,
     }
     assert set(metrics) <= {
+        "alfworld_termination/no_action_count",
         "alfworld_termination/done_count",
         "alfworld_termination/max_steps_count",
-        "alfworld_penalty/no_tool_call_count",
-        "alfworld_penalty/invalid_tool_call_count",
+        "alfworld_penalty/no_action_count",
+        "alfworld_penalty/invalid_action_count",
         "alfworld_penalty/repeated_action_count",
-        "alfworld/valid_tool_call_count/min",
-        "alfworld/valid_tool_call_count/max",
-        "alfworld/valid_tool_call_count/mean",
+        "alfworld/valid_action_count/min",
+        "alfworld/valid_action_count/max",
+        "alfworld/valid_action_count/mean",
     }
 
 
@@ -260,3 +260,17 @@ def test_dataset_loader_accepts_verl_nested_game_file(tmp_path):
     path = tmp_path / "sample.parquet"
     source.to_parquet(path, index=False)
     assert load_tasks(path, limit=1)[0]["data_source"] == "alfworld"
+
+
+def test_alfworld_metrics_include_thinking_truncation_no_action_count():
+    from types import SimpleNamespace
+    from alfworld_baseline.metrics import compute_alfworld_rollout_metrics
+    metrics = compute_alfworld_rollout_metrics(SimpleNamespace(non_tensor_batch={
+        'alfworld_terminal_reason': ['no_tool_call', 'no_tool_call', 'done'],
+        'alfworld_no_tool_call_penalty_count': [1, 1, 0],
+        'alfworld_invalid_tool_call_penalty_count': [0, 0, 0],
+        'alfworld_repeated_action_penalty_count': [0, 0, 0],
+        'alfworld_thinking_truncated_no_action': [1, 0, 0],
+        'alfworld_valid_tool_call_count': [0, 0, 1],
+    }))
+    assert metrics['alfworld_penalty/thinking_truncated_no_action_count'] == 1

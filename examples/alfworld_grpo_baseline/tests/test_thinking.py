@@ -83,8 +83,12 @@ def test_template_modes(thinking):
         enable_thinking=thinking, add_generation_prompt=True,
     )
     assert rendered.endswith('<think>\n' if thinking else '<think>\n\n</think>\n\n')
-    assert 'restrictions apply only after </think>' in rendered
-    assert '<tools>' not in rendered and '<function=' not in rendered
+    if thinking:
+        assert 'No JSON, additional calls, or explanations after thinking' in rendered
+    else:
+        assert 'Emit exactly one XML tool call directly' in rendered
+        assert 'Inside <think>' not in rendered
+    assert '<tools>' in rendered and '<function=alfworld_action>' in rendered
 
 
 @pytest.mark.parametrize('prefix', ['Choose look.\n</think>\n', '<think>Choose look.</think>\n', CALL + '\n</think>\n'])
@@ -144,7 +148,7 @@ def test_thinking_output_without_post_think_tool_call_gets_no_tool_penalty():
 
     assert asyncio.run(loop._generate_environment_decision(data, {})) == AgentState.PROCESSING_TOOLS
     assert asyncio.run(loop._process_environment_decision(data)) == AgentState.TERMINATED
-    assert data.tool_rewards == [-0.1]
+    assert data.tool_rewards == [-5.0]
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
     assert data.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
     assert data.extra_fields.get('alfworld_valid_tool_call_count', 0) == 0
@@ -170,3 +174,42 @@ def test_thinking_output_with_parsed_tool_call_has_no_protocol_penalty():
     assert data.extra_fields.get('alfworld_no_tool_call_penalty_count', 0) == 0
     assert data.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
     assert data.extra_fields['alfworld_valid_tool_call_count'] == 1
+
+
+def test_compact_xml_preserves_history_and_original_replay_tokens():
+    loop = make_thinking_environment_loop(ParsedCallParser(
+        FunctionCall(name='alfworld_action', arguments='{"action":"look"}')
+    ))
+    loop._xml_actions = True
+    loop._text_actions = False
+    loop._environment_budget = ALFWorldDecisionBudget(3, 512)
+    loop.response_length = 1536
+    loop._get_or_create_tool_instance = AsyncMock(return_value='instance')
+
+    class Tool:
+        async def execute(self, instance, args, **kwargs):
+            return ToolResponse(text='room'), 0.0, {
+                'action': 'look', 'observation': 'new room', 'admissible_commands': ['look']
+            }
+
+    loop.tools = {'alfworld_action': Tool()}
+    data = make_thinking_data(loop)
+    text = 'Inspect the room.</think>\n' + CALL
+    set_thinking_server(loop, text)
+
+    async def run():
+        assert await loop._generate_environment_decision(data, {}) == AgentState.PROCESSING_TOOLS
+        assert await loop._process_environment_decision(data) == AgentState.GENERATING
+
+    asyncio.run(run())
+    assert data.alfworld_decision_history == ['look [executed]']
+    assert 'look [executed]' in data.messages[0]['content']
+    assert data.extra_fields['alfworld_turn_contexts'][0]['response_ids'] == loop.tokenizer.encode(text)
+    assert data.response_logprobs == [-0.1] * len(text)
+    rendered = Environment().from_string(QWEN35_ALFWORLD_CHAT_TEMPLATE).render(
+        messages=data.messages, tools=data._active_tool_schemas,
+        add_generation_prompt=True, enable_thinking=True,
+    )
+    assert rendered.count('<tools>') == 1
+    assert '"enum"' not in rendered
+    assert rendered.count('- look\n') == 1

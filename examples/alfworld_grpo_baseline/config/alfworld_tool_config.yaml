@@ -7,8 +7,8 @@ tools:
       # One shared decision budget, including failed/invalid attempts.
       max_steps: 50
       environment_driven: true
-      # Bound replay memory together with the 16-decision budget.
-      max_new_tokens_per_turn: 256
+      # Total per-decision generation budget: thinking plus the final action.
+      max_new_tokens_per_turn: 768
       # Reuse initialized TextWorld instances in AgentLoop workers. Each acquire
       # reloads the requested game file, so trajectory state is never shared.
       env_pool_size: 16

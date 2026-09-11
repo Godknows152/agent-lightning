@@ -24,10 +24,11 @@ def compute_score(
     """Return the episode reward emitted by ALFWorldTool.
 
     ALFWorld emits sparse environment rewards (normally 1 on a solved task and
-    0 otherwise). The agent loop additionally appends exactly one ``-0.1``
-    penalty for each decision that either has no parseable action or contains an
-    invalid action. Qwen3.5 v5 parses post-thinking text, not XML/schema calls;
-    legacy profiles retain their tool parser. The returned score is therefore the native
+    0 otherwise). The first decision without a parseable action ends the
+    trajectory and appends a one-time ``-5`` penalty, retaining previous rewards.
+    Complete but invalid XML decisions receive ``-0.1`` and may continue.
+    Qwen3.5 v7 validates post-thinking XML with one tool and one action parameter;
+    legacy profiles retain their own parsers. The returned score is therefore the native
     environment reward plus the two protocol penalties and a mutually
     exclusive repeated-action penalty for valid decisions: starting from the
     second consecutive execution of an identical command, each repeat costs

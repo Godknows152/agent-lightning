@@ -17,25 +17,26 @@ from .prompts_qwen35 import PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build
 from .tool_registry import ALFWorldToolRegistry
 from .thinking import ThinkingToolParser, tool_output
 from .text_actions import parse_text_action
+from .xml_actions import parse_xml_decision
 
 
 @register("alfworld_tool_agent")
 class ALFWorldToolAgentLoop(ToolAgentLoop):
-    """ALFWorld loop with exact per-turn replay and v5 text-action decisions.
+    """ALFWorld loop with exact per-turn replay and v7 compact XML decisions.
 
     Qwen3.5 sees the latest observation plus chronological decision history.
-    Environment execution retains the internal tool interface, never a schema
-    in the model prompt. Legacy non-Qwen3.5 tool protocols remain supported.
+    The template injects a compact static schema without duplicating action enums. Legacy non-Qwen3.5 tool protocols remain supported.
     """
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
-        # Qwen3.5 v5 bypasses the native tool-output protocol.
+        # Qwen3.5 v7 uses compact XML guidance and post-thinking parsing.
         # Qwen2.5 keeps its existing Hermes path unchanged.
         model_profile = os.environ.get("ALFWORLD_MODEL_PROFILE", "").lower()
         self._is_qwen35_alfworld = model_profile.startswith("qwen35") or self.processor is not None
-        self._text_actions = self._is_qwen35_alfworld
-        if self._text_actions:
+        self._text_actions = False
+        self._xml_actions = self._is_qwen35_alfworld
+        if self._xml_actions:
             self.apply_chat_template_kwargs = dict(self.apply_chat_template_kwargs)
             self.apply_chat_template_kwargs["chat_template"] = QWEN35_ALFWORLD_CHAT_TEMPLATE
             self.apply_chat_template_kwargs["enable_thinking"] = True
@@ -47,8 +48,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
         self._environment_budget = ALFWorldDecisionBudget.from_tool_config(tool_config)
-        if self._text_actions and self._environment_budget is None:
-            raise ValueError("Qwen3.5 v5 text actions require environment-driven decision budgeting")
+        if self._xml_actions and self._environment_budget is None:
+            raise ValueError("Qwen3.5 v7 XML actions require environment-driven decision budgeting")
         if self._environment_budget is not None and self.response_length < self._environment_budget.response_capacity:
             raise ValueError(
                 "ALFWorld response storage is too small for max_steps * max_new_tokens_per_turn. "
@@ -134,8 +135,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         agent_data.messages = self._state_prompt_messages(
             mission=mission, observation=observation, actions=actions
         )
-        # v5 has no model-facing schema; execution still validates exact
-        # membership against the authoritative environment (no fuzzy repair).
+        # Keep dynamic execution schemas; the v7 template renders only the
+        # compact static definition, not these action enums.
         agent_data._active_tool_schemas = (
             [] if getattr(self, "_text_actions", False) else [ALFWorldToolRegistry(actions).build_tool_schema()]
         )
@@ -143,9 +144,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _handle_pending_state(self, agent_data: AgentData, sampling_params: dict[str, Any]) -> AgentState:
         if getattr(agent_data, "data_source", "") == "alfworld":
             await self._set_authoritative_initial_prompt(agent_data)
-            if getattr(self, "_text_actions", False):
+            if getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False):
                 agent_data.extra_fields["alfworld_prompt_version"] = PROMPT_VERSION
             agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
+            agent_data.extra_fields["alfworld_thinking_truncated_no_action"] = 0
             agent_data.extra_fields.setdefault("alfworld_invalid_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_valid_tool_call_count", 0)
             agent_data.extra_fields.setdefault("alfworld_repeated_action_penalty_count", 0)
@@ -160,7 +162,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         return await super()._handle_pending_state(agent_data, sampling_params)
 
     async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
-        """Refresh current state, keeping v5 action history but no past reasoning."""
+        """Refresh current state, keeping action history but no past reasoning."""
         if getattr(agent_data, "data_source", "") != "alfworld":
             return
         if agent_data.extra_fields.get("alfworld_environment_finished"):
@@ -175,7 +177,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         agent_data.alfworld_recent_history = []
         agent_data.alfworld_current_observation = observation
         agent_data.alfworld_current_actions = actions
-        # Only legacy profiles expose schemas. v5 exposes the action list as text.
+        # Dynamic schemas remain internal; v7 renders actions only in the state prompt.
         agent_data._active_tool_schemas = (
             [] if getattr(self, "_text_actions", False) else [ALFWorldToolRegistry(actions).build_tool_schema()]
         )
@@ -184,7 +186,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             observation=observation,
             actions=actions,
             history=tuple(getattr(agent_data, "alfworld_decision_history", ()))
-            if getattr(self, "_text_actions", False) else (),
+            if (getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False)) else (),
         )
         # Only the next inference context is compacted. prompt_ids retains the
         # complete VERL trajectory and its response mask for training. Per-turn
@@ -197,7 +199,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             videos=None,
         )
 
-    ALFWORLD_NO_TOOL_CALL_PENALTY = -0.1
+    ALFWORLD_NO_TOOL_CALL_PENALTY = -5.0
     ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.1
     ALFWORLD_REPEATED_ACTION_PENALTY = -0.1
 
@@ -211,9 +213,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     ) -> float:
         """Record one of three mutually exclusive decision penalties.
 
-        Legacy counter names are retained for stored batches/dashboards. In v5
-        no_tool_call means no parseable text action; invalid_tool_call means a
-        parsed text command rejected by the environment. No XML is required.
+        Legacy internal counter names are retained. In v7 no_tool_call means
+        absent/incomplete post-thinking XML; invalid_tool_call means a complete
+        but schema-invalid decision or an action rejected by the environment.
+        A missing action ends the trajectory with a one-time -5 penalty.
         Each valid consecutive repeat of an exact command pays -0.1.
         ``prior_occurrences`` counts preceding executions in the current streak,
         not across the trajectory. Protocol failures break the streak and only
@@ -307,6 +310,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 agent_data.tool_calls = []
             if not agent_data.tool_calls:
                 self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
+                agent_data.extra_fields["alfworld_terminal_reason"] = "no_tool_call"
+                return AgentState.TERMINATED
         if getattr(agent_data, "data_source", "") != "alfworld" or agent_data.tool_calls:
             return state
         return state
@@ -315,7 +320,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
     ) -> tuple[list[int], list[float] | None]:
         """Trim after the first complete call without altering ALFWorld reward."""
-        if getattr(self, "_text_actions", False):
+        if getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False):
+            # v7 must classify the entire decision, not silently discard extra calls.
             return token_ids, log_probs
         if getattr(agent_data, "data_source", "") != "alfworld" or not token_ids:
             return super()._apply_tool_call_format_guardrails(agent_data, token_ids, log_probs)
@@ -519,6 +525,18 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             )]
             return AgentState.PROCESSING_TOOLS
 
+        if getattr(self, "_xml_actions", False):
+            decision = parse_xml_decision(
+                self.tokenizer.decode(response_ids, skip_special_tokens=False),
+                enable_thinking=self._thinking_enabled,
+            )
+            agent_data.alfworld_xml_decision = decision
+            agent_data.alfworld_pending_action = decision.action
+            agent_data.tool_calls = [] if decision.status != "valid" else [FunctionCall(
+                name="alfworld_action", arguments=json.dumps({"action": decision.action})
+            )]
+            return AgentState.PROCESSING_TOOLS
+
         schemas = getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
         typed_schemas = [OpenAIFunctionToolSchema.model_validate(schema) for schema in schemas]
         try:
@@ -532,7 +550,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if agent_data.tool_calls:
             return AgentState.PROCESSING_TOOLS
 
-        # A missing or malformed call is a failed decision, not a terminal state.
+        # A missing or malformed call terminates in the tool phase, preserving coordinator balance.
         agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
         # Still pass through the tool phase: shared phase coordinators require
         # one after_tool arrival for every nonterminal generation, even a no-op.
@@ -540,9 +558,23 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
     async def _process_environment_decision(self, agent_data: AgentData) -> AgentState:
         """Execute at most one call and retain rewards, not tool-text loss slots."""
+        decision = getattr(agent_data, "alfworld_xml_decision", None)
+        if getattr(self, "_xml_actions", False) and decision is not None:
+            agent_data.extra_fields["alfworld_last_decision_reason"] = decision.reason
+            if (
+                decision.status == "no_action"
+                and decision.reason == "unclosed_thinking"
+                and len(agent_data.response_ids) == self._environment_budget.max_new_tokens_per_turn
+            ):
+                agent_data.extra_fields["alfworld_thinking_truncated_no_action"] = 1
+            if decision.status == "invalid_action":
+                self._record_alfworld_penalty(agent_data, "invalid_tool_call", append_reward=True)
+                agent_data.alfworld_last_tool_metrics = {"error": decision.reason}
+                return await self._finish_environment_decision(agent_data)
         if not agent_data.tool_calls:
             self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
             agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
+            agent_data.extra_fields["alfworld_terminal_reason"] = "no_tool_call"
             return await self._finish_environment_decision(agent_data)
         tool_call = agent_data.tool_calls[0]
         agent_data.total_tool_calls += 1
@@ -550,6 +582,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             _, reward, metrics = await self._call_tool(tool_call, agent_data.tools_kwargs, agent_data)
         metrics = metrics or {}
         agent_data.alfworld_last_tool_metrics = dict(metrics)
+        if getattr(self, "_xml_actions", False):
+            agent_data.extra_fields["alfworld_last_decision_reason"] = metrics.get("error") or "executed"
         if not metrics.get("error"):
             # This increment is deliberately in the environment-driven
             # decision path: _finish_environment_decision increments
@@ -571,24 +605,29 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _finish_environment_decision(self, agent_data: AgentData) -> AgentState:
         """Share the tool's Max Steps budget across valid and failed decisions.
 
-        Invalid output leaves TextWorld state unchanged, contributes no native
-        environment reward (but does incur its penalty), and consumes one decision step. It cannot create an unbounded retry
-        loop. Environment completion takes precedence on the last allowed step,
+        Missing actions terminate immediately with -5; parsed invalid actions
+        leave TextWorld unchanged, cost -0.1, and consume one decision step.
+        Environment completion takes precedence on the last allowed step,
         so a last-step success is not labelled truncated.
         """
-        if getattr(self, "_text_actions", False):
+        if getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False):
             history = getattr(agent_data, "alfworld_decision_history", [])
-            action = getattr(agent_data, "alfworld_pending_text_action", None)
+            action_field = "alfworld_pending_action" if getattr(self, "_xml_actions", False) else "alfworld_pending_text_action"
+            action = getattr(agent_data, action_field, None)
             metrics = getattr(agent_data, "alfworld_last_tool_metrics", {}) or {}
             error = metrics.get("error")
-            status = "no action" if action is None else ("rejected" if error else "executed")
-            history.append(f"{action or '(no parseable action)'} [{status}]")
+            decision = getattr(agent_data, "alfworld_xml_decision", None)
+            rejected = error and (action is not None or (decision is not None and decision.status == "invalid_action"))
+            status = "rejected" if rejected else ("no action" if action is None else "executed")
+            history.append(f"{action or ('(invalid XML call)' if rejected else '(no parseable action)')} [{status}]")
             agent_data.alfworld_decision_history = history
         budget = self._environment_budget
         assert budget is not None
         steps = int(agent_data.extra_fields.get("alfworld_decision_steps", 0)) + 1
         agent_data.extra_fields["alfworld_decision_steps"] = steps
         agent_data.user_turns += 1
+        if agent_data.extra_fields.get("alfworld_terminal_reason") == "no_tool_call":
+            return AgentState.TERMINATED
         if agent_data.extra_fields.get("alfworld_environment_finished"):
             if agent_data.extra_fields.get("alfworld_terminal_reason") == "truncated":
                 agent_data.extra_fields["alfworld_terminal_reason"] = "max_steps"

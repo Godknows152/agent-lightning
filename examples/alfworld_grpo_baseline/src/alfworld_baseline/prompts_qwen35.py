@@ -1,16 +1,22 @@
-"""Qwen3.5 v5: action history, thinking, plain-text actions; no tool schema."""
+"""Qwen3.5 v7: action history, brief thinking and compact XML tool schema."""
 from __future__ import annotations
 
 from collections.abc import Iterable
 
 from .tool_registry import ALFWorldToolRegistry
 
-PROMPT_VERSION = "alfworld_qwen35_v5_action_history_text_thinking"
+PROMPT_VERSION = "alfworld_qwen35_v7_compact_xml_history_thinking"
+SFT_PROMPT_VERSION = "alfworld_qwen35_v7_compact_xml_history_nothinking_sft_v1"
 SYSTEM_PROMPT = ""
 
-# Deliberately ignores `tools`: environment tools remain internal only.
+# Render the single supported tool compactly; never serialize dynamic action enums.
 QWEN35_ALFWORLD_CHAT_TEMPLATE = r"""
-{{- '<|im_start|>system\nYou are solving an ALFWorld task. Reason inside <think>...</think> about the goal, current observation, and action history. Close </think>, then output exactly one line: Action: followed by one exact command from the current admissible actions. Do not emit XML, JSON, tool calls, additional actions, or explanations. The output restrictions apply only after </think>.\n<|im_end|>\n' }}
+{%- if enable_thinking is defined and not enable_thinking %}
+{{- '<|im_start|>system\nYou are solving an ALFWorld task. Choose only the next action, not a complete plan. Emit exactly one XML tool call directly. Do not emit reasoning, JSON, additional calls, or explanations. The action must exactly match one command from the current admissible actions in the user message.\n<|im_end|>\n' }}
+{%- else %}
+{{- '<|im_start|>system\nYou are solving an ALFWorld task. Choose only the next action, not a complete plan. Inside <think>...</think>, use only 1-2 short sentences to connect the current observation and action history to the next useful action. Do not restate the task or observation, enumerate available actions, or speculate about a full solution. If information is missing, choose one admissible exploration action rather than prolonging reasoning. Close </think>, then emit exactly one XML tool call. No JSON, additional calls, or explanations after thinking. The action must exactly match one command from the current admissible actions in the user message.\n<|im_end|>\n' }}
+{%- endif %}
+{{- '<|im_start|>system\n<tools>\nalfworld_action(action: string): Execute one ALFWorld command from the current admissible actions.\n</tools>\nRequired call format:\n<tool_call>\n<function=alfworld_action>\n<parameter=action>EXACT_COMMAND</parameter>\n</function>\n</tool_call>\n<|im_end|>\n' }}
 {%- for message in messages %}
 {%- if message.role == 'system' %}
 {{- '<|im_start|>system\n' + (message.content | string) + '<|im_end|>\n' }}
@@ -49,12 +55,22 @@ def build_user_prompt(
     observation: str,
     admissible_actions: Iterable[str],
     history: Iterable[str] = (),
+    enable_thinking: bool = True,
 ) -> str:
-    """Build v5 input; history contains past decision actions and execution status."""
+    """Build v7 input; the default thinking route remains RL-compatible."""
 
     actions = tuple(str(action) for action in admissible_actions)
     action_text = "\n".join(f"- {action}" for action in actions)
     history_text = "\n".join(f"{i}. {entry}" for i, entry in enumerate(history, 1)) or "(none)"
+    decision_instruction = (
+        "Decide only the next step. Keep thinking to 1-2 short sentences, then close </think> immediately.\n"
+        "Do not repeat the observation or list candidate actions.\n"
+        "After thinking, emit one XML tool call in the system-defined format. Copy one current admissible command exactly."
+        if enable_thinking else
+        "Decide only the next step. Emit one XML tool call directly in the system-defined format.\n"
+        "Do not emit reasoning, explanations, the observation, or a list of candidate actions.\n"
+        "Copy one current admissible command exactly."
+    )
     return f"""Task goal (not an executable action):
 {mission}
 
@@ -67,13 +83,13 @@ Current observation:
 Current admissible actions (the action value must be copied exactly from this list):
 {action_text}
 
-After thinking, output exactly one line: Action: <one exact current admissible action>."""
+{decision_instruction}"""
 
 
 def build_messages(
     *, mission: str, observation: str, registry: ALFWorldToolRegistry
 ) -> tuple[list[dict[str, str]], list[dict]]:
-    """Return v5 user input and no model-facing tool schema."""
+    """Return user input and a compact static tool schema."""
 
     messages = [
         {
@@ -85,4 +101,4 @@ def build_messages(
             ),
         }
     ]
-    return messages, []
+    return messages, [registry.static_tool_schema()]

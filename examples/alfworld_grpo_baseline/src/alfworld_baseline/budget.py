@@ -24,7 +24,7 @@ class ALFWorldDecisionBudget:
         if not config.get("environment_driven", False):
             return None
         values = {}
-        for key, default in (("max_steps", 50), ("max_new_tokens_per_turn", 256)):
+        for key, default in (("max_steps", 50), ("max_new_tokens_per_turn", 768)):
             value = config.get(key, default)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"ALFWorld {key} must be a positive integer, got {value!r}")

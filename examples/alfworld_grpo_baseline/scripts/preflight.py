@@ -41,7 +41,7 @@ def main() -> int:
         )
     print(f"cxx20_compiler={cxx} nvcc={nvcc}")
     from transformers import AutoTokenizer
-    from alfworld_baseline.text_actions import parse_text_action
+    from alfworld_baseline.xml_actions import parse_xml_decision
     from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
     model = Path(os.environ.get("ALFWORLD_MODEL", "/home/LXJ/Python_Projects/Models/Qwen3.5-2B"))
@@ -56,7 +56,7 @@ def main() -> int:
     for thinking in (False, True):
         rendered = tokenizer.apply_chat_template(
             [{"role": "user", "content": "Choose."}],
-            tools=[],
+            tools=[registry.static_tool_schema()],
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=thinking,
@@ -64,10 +64,10 @@ def main() -> int:
         )
         if "example_function_name" in rendered or "If you choose to call a function" in rendered:
             raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
-        if "<tools>" in rendered or "<tool_call>" in rendered or "<function=" in rendered:
-            raise RuntimeError("Qwen3.5 v5 must not inject tool schemas or XML examples")
-        if "Action:" not in rendered:
-            raise RuntimeError("Qwen3.5 v5 text-action instructions missing")
+        if rendered.count("<tools>") != 1 or "<parameter=action>" not in rendered:
+            raise RuntimeError("Qwen3.5 v7 compact XML schema missing")
+        if "go to cabinet 1" in rendered or '"enum"' in rendered:
+            raise RuntimeError("Action enum must not be duplicated in the schema")
         expected_prefix = "<|im_start|>assistant\n<think>\n"
         if not thinking:
             expected_prefix += "\n</think>\n\n"
@@ -75,9 +75,9 @@ def main() -> int:
             raise RuntimeError(f"Qwen3.5 generation prefix mismatch: enable_thinking={thinking}")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
     print(f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} rendered_tokens={len(tokenizer(rendered, add_special_tokens=False)["input_ids"])}")
-    valid = parse_text_action("Choose look.</think>\nAction: look<|im_end|>")
-    if valid is None or registry.validate_action(valid) != "look":
-        raise AssertionError("text-action component contract failed")
+    decision = parse_xml_decision("</think><tool_call><function=alfworld_action><parameter=action>look</parameter></function></tool_call>")
+    if decision.status != "valid" or registry.validate_action(decision.action) != "look":
+        raise AssertionError("XML tool-call component contract failed")
     print("status=preflight_ok")
     return 0
 
