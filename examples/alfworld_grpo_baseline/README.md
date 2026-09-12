@@ -247,3 +247,58 @@ XML模式不再裁掉首个调用后的生成内容，避免掩盖多调用和�
 该步按无动作规则追加−5并终止轨迹，同时记录 `alfworld_penalty/thinking_truncated_no_action_count`。
 该指标按rollout batch统计轨迹数，不是token数；只有“thinking未闭合”计入，
 已闭合thinking但XML缺失/不完整的无动作不计入。
+
+### Ray dashboard agent 端口冲突防护（2026-09-12）
+
+ALFWorld 入口 `alfworld_baseline.main_ppo` 自动安装进程内启动防护，适用于共用该入口的
+2B/9B 训练，无需更改训练 YAML 或启动命令，不修改安装环境内的 Ray 文件。
+
+Ray 2.54 在节点 IP 上自动分配 agent gRPC 端口后，还会将同一端口绑定到
+`127.0.0.1`，可能撞到 Clash Verge 等仅监听回环地址的服务。启动防护在创建 raylet
+前以 `0.0.0.0:0` 申请候选端口（不启用端口复用），再将结果传给
+`start_raylet(metrics_agent_port=...)`。通配地址检查覆盖所有本地 IPv4 地址，避免只检查
+网卡地址而遗漏回环端口。探测 socket 不监听连接；Ray 实际监听地址不变。
+已有显式端口保留，但占用时提前报清楚的错误，不擅自换端口、结束服务或重试整个训练。
+启动日志会输出 `ALFWorld Ray dashboard agent gRPC port=...`。
+
+边界：探测 socket 必须在 Ray 绑定前释放，因此仍有很短的跨进程端口交接竞态窗口；
+此防护避免已存在的端口冲突，不声称对任意并发新服务的抢占提供原子保证。
+附加到已有 Ray 集群时不创建 raylet，不改变其端口。升级 Ray 后应重新运行兼容性测试。
+
+检查：
+```bash
+PYTHONPATH=examples/alfworld_grpo_baseline/src \
+  /home/LXJ/anaconda3/envs/alfworld-verl/bin/python -m pytest -q \
+  examples/alfworld_grpo_baseline/tests/test_ray_startup.py
+```
+
+验收：9 项新增 CPU 单测和 129 项原有回归测试通过（共 138 项）；在 `alfworld-verl` 环境、原 Clash Verge 服务保持运行的情况下，
+以 `num_gpus=0`、1 CPU、128 MiB object store 成功初始化独立 Ray 实例，运行一个 CPU
+remote task 后使用 `ray.shutdown()` 关闭该测试实例。未启动 RL/SFT，未验证模型加载。
+
+### 9B RL 关闭 thinking（2026-09-12）
+
+当前 `qwen35_9b` profile 设置 `data.apply_chat_template_kwargs.enable_thinking: false`，
+提示词版本为 `alfworld_qwen35_v7_compact_xml_history_nothinking`。
+Agent 尊重配置，不再强制开启 thinking；初始及后续状态提示词、解析器和轨迹版本随同切换。
+2B profile 保持 thinking 开启。9B 使用与非思考 SFT 相同的输入侧空
+`<think>\n\n</think>\n\n` 前缀；模型应直接生成 XML，无须自己生成 `</think>`。
+空 thinking 标签出现在输入中不代表模型生成了思考。
+严格 XML、无动作立即终止并罚 −5、非法及重复动作惩罚不变。启动预检同时支持两种模式，
+并验证 PROMPT_VERSION 与开关一致。切换模式时需同时更新 profile 的开关和版本名。
+
+### SwanLab 轨迹终止指标（2026-09-12）
+
+`alfworld_termination` 现在只输出互斥的五分类及总数：
+
+- `success_count`：环境返回 `won=True`，任务真正完成；
+- `environment_timeout_count`：环境步数达到 50 步且未完成；
+- `decision_limit_count`：Agent 决策次数达到上限，且未被其他原因终止；
+- `no_tool_call_count`：模型输出无法解析为可执行动作；
+- `env_failure_count`：其他环境终止或未分类终止；
+- `total_trajectories`：本 rollout batch 的轨迹总数。
+
+五类计数加总应等于 `total_trajectories`。`done_count` 和 `max_steps_count` 不再写入
+SwanLab。`invalid_action_count` 和 `repeated_action_count` 仍属于
+`alfworld_penalty`，因为它们不是终止原因。环境工具层使用 `won` 区分成功与 TextWorld
+因步数上限返回的 `done=True`；后者记录为 `environment_timeout`，避免把超时误记成成功。

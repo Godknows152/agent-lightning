@@ -3,6 +3,11 @@ from __future__ import annotations
 
 from verl.trainer import main_ppo as _base_main
 
+from alfworld_baseline.ray_startup import install_ray_agent_port_guard
+
+# Install before the shared VERL entrypoint calls ray.init().
+install_ray_agent_port_guard()
+
 
 class ALFWorldTaskRunner(_base_main.TaskRunner):
     """Install ALFWorld metric aggregation inside the remote trainer actor."""
