@@ -133,14 +133,15 @@ class ALFWorldTool(BaseTool):
         (observations,), (rewards,), (done,), next_info = state["env"].step([action])
         state["observation"], state["info"] = observations, next_info
         state["steps"] += 1
-        truncated = state["steps"] >= int(self.config.get("max_steps", 50)) and not done
+        won = bool(next_info.get("won", [False])[0])
+        truncated = state["steps"] >= int(self.config.get("max_steps", 50)) and not won
         done = bool(done or truncated)
         reward = float(rewards)
         text = f"Observation:\n{observations}\n\nAdmissible actions:\n{chr(10).join(next_info['admissible_commands'][0])}"
         return ToolResponse(text=text), reward, {
             "action": action,
             "observation": str(observations),
-            "won": bool(next_info.get("won", [False])[0]),
+            "won": won,
             "done": done,
             "truncated": truncated,
             "admissible_commands": next_info["admissible_commands"][0],

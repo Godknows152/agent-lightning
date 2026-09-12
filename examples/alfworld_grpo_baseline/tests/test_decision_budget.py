@@ -167,7 +167,7 @@ def test_valid_actions_finish_only_on_done_or_max_steps_and_ignore_long_observat
         async def execute(self, instance, args, **kwargs):
             executed.append(args['action'])
             return ToolResponse(text='observation' * 5000), 1.0 if len(executed) == done_at else 0.0, {
-                'action': 'look', 'done': len(executed) == done_at,
+                'action': 'look', 'done': len(executed) == done_at, 'won': len(executed) == done_at,
                 'observation': 'observation' * 5000, 'admissible_commands': ['look'],
             }
 
@@ -185,7 +185,7 @@ def test_valid_actions_finish_only_on_done_or_max_steps_and_ignore_long_observat
     n = done_at or 3
     assert len(executed) == n
     assert len(data.response_mask) == n * len(CALL)
-    assert data.extra_fields['alfworld_terminal_reason'] == ('done' if done_at else 'max_steps')
+    assert data.extra_fields['alfworld_terminal_reason'] == ('success' if done_at else 'decision_limit')
     assert sum(data.tool_rewards) == pytest.approx((1.0 if done_at else 0.0) - 0.1 * max(n - 1, 0))
     assert data.extra_fields['alfworld_valid_tool_call_count'] == n
     assert data.successful_action_history == ['look'] * n
@@ -285,12 +285,12 @@ def test_invalid_budget_rejected(key, value):
 
 
 @pytest.mark.parametrize('profile,expected_steps', [('qwen35_2b', 50), ('qwen35_9b', 50)])
-def test_composed_config_enables_thinking_and_derives_storage_from_shared_tool_budget(profile, expected_steps):
+def test_composed_config_selects_thinking_and_derives_storage_from_shared_tool_budget(profile, expected_steps):
     path = ROOT / 'config' / 'alfworld' / profile / 'v1'
     with initialize_config_dir(config_dir=str(path), version_base=None):
         config = compose(config_name='alfworld_config_2gpu')
     budget = configure_environment_driven_rollout(config)
-    assert config.data.apply_chat_template_kwargs.enable_thinking is True
+    assert config.data.apply_chat_template_kwargs.enable_thinking is (profile == "qwen35_2b")
     assert config.trainer.enable_penalty_logging is False
     assert budget == ALFWorldDecisionBudget(expected_steps, 768)
     assert config.data.max_response_length == expected_steps * 768
@@ -320,11 +320,14 @@ def test_storage_resizes_when_tool_budget_changes(tmp_path):
 def test_terminal_metrics_distinguish_environment_done_and_max_steps():
     from alfworld_baseline.metrics import compute_alfworld_rollout_metrics
 
-    batch = SimpleNamespace(non_tensor_batch={"alfworld_terminal_reason": ["done", "max_steps", "max_steps", "no_tool_call"]})
+    batch = SimpleNamespace(non_tensor_batch={"alfworld_terminal_reason": ["success", "decision_limit", "environment_timeout", "no_tool_call"]})
     metrics = compute_alfworld_rollout_metrics(batch)
-    assert metrics["alfworld_termination/done_count"] == 1
-    assert metrics["alfworld_termination/max_steps_count"] == 2
-    assert metrics["alfworld_termination/no_action_count"] == 1
+    assert metrics["alfworld_termination/success_count"] == 1
+    assert metrics["alfworld_termination/decision_limit_count"] == 1
+    assert metrics["alfworld_termination/environment_timeout_count"] == 1
+    assert metrics["alfworld_termination/no_tool_call_count"] == 1
+    assert metrics["alfworld_termination/env_failure_count"] == 0
+    assert metrics["alfworld_termination/total_trajectories"] == 4
 
 
 def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
@@ -354,7 +357,7 @@ def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
 
     outputs = asyncio.run(run())
     assert [out.extra_fields["alfworld_decision_steps"] for out in outputs] == [1, 2]
-    assert [out.extra_fields["alfworld_terminal_reason"] for out in outputs] == ["no_tool_call", "max_steps"]
+    assert [out.extra_fields["alfworld_terminal_reason"] for out in outputs] == ["no_tool_call", "decision_limit"]
 
 
 def test_multiple_generated_calls_are_trimmed_and_feedback_precedes_next_generation():

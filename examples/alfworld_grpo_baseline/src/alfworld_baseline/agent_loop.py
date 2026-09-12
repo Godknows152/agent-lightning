@@ -13,7 +13,7 @@ from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
 from verl.utils.profiler import simple_timer
 
 from .budget import ALFWorldDecisionBudget
-from .prompts_qwen35 import PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
+from .prompts_qwen35 import NONTHINKING_PROMPT_VERSION, PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
 from .tool_registry import ALFWorldToolRegistry
 from .thinking import ThinkingToolParser, tool_output
 from .text_actions import parse_text_action
@@ -39,7 +39,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if self._xml_actions:
             self.apply_chat_template_kwargs = dict(self.apply_chat_template_kwargs)
             self.apply_chat_template_kwargs["chat_template"] = QWEN35_ALFWORLD_CHAT_TEMPLATE
-            self.apply_chat_template_kwargs["enable_thinking"] = True
+            # Honor the composed training config instead of forcing thinking.
+            self.apply_chat_template_kwargs.setdefault("enable_thinking", False)
         self._thinking_enabled = self._is_qwen35_alfworld and bool(
             self.apply_chat_template_kwargs.get("enable_thinking", False)
         )
@@ -110,6 +111,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                     observation=observation,
                     admissible_actions=actions,
                     history=history,
+                    enable_thinking=getattr(self, "_thinking_enabled", True),
                 ),
             }
         ]
@@ -145,9 +147,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if getattr(agent_data, "data_source", "") == "alfworld":
             await self._set_authoritative_initial_prompt(agent_data)
             if getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False):
-                agent_data.extra_fields["alfworld_prompt_version"] = PROMPT_VERSION
+                agent_data.extra_fields["alfworld_prompt_version"] = (
+                    PROMPT_VERSION if getattr(self, "_thinking_enabled", True) else NONTHINKING_PROMPT_VERSION
+                )
             agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
-            agent_data.extra_fields["alfworld_thinking_truncated_no_action"] = 0
+            agent_data.extra_fields["alfworld_no_action_category"] = ""
             agent_data.extra_fields.setdefault("alfworld_invalid_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_valid_tool_call_count", 0)
             agent_data.extra_fields.setdefault("alfworld_repeated_action_penalty_count", 0)
@@ -444,9 +448,13 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 agent_data.alfworld_current_observation = str(metrics["observation"])
             if bool(metrics.get("done")) or bool(metrics.get("truncated")):
                 agent_data.extra_fields["alfworld_environment_finished"] = True
-                agent_data.extra_fields["alfworld_terminal_reason"] = (
-                    "truncated" if metrics.get("truncated") else "done"
-                )
+                if metrics.get("won"):
+                    reason = "success"
+                elif metrics.get("truncated"):
+                    reason = "environment_timeout"
+                else:
+                    reason = "env_failure"
+                agent_data.extra_fields["alfworld_terminal_reason"] = reason
         return response, reward, metrics
 
     async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
@@ -561,12 +569,21 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         decision = getattr(agent_data, "alfworld_xml_decision", None)
         if getattr(self, "_xml_actions", False) and decision is not None:
             agent_data.extra_fields["alfworld_last_decision_reason"] = decision.reason
-            if (
-                decision.status == "no_action"
-                and decision.reason == "unclosed_thinking"
-                and len(agent_data.response_ids) == self._environment_budget.max_new_tokens_per_turn
-            ):
-                agent_data.extra_fields["alfworld_thinking_truncated_no_action"] = 1
+            if decision.status == "no_action":
+                # Exactly one no-action detail is recorded. Overlong thinking
+                # takes precedence over the broader unclosed-thinking bucket.
+                overlong = (
+                    decision.reason == "unclosed_thinking"
+                    and len(agent_data.response_ids) >= self._environment_budget.max_new_tokens_per_turn
+                )
+                agent_data.extra_fields["alfworld_no_action_category"] = (
+                    "overlong_thinking" if overlong
+                    else "thinking_unclosed" if decision.reason == "unclosed_thinking"
+                    else "tool_call_format" if decision.reason in {
+                        "missing_or_incomplete_call", "malformed_xml", "incomplete_parameter"
+                    }
+                    else "other"
+                )
             if decision.status == "invalid_action":
                 self._record_alfworld_penalty(agent_data, "invalid_tool_call", append_reward=True)
                 agent_data.alfworld_last_tool_metrics = {"error": decision.reason}
@@ -574,6 +591,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if not agent_data.tool_calls:
             self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
             agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
+            agent_data.extra_fields.setdefault("alfworld_no_action_category", "other")
             agent_data.extra_fields["alfworld_terminal_reason"] = "no_tool_call"
             return await self._finish_environment_decision(agent_data)
         tool_call = agent_data.tool_calls[0]
@@ -630,10 +648,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             return AgentState.TERMINATED
         if agent_data.extra_fields.get("alfworld_environment_finished"):
             if agent_data.extra_fields.get("alfworld_terminal_reason") == "truncated":
-                agent_data.extra_fields["alfworld_terminal_reason"] = "max_steps"
+                agent_data.extra_fields["alfworld_terminal_reason"] = "environment_timeout"
             return AgentState.TERMINATED
         if steps >= budget.max_steps:
-            agent_data.extra_fields["alfworld_terminal_reason"] = "max_steps"
+            agent_data.extra_fields["alfworld_terminal_reason"] = "decision_limit"
             return AgentState.TERMINATED
         await self._rebuild_generation_prompt_after_tool(agent_data)
         return AgentState.GENERATING

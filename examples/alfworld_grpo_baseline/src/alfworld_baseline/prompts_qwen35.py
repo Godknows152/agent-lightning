@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from .tool_registry import ALFWorldToolRegistry
 
 PROMPT_VERSION = "alfworld_qwen35_v7_compact_xml_history_thinking"
+NONTHINKING_PROMPT_VERSION = "alfworld_qwen35_v7_compact_xml_history_nothinking"
 SFT_PROMPT_VERSION = "alfworld_qwen35_v7_compact_xml_history_nothinking_sft_v1"
 SYSTEM_PROMPT = ""
 

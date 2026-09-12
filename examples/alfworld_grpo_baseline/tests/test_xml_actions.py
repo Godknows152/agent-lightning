@@ -117,4 +117,4 @@ def test_thinking_truncation_requires_exhausted_budget_and_unclosed_thinking(out
     assert asyncio.run(run()) == AgentState.TERMINATED
     assert data.tool_rewards == [-5.0]
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
-    assert data.extra_fields.get('alfworld_thinking_truncated_no_action', 0) == expected
+    assert (data.extra_fields.get('alfworld_no_action_category') == 'overlong_thinking') == bool(expected)

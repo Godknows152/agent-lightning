@@ -118,7 +118,7 @@ def test_alfworld_agent_loop_marks_environment_terminal(monkeypatch):
     )
     assert response[2]["done"] is True
     assert data.extra_fields["alfworld_environment_finished"] is True
-    assert data.extra_fields["alfworld_terminal_reason"] == "done"
+    assert data.extra_fields["alfworld_terminal_reason"] == "env_failure"
 
 
 def test_alfworld_rollout_metrics_expose_three_penalty_series():
@@ -128,7 +128,7 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
     metrics = compute_alfworld_rollout_metrics(
         SimpleNamespace(
             non_tensor_batch={
-                "alfworld_terminal_reason": ["done", "max_steps", "max_steps"],
+                "alfworld_terminal_reason": ["success", "decision_limit", "environment_timeout"],
                 "alfworld_no_tool_call_penalty_count": [2, 0, 1],
                 "alfworld_invalid_tool_call_penalty_count": [0, 3, 1],
                 "alfworld_repeated_action_penalty_count": [1, 2, 3],
@@ -136,29 +136,24 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
             }
         )
     )
-    assert not any("tool_call" in key for key in metrics)
-    assert metrics.pop("alfworld_penalty/thinking_truncated_no_action_count") == 0
+    assert "alfworld_termination/no_tool_call_count" in metrics
+    assert metrics.pop("alfworld_penalty/no_action/overlong_thinking_count") == 0
     assert metrics == {
-        "alfworld_termination/no_action_count": 0,
-        "alfworld_termination/done_count": 1,
-        "alfworld_termination/max_steps_count": 2,
+        "alfworld_termination/success_count": 1,
+        "alfworld_termination/environment_timeout_count": 1,
+        "alfworld_termination/decision_limit_count": 1,
+        "alfworld_termination/no_tool_call_count": 0,
+        "alfworld_termination/env_failure_count": 0,
+        "alfworld_termination/total_trajectories": 3,
         "alfworld_penalty/no_action_count": 3,
+        "alfworld_penalty/no_action/thinking_unclosed_count": 0,
+        "alfworld_penalty/no_action/tool_call_format_count": 0,
+        "alfworld_penalty/no_action/other_count": 3,
         "alfworld_penalty/invalid_action_count": 4,
         "alfworld_penalty/repeated_action_count": 6,
         "alfworld/valid_action_count/min": 1,
         "alfworld/valid_action_count/max": 4,
         "alfworld/valid_action_count/mean": 7 / 3,
-    }
-    assert set(metrics) <= {
-        "alfworld_termination/no_action_count",
-        "alfworld_termination/done_count",
-        "alfworld_termination/max_steps_count",
-        "alfworld_penalty/no_action_count",
-        "alfworld_penalty/invalid_action_count",
-        "alfworld_penalty/repeated_action_count",
-        "alfworld/valid_action_count/min",
-        "alfworld/valid_action_count/max",
-        "alfworld/valid_action_count/mean",
     }
 
 
@@ -270,7 +265,7 @@ def test_alfworld_metrics_include_thinking_truncation_no_action_count():
         'alfworld_no_tool_call_penalty_count': [1, 1, 0],
         'alfworld_invalid_tool_call_penalty_count': [0, 0, 0],
         'alfworld_repeated_action_penalty_count': [0, 0, 0],
-        'alfworld_thinking_truncated_no_action': [1, 0, 0],
+        'alfworld_no_action_category': ['overlong_thinking', 'thinking_unclosed', ''],
         'alfworld_valid_tool_call_count': [0, 0, 1],
     }))
-    assert metrics['alfworld_penalty/thinking_truncated_no_action_count'] == 1
+    assert metrics['alfworld_penalty/no_action/overlong_thinking_count'] == 1

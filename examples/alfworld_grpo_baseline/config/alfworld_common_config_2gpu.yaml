@@ -26,7 +26,7 @@ data:
   truncation: error
   return_raw_chat: true
   need_tools_kwargs: true
-  # Legacy default; both Qwen3.5 profiles override thinking to true for v5.
+  # Default off; model profiles may override (9B off, 2B on).
   apply_chat_template_kwargs:
     enable_thinking: false
   seed: ${variables.SEED}

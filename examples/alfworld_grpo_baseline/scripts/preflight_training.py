@@ -67,12 +67,14 @@ def main() -> int:
     assert int(cfg.actor_rollout_ref.actor.data_loader_seed) == args.seed
     assert int(cfg.actor_rollout_ref.actor.fsdp_config.seed) == args.seed
     if args.model_profile.startswith("qwen35"):
-        from alfworld_baseline.prompts_qwen35 import PROMPT_VERSION
+        from alfworld_baseline.prompts_qwen35 import NONTHINKING_PROMPT_VERSION, PROMPT_VERSION
         from alfworld_baseline.budget import configure_environment_driven_rollout
-        assert cfg.data.apply_chat_template_kwargs.enable_thinking is True
-        assert cfg.variables.PROMPT_VERSION == PROMPT_VERSION
+        thinking = cfg.data.apply_chat_template_kwargs.enable_thinking
+        assert isinstance(thinking, bool)
+        prompt_version = PROMPT_VERSION if thinking else NONTHINKING_PROMPT_VERSION
+        assert cfg.variables.PROMPT_VERSION == prompt_version
         assert configure_environment_driven_rollout(cfg) is not None
-        print(f"prompt_version={PROMPT_VERSION} output=compact_xml_tool_call thinking=true")
+        print(f"prompt_version={prompt_version} output=compact_xml_tool_call thinking={str(thinking).lower()}")
     validate_config(cfg, use_reference_policy=need_reference_policy(cfg), use_critic=need_critic(cfg))
     print(OmegaConf.to_yaml(cfg.trainer))
     assert cfg.trainer.experiment_name == experiment_name
