@@ -1,4 +1,4 @@
-# ALFWorld GRPO v1 for Qwen3.5-2B, aligned with the current Qwen3.5-9B training settings.
+# ALFWorld GRPO v1 for Qwen3.5-2B and its native XML tool calls.
 hydra:
   searchpath:
     - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
@@ -9,12 +9,14 @@ defaults:
   - /model_profiles@_global_: qwen35_2b
   - _self_
 
-# Keep non-model training settings aligned with the Qwen3.5-9B profile.
+# Match the 2B profile's sampling scale and selected memory-saving settings.
 variables:
-  NUM_ROLLOUTS: 4
+  NUM_ROLLOUTS: 3
 
 data:
-  train_batch_size: 8
+  apply_chat_template_kwargs:
+    enable_thinking: true
+  train_batch_size: 16
 
 actor_rollout_ref:
   rollout:
@@ -24,17 +26,28 @@ actor_rollout_ref:
     agent:
       num_workers: 4
   actor:
+    calculate_entropy: true
+    # Enable KL against the frozen base policy. With LoRA, VERL computes
+    # reference log-probs by disabling adapters on the shared actor engine.
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
     ppo_mini_batch_size: 8
     # Keep each backward micro-batch small for the standard FSDP training path.
-    ppo_micro_batch_size_per_gpu: 1
+    ppo_micro_batch_size_per_gpu: 4
+    # Bound turn-level replay so long ALFWorld histories do not form one
+    # oversized forward/backward activation graph.
+    turn_context_chunk_tokens: 32768
     fsdp_config:
       # LoRA leaves only adapter parameters trainable, so CPU offload is no
       # longer needed for the optimizer and costs a host-device transfer.
       param_offload: false
       optimizer_offload: false
-      entropy_checkpointing: true
+      entropy_checkpointing: false
   model:
-    # Train adapters instead of the full model parameter set.
+    # Initialize RL from the completed thinking-enabled XML-format SFT adapter.
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_xml_thinking_teacher_v1_20260914_093608_175508/adapter
+    # Train adapters instead of the full 2B parameter set.
     lora_rank: 16
     lora_alpha: 32
     # Keep PEFT's adapter set within SGLang's LoRA memory-pool support.
@@ -48,14 +61,22 @@ actor_rollout_ref:
       - gate_proj
       - up_proj
       - down_proj
-    # Keep activation checkpointing without CPU activation transfers.
+    # Use available 2B memory to avoid activation recomputation.
+    enable_gradient_checkpointing: false
+    # Keep CPU activation transfers disabled.
     enable_activation_offload: false
     # Compute PPO log-probs and entropy with the memory-efficient fused head.
     use_fused_kernels: true
     fused_kernel_options:
       impl_backend: torch
 
+trainer:
+  resume_mode: auto
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_2b/v1/2gpu/seed0
+
 algorithm:
+  # Apply reference KL in the actor loss only, not a second time in rewards.
+  use_kl_in_reward: false
   rollout_correction:
     # Use rollout_log_probs as old_log_probs and skip a second actor pass.
     bypass_mode: true
