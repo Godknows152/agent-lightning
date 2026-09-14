@@ -11,10 +11,10 @@ defaults:
 
 # Match the 2B profile's sampling scale and selected memory-saving settings.
 variables:
-  NUM_ROLLOUTS: 4
+  NUM_ROLLOUTS: 3
 
 data:
-  train_batch_size: 8
+  train_batch_size: 16
 
 actor_rollout_ref:
   rollout:
@@ -41,10 +41,10 @@ actor_rollout_ref:
       # longer needed for the optimizer and costs a host-device transfer.
       param_offload: false
       optimizer_offload: false
-      entropy_checkpointing: true
+      entropy_checkpointing: false
   model:
-    # Initialize RL from the completed non-thinking XML-format SFT adapter.
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_9b_xml_nothink_v1_20260911_235833_235341/adapter/checkpoint-320
+    # Initialize RL from the completed thinking-enabled XML-format SFT adapter.
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_9b_xml_thinking_teacher_v1_20260912_144045_930722/adapter/checkpoint-300
     # Train adapters instead of the full 9B parameter set.
     lora_rank: 16
     lora_alpha: 32
@@ -67,6 +67,10 @@ actor_rollout_ref:
     use_fused_kernels: true
     fused_kernel_options:
       impl_backend: torch
+
+trainer:
+  resume_mode: auto
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.

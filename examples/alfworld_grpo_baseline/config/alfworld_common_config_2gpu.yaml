@@ -9,6 +9,7 @@ variables:
   NUM_ROLLOUTS: 8
   TOOL_CONFIG: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/alfworld_tool_config.yaml
   SEED: 0
+  PROMPT_VERSION: alfworld_qwen35_v7_compact_xml_history_thinking
 
 algorithm:
   adv_estimator: grpo
@@ -26,9 +27,9 @@ data:
   truncation: error
   return_raw_chat: true
   need_tools_kwargs: true
-  # Default off; model profiles may override (9B off, 2B on).
+  # Enable Qwen3.5 thinking during RL rollout and training.
   apply_chat_template_kwargs:
-    enable_thinking: false
+    enable_thinking: true
   seed: ${variables.SEED}
 
 reward:
