@@ -186,7 +186,7 @@ def test_valid_actions_finish_only_on_done_or_max_steps_and_ignore_long_observat
     assert len(executed) == n
     assert len(data.response_mask) == n * len(CALL)
     assert data.extra_fields['alfworld_terminal_reason'] == ('success' if done_at else 'decision_limit')
-    assert sum(data.tool_rewards) == pytest.approx((1.0 if done_at else 0.0) - 0.1 * max(n - 1, 0))
+    assert sum(data.tool_rewards) == pytest.approx(10.0 if done_at else 0.0)
     assert data.extra_fields['alfworld_valid_tool_call_count'] == n
     assert data.successful_action_history == ['look'] * n
     assert len(data.extra_fields['alfworld_turn_contexts']) == n
@@ -401,16 +401,16 @@ def test_multiple_generated_calls_are_trimmed_and_feedback_precedes_next_generat
 
 
 @pytest.mark.parametrize("actions, expected_rewards, repeat_count", [
-    (["look", "inventory", "look"], [1, 1, 1], 0),
-    (["look", "look", "look"], [1, .9, .9], 2),
-    (["look", "look", "inventory", "inventory", "look"], [1, .9, 1, .9, 1], 2),
-    (["look", "bad", "look", None], [1, -.1, 1, -5], 0),
+    (["look", "inventory", "look"], [1, 1, 1], 1),
+    (["look", "look", "look"], [1, 1, 1], 2),
+    (["look", "look", "inventory", "inventory", "look"], [1, 1, 1, 1, 1], 3),
+    (["look", "bad", "look", None], [1, -.1, 1, -5], 1),
     (["look", "look", "bad", "look", "look", None],
-     [1, .9, -.1, 1, .9, -5], 2),
-    (["go to desk 1", "go to desk 2", "go to desk 1"], [1, 1, 1], 0),
-    (["look"] * 16, [1] + [.9] * 15, 15),
+     [1, 1, -.1, 1, 1, -5], 3),
+    (["go to desk 1", "go to desk 2", "go to desk 1"], [1, 1, 1], 1),
+    (["look"] * 16, [1] * 16, 15),
 ])
-def test_consecutive_action_penalties_are_trajectory_local_and_mutually_exclusive(
+def test_trajectory_action_repeat_counts_are_aggregate_and_deferred(
     actions, expected_rewards, repeat_count
 ):
     loop = make_loop(max_steps=50)
@@ -448,7 +448,7 @@ def test_consecutive_action_penalties_are_trajectory_local_and_mutually_exclusiv
     # A second trajectory may share the same loop/tool instance, never its streak.
     if actions[-1] is not None:
         asyncio.run(step(data, actions[-1]))
-        assert data.tool_rewards[-1] == pytest.approx(.9)
+        assert data.tool_rewards[-1] == pytest.approx(1.0)
     assert other.tool_rewards == [1.0]
 
 

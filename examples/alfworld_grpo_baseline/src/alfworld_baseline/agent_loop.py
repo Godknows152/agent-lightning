@@ -221,11 +221,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         absent/incomplete post-thinking XML; invalid_tool_call means a complete
         but schema-invalid decision or an action rejected by the environment.
         A missing action ends the trajectory with a one-time -5 penalty.
-        Each valid consecutive repeat of an exact command pays -0.1.
-        ``prior_occurrences`` counts preceding executions in the current streak,
-        not across the trajectory. Protocol failures break the streak and only
-        receive their own penalty. Returned penalties are appended by the
-        processing phase.
+        Repeated valid actions are counted across the whole trajectory. The
+        aggregate repeated-action penalty is applied by the final reward
+        function, where successful trajectories can be exempted. Protocol
+        failures receive their own immediate penalties.
         """
         if kind == "no_tool_call":
             count_key = "alfworld_no_tool_call_penalty_count"
@@ -417,23 +416,13 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             # the returned value is appended by the processing phase.
             reward = self._invalid_tool_call_penalty(agent_data)
         elif getattr(agent_data, "data_source", "") == "alfworld" and isinstance(metrics, dict):
+            # Repeated-action penalties are intentionally deferred until the
+            # trajectory reward is computed. This lets reward.py apply the
+            # success gate and avoids subtracting the penalty from each turn.
             action = metrics.get("action")
             if isinstance(action, str) and action:
-                # Compare exact environment commands, not the shared tool name
-                # or a trajectory-wide occurrence table. A -> B -> A is normal.
-                prior = (
-                    getattr(agent_data, "alfworld_action_streak_length", 0)
-                    if action == getattr(agent_data, "alfworld_last_valid_action", None)
-                    else 0
-                )
                 agent_data.alfworld_last_valid_action = action
-                agent_data.alfworld_action_streak_length = prior + 1
-                if prior:
-                    penalty = self._record_alfworld_penalty(
-                        agent_data, "repeated_action", append_reward=False, prior_occurrences=prior
-                    )
-                    # Preserve native environment reward, including terminal success.
-                    reward = float(reward or 0.0) + penalty
+                agent_data.alfworld_action_streak_length = 1
             else:
                 agent_data.alfworld_last_valid_action = None
                 agent_data.alfworld_action_streak_length = 0
@@ -611,11 +600,24 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 extra_fields.get("alfworld_valid_tool_call_count", 0) or 0
             ) + 1
         if reward is not None:
+            # The tool normalizes a successful terminal transition to +10.
+            # Keep this guard for test doubles and alternate tool adapters.
+            if metrics.get("won") and getattr(agent_data, "data_source", "") == "alfworld":
+                reward = 10.0
             agent_data.tool_rewards.append(float(reward))
         action = metrics.get("action")
         if action:
             agent_data.action_history.append(action)
             if not metrics.get("error"):
+                # Count every occurrence after the first one, regardless of
+                # whether it is consecutive. The final reward function applies
+                # -0.1 per count for unsuccessful trajectories only.
+                prior_occurrences = agent_data.successful_action_history.count(action)
+                if prior_occurrences > 0:
+                    extra_fields = agent_data.extra_fields
+                    extra_fields["alfworld_repeated_action_penalty_count"] = int(
+                        extra_fields.get("alfworld_repeated_action_penalty_count", 0) or 0
+                    ) + 1
                 agent_data.successful_action_history.append(action)
         agent_data.tool_calls = []
         return await self._finish_environment_decision(agent_data)

@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT.parent / "image_restoration_multi_agent" / "verl_backend"))
@@ -171,11 +172,27 @@ def test_alfworld_validation_does_not_select_legacy_num_turns():
     assert are_tool_calls is False
 
 
-def test_alfworld_reward_sums_tool_rewards():
+def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():
     from alfworld_baseline.reward import compute_score
 
-    assert compute_score("alfworld", extra_info={"tool_rewards": [0.0, 1.0]}) == 1.0
-    assert compute_score("alfworld", extra_info={"tool_rewards": [-0.1, 1.0]}) == 0.9
+    # Successful trajectories receive +10 and are exempt from repeated-action cost.
+    assert compute_score(
+        "alfworld",
+        extra_info={
+            "tool_rewards": [0.0, 10.0],
+            "alfworld_terminal_reason": "success",
+            "alfworld_repeated_action_penalty_count": 4,
+        },
+    ) == 10.0
+    # Failed trajectories pay -0.1 for every repeated action, once at episode end.
+    assert compute_score(
+        "alfworld",
+        extra_info={
+            "tool_rewards": [0.0, 0.0],
+            "alfworld_terminal_reason": "decision_limit",
+            "alfworld_repeated_action_penalty_count": 3,
+        },
+    ) == pytest.approx(-0.3)
 
 
 def test_invalid_action_is_reported_to_agent_loop_without_tool_level_reward(monkeypatch):

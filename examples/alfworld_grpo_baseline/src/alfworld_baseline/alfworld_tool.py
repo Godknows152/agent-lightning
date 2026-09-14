@@ -136,7 +136,9 @@ class ALFWorldTool(BaseTool):
         won = bool(next_info.get("won", [False])[0])
         truncated = state["steps"] >= int(self.config.get("max_steps", 50)) and not won
         done = bool(done or truncated)
-        reward = float(rewards)
+        # ALFWorld emits 1.0 for a solved task. Keep failures at their native
+        # value, but scale the terminal success signal for RL.
+        reward = 10.0 if won else float(rewards)
         text = f"Observation:\n{observations}\n\nAdmissible actions:\n{chr(10).join(next_info['admissible_commands'][0])}"
         return ToolResponse(text=text), reward, {
             "action": action,
