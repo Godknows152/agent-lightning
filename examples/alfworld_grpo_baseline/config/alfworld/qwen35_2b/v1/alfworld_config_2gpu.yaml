@@ -11,33 +11,45 @@ defaults:
 
 # Match the 2B profile's sampling scale and selected memory-saving settings.
 variables:
-  NUM_ROLLOUTS: 3
+  NUM_ROLLOUTS: 8
 
 data:
   apply_chat_template_kwargs:
     enable_thinking: true
-  train_batch_size: 16
+    avoid_repeated_actions: true
+  train_batch_size: 4
 
 actor_rollout_ref:
   rollout:
+    # Release the SGLang LoRA engine fully while the Actor is updated.
+    force_full_sleep_for_lora: true
+    # Chunk long prompt prefill to reduce rollout peak memory.
+    enable_chunked_prefill: true
     # Preserve token log-probs produced during rollout so old-log-prob
     # recomputation can be bypassed for this experiment.
+    enforce_eager: false
     calculate_log_probs: true
     agent:
-      num_workers: 4
+      num_workers: 8
+  ref:
+    # Use the frozen thinking-mode SFT LoRA as the KL reference policy.
+    use_separate_lora_reference: true
+    log_prob_micro_batch_size_per_gpu: 4
+
   actor:
     calculate_entropy: true
     # Enable KL against the frozen base policy. With LoRA, VERL computes
     # reference log-probs by disabling adapters on the shared actor engine.
     use_kl_loss: true
+    entropy_coeff: 0.06
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
-    ppo_mini_batch_size: 8
+    ppo_mini_batch_size: 4
     # Keep each backward micro-batch small for the standard FSDP training path.
     ppo_micro_batch_size_per_gpu: 4
     # Bound turn-level replay so long ALFWorld histories do not form one
     # oversized forward/backward activation graph.
-    turn_context_chunk_tokens: 32768
+    turn_context_chunk_tokens: 16393
     fsdp_config:
       # LoRA leaves only adapter parameters trainable, so CPU offload is no
       # longer needed for the optimizer and costs a host-device transfer.
@@ -62,7 +74,7 @@ actor_rollout_ref:
       - up_proj
       - down_proj
     # Use available 2B memory to avoid activation recomputation.
-    enable_gradient_checkpointing: false
+    enable_gradient_checkpointing: true
     # Keep CPU activation transfers disabled.
     enable_activation_offload: false
     # Compute PPO log-probs and entropy with the memory-efficient fused head.
@@ -71,6 +83,7 @@ actor_rollout_ref:
       impl_backend: torch
 
 trainer:
+  experiment_name: alfworld_qwen35_2b_prompt_no_repeat_0916
   resume_mode: auto
   default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_2b/v1/2gpu/seed0
 
