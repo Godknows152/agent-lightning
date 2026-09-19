@@ -184,7 +184,7 @@ def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():
             "alfworld_repeated_action_penalty_count": 4,
         },
     ) == 10.0
-    # Failed trajectories pay -0.1 for every repeated action, once at episode end.
+    # Failed trajectories pay -0.1, -0.15, -0.2, once at episode end.
     assert compute_score(
         "alfworld",
         extra_info={
@@ -192,7 +192,21 @@ def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():
             "alfworld_terminal_reason": "decision_limit",
             "alfworld_repeated_action_penalty_count": 3,
         },
-    ) == pytest.approx(-0.3)
+    ) == pytest.approx(-0.45)
+
+
+@pytest.mark.parametrize("repeat_count, penalty", [(0, 0.0), (1, -0.1), (2, -0.25), (3, -0.45), (15, -6.75)])
+def test_alfworld_reward_sums_escalating_repeats_with_other_penalties(repeat_count, penalty):
+    from alfworld_baseline.reward import compute_score
+
+    assert compute_score(
+        "alfworld",
+        extra_info={
+            "tool_rewards": [-0.1, 0.0, -5.0],
+            "alfworld_terminal_reason": "no_tool_call",
+            "alfworld_repeated_action_penalty_count": [repeat_count],
+        },
+    ) == pytest.approx(-5.1 + penalty)
 
 
 def test_invalid_action_is_reported_to_agent_loop_without_tool_level_reward(monkeypatch):

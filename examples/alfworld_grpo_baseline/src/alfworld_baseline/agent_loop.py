@@ -112,6 +112,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                     admissible_actions=actions,
                     history=history,
                     enable_thinking=getattr(self, "_thinking_enabled", True),
+                    avoid_repeated_actions=bool(
+                        getattr(self, "apply_chat_template_kwargs", {}).get("avoid_repeated_actions", False)
+                    ),
                 ),
             }
         ]
@@ -611,7 +614,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             if not metrics.get("error"):
                 # Count every occurrence after the first one, regardless of
                 # whether it is consecutive. The final reward function applies
-                # -0.1 per count for unsuccessful trajectories only.
+                # escalating costs (-0.1, -0.15, ...) for unsuccessful trajectories only.
                 prior_occurrences = agent_data.successful_action_history.count(action)
                 if prior_occurrences > 0:
                     extra_fields = agent_data.extra_fields

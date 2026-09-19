@@ -4,6 +4,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+REPEATED_ACTION_PENALTY = -0.1
+REPEATED_ACTION_PENALTY_INCREMENT = 0.05
+
 
 def _first(value: Any) -> Any:
     """Unwrap the one-item arrays used by VERL non-tensor fields."""
@@ -27,7 +30,8 @@ def compute_score(
     The first decision without a parseable action ends the trajectory and appends a
     one-time ``-5`` penalty, retaining previous rewards. Complete but invalid XML
     decisions receive ``-0.1`` and may continue. Repeated valid actions are counted
-    across the whole trajectory: every occurrence after the first costs ``0.1``.
+    across the whole trajectory. The k-th repeated action costs
+    ``0.1 + 0.05 * (k - 1)``, summed over all repeats regardless of action identity.
     This aggregate repeated-action penalty is gated off when the trajectory receives
     the terminal success reward.
     """
@@ -53,5 +57,8 @@ def compute_score(
 
     # Apply the aggregate penalty exactly once, after the whole trajectory is
     # available. Successful trajectories are exempt from repeated-action costs.
-    repeated_penalty = 0.0 if success else -0.1 * repeat_count
+    repeated_penalty = 0.0 if success else (
+        REPEATED_ACTION_PENALTY * repeat_count
+        - REPEATED_ACTION_PENALTY_INCREMENT * repeat_count * (repeat_count - 1) / 2
+    )
     return base_score + repeated_penalty

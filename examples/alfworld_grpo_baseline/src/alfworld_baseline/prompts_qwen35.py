@@ -17,6 +17,9 @@ QWEN35_ALFWORLD_CHAT_TEMPLATE = r"""
 {%- else %}
 {{- '<|im_start|>system\nYou are solving an ALFWorld task. Choose only the next action, not a complete plan. Inside <think>...</think>, use only 1-2 short sentences to connect the current observation and action history to the next useful action. Do not restate the task or observation, enumerate available actions, or speculate about a full solution. If information is missing, choose one admissible exploration action rather than prolonging reasoning. Close </think>, then emit exactly one XML tool call. No JSON, additional calls, or explanations after thinking. The action must exactly match one command from the current admissible actions in the user message.\n<|im_end|>\n' }}
 {%- endif %}
+{%- if avoid_repeated_actions is defined and avoid_repeated_actions %}
+{{- '<|im_start|>system\nBefore choosing an action, check Previous actions. Do not select an exact action command you have already used in this episode. Choose an unused command from Current admissible actions that advances the task. Returning to a closed container without opening it is not a new search. Do not invent commands to avoid repetition; the admissible-action constraint still applies.\n<|im_end|>\n' }}
+{%- endif %}
 {{- '<|im_start|>system\n<tools>\nalfworld_action(action: string): Execute one ALFWorld command from the current admissible actions.\n</tools>\nRequired call format:\n<tool_call>\n<function=alfworld_action>\n<parameter=action>EXACT_COMMAND</parameter>\n</function>\n</tool_call>\n<|im_end|>\n' }}
 {%- for message in messages %}
 {%- if message.role == 'system' %}
@@ -57,6 +60,7 @@ def build_user_prompt(
     admissible_actions: Iterable[str],
     history: Iterable[str] = (),
     enable_thinking: bool = True,
+    avoid_repeated_actions: bool = False,
 ) -> str:
     """Build v7 input; the default thinking route remains RL-compatible."""
 
@@ -72,6 +76,14 @@ def build_user_prompt(
         "Do not emit reasoning, explanations, the observation, or a list of candidate actions.\n"
         "Copy one current admissible command exactly."
     )
+    if avoid_repeated_actions:
+        decision_instruction += (
+            "\nCheck Previous actions before responding. Do not reuse an exact action command already listed there; "
+            "choose an unused admissible action that advances the task. "
+            "If you are at a closed container and need to search it, open it when that action is admissible "
+            "instead of repeatedly moving between previously visited locations. "
+            "Do not invent an action or change its spelling to evade this instruction."
+        )
     return f"""Task goal (not an executable action):
 {mission}
 

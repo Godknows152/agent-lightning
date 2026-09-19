@@ -440,10 +440,20 @@ def test_trajectory_action_repeat_counts_are_aggregate_and_deferred(
     assert data.extra_fields.get("alfworld_repeated_action_penalty_count", 0) == repeat_count
     assert data.extra_fields.get("alfworld_invalid_tool_call_penalty_count", 0) == actions.count("bad")
     assert data.extra_fields.get("alfworld_no_tool_call_penalty_count", 0) == actions.count(None)
+    from alfworld_baseline.reward import compute_score
+
+    # Mixed commands and invalid decisions do not reset the trajectory-wide escalation.
+    penalties_by_count = {1: -0.1, 2: -0.25, 3: -0.45, 15: -6.75}
+    assert compute_score(
+        "alfworld", extra_info={**data.extra_fields, "tool_rewards": data.tool_rewards}
+    ) == pytest.approx(sum(expected_rewards) + penalties_by_count[repeat_count])
     other = make_data(loop)
     asyncio.run(step(other, "look"))
     assert other.tool_rewards == [1.0]
     assert other.extra_fields.get("alfworld_repeated_action_penalty_count", 0) == 0
+    assert compute_score(
+        "alfworld", extra_info={**other.extra_fields, "tool_rewards": other.tool_rewards}
+    ) == pytest.approx(1.0)
 
     # A second trajectory may share the same loop/tool instance, never its streak.
     if actions[-1] is not None:

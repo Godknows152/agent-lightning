@@ -2,6 +2,17 @@
 
 本目录隔离 ALFWorld 文本环境与 old-VERL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 FSDP offload/梯度检查点和更大的 PPO batch；Qwen3.5-9B 与 Qwen2.5-1.5B 不受本次优化影响。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
 
+## 当前重复动作惩罚（2026-09-18）
+
+本节取代下文历史版本中的“连续重复、每次固定 −0.1”规则。
+同一轨迹中，完整命令在此前有效执行过后再次有效执行，就计为一次重复，不要求连续。
+所有命令共享该轨迹的重复计数；切换命令或非法调用不重置计数，新轨迹从零开始。
+第 k 次重复惩罚为 `−0.1 − 0.05 × (k − 1)`，轨迹结束后累加所有重复惩罚：
+`−0.1 × n − 0.025 × n × (n − 1)`。例如三次重复共扣 `−0.45`，十五次共扣 `−6.75`，不设上限。
+`A → A → B → B → A` 共三次重复，依次扣 `−0.1、−0.15、−0.2`。
+保留成功轨迹豁免重复惩罚的规则；无动作 `−5`、非法动作 `−0.1` 独立累计。
+`alfworld_penalty/repeated_action_count` 仍统计次数，实际重复扣分只在最终奖励中计算一次。
+
 ## Qwen2.5 工具提示词
 
 当前数据集和运行时提示词版本为 `alfworld_qwen25_json_strict_v1`（定义在
