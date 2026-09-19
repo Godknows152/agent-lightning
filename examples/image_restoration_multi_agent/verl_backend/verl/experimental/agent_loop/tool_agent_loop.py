@@ -757,7 +757,8 @@ class ToolAgentLoop(AgentLoopBase):
             # loop is running, but must not leak into the per-worker
             # non-tensor batch: DataProto.concat requires identical key sets
             # across worker outputs.
-            agent_data.extra_fields.pop("_terminate_after_tool", None)
+            if getattr(agent_data, "data_source", "") == "alfworld":
+                agent_data.extra_fields.pop("_terminate_after_tool", None)
 
             # Finalize output
             response_ids = agent_data.prompt_ids[-len(agent_data.response_mask) :]
@@ -821,7 +822,8 @@ class ToolAgentLoop(AgentLoopBase):
             videos=agent_data.video_data,
         )
         agent_data.prompt_ids = prompt_ids
-        agent_data.generation_prompt_ids = list(prompt_ids)
+        if getattr(agent_data, "data_source", "") == "alfworld":
+            agent_data.generation_prompt_ids = list(prompt_ids)
         return AgentState.GENERATING
 
     async def _handle_generating_state(
@@ -837,7 +839,10 @@ class ToolAgentLoop(AgentLoopBase):
         generation_params["max_new_tokens"] = max(0, remaining_generated_tokens)
         generation_params.pop("max_generated_response_length", None)
         with simple_timer("generate_sequences", agent_data.metrics):
-            generation_prompt_ids = getattr(agent_data, "generation_prompt_ids", None) or agent_data.prompt_ids
+            if getattr(agent_data, "data_source", "") == "alfworld":
+                generation_prompt_ids = getattr(agent_data, "generation_prompt_ids", None) or agent_data.prompt_ids
+            else:
+                generation_prompt_ids = agent_data.prompt_ids
             output: TokenOutput = await self.server_manager.generate(
                 request_id=agent_data.request_id,
                 prompt_ids=generation_prompt_ids,
@@ -868,7 +873,9 @@ class ToolAgentLoop(AgentLoopBase):
         )
         agent_data.response_ids = response_ids
         agent_data.prompt_ids += agent_data.response_ids
-        if getattr(agent_data, "generation_prompt_ids", None):
+        if getattr(agent_data, "data_source", "") == "alfworld" and getattr(
+            agent_data, "generation_prompt_ids", None
+        ):
             agent_data.generation_prompt_ids += agent_data.response_ids
         agent_data.response_mask += [1] * len(agent_data.response_ids)
         if response_logprobs:
@@ -889,13 +896,17 @@ class ToolAgentLoop(AgentLoopBase):
         # transition. The parser reads parameter types from these schemas;
         # admissible-action membership is validated separately by the tool.
         active_tools = getattr(agent_data, "_active_tools", self.tools)
-        tools = getattr(agent_data, "_active_tool_schemas", None)
-        if tools is None:
+        if getattr(agent_data, "data_source", "") == "alfworld":
+            tools = getattr(agent_data, "_active_tool_schemas", None)
+            if tools is None:
+                tools = [tool.tool_schema for tool in active_tools.values()]
+            # ``apply_chat_template`` consumes serialized dictionaries, while
+            # the ALFWorld parser accesses typed schema fields.
+            tools = [
+                OpenAIFunctionToolSchema.model_validate(tool) if isinstance(tool, dict) else tool for tool in tools
+            ]
+        else:
             tools = [tool.tool_schema for tool in active_tools.values()]
-        # ``apply_chat_template`` consumes serialized dictionaries, while the
-        # XML parser accesses the typed schema fields. Normalize dynamic
-        # per-turn dictionaries before parsing.
-        tools = [OpenAIFunctionToolSchema.model_validate(tool) if isinstance(tool, dict) else tool for tool in tools]
         _, agent_data.tool_calls = await self.tool_parser.extract_tool_calls(agent_data.response_ids, tools)
 
         # Check soft termination conditions (max turns) AFTER tool call extraction.
@@ -1108,13 +1119,16 @@ class ToolAgentLoop(AgentLoopBase):
         )
 
         agent_data.prompt_ids += response_ids
-        if getattr(agent_data, "generation_prompt_ids", None):
+        if getattr(agent_data, "data_source", "") == "alfworld" and getattr(
+            agent_data, "generation_prompt_ids", None
+        ):
             agent_data.generation_prompt_ids += response_ids
         agent_data.response_mask += [0] * len(response_ids)
         if agent_data.response_logprobs:
             agent_data.response_logprobs += [0.0] * len(response_ids)
         agent_data.user_turns += 1
-        await self._rebuild_generation_prompt_after_tool(agent_data)
+        if getattr(agent_data, "data_source", "") == "alfworld":
+            await self._rebuild_generation_prompt_after_tool(agent_data)
 
         return AgentState.GENERATING
 

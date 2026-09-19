@@ -1036,7 +1036,7 @@ class FSDPEngineWithLMHead(FSDPEngine):
         use_remove_padding = tu.get_non_tensor_data(data=micro_batch, key="use_remove_padding", default=True)
         pad_mode = tu.get_non_tensor_data(data=micro_batch, key="pad_mode", default=DatasetPadMode.NO_PADDING)
         use_fused_kernels = tu.get_non_tensor_data(data=micro_batch, key="use_fused_kernels", default=False)
-        temperature = tu.get_non_tensor_data(data=micro_batch, key="temperature", default=1.0)
+        temperature = micro_batch["temperature"]
         temperature_item = temperature
         if use_fused_kernels:
             assert not isinstance(temperature, torch.Tensor), (

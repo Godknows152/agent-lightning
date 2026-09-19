@@ -58,6 +58,8 @@ actor_rollout_ref:
       agent_loop_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/agent_loops.yaml
       num_workers: 1
       num_gpus_per_worker: 0.0
+      skip_load_balancer_for_single_server: true
+      normalize_non_tensor_batch_keys: true
   actor:
     data_loader_seed: ${variables.SEED}
     ppo_mini_batch_size: 4

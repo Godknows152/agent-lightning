@@ -843,11 +843,15 @@ class TestMetricUnevenDpAggregation(unittest.TestCase):
     """Regression tests for turn-replay metrics with uneven local chunk counts."""
 
     def test_mean_aggregation_accepts_uneven_rank_value_counts(self):
-        rank0 = Metric("mean", [1.0, 2.0, 3.0])
-        rank1 = Metric("mean", [4.0, 5.0])
-        self.assertAlmostEqual(Metric.aggregate_dp([rank0, rank1]), 3.0)
+        rank0 = Metric("mean", 1.0)
+        rank0.extend([2.0, 3.0])
+        rank1 = Metric("mean", 4.0)
+        rank1.extend([5.0])
+        self.assertAlmostEqual(Metric.aggregate_dp([rank0, rank1], allow_uneven=True), 3.25)
 
     def test_sum_aggregation_accepts_uneven_rank_value_counts(self):
-        rank0 = Metric("sum", [1.0, 2.0, 3.0])
-        rank1 = Metric("sum", [4.0, 5.0])
-        self.assertAlmostEqual(Metric.aggregate_dp([rank0, rank1]), 7.5)
+        rank0 = Metric("sum", 1.0)
+        rank0.extend([2.0, 3.0])
+        rank1 = Metric("sum", 4.0)
+        rank1.extend([5.0])
+        self.assertAlmostEqual(Metric.aggregate_dp([rank0, rank1], allow_uneven=True), 7.5)

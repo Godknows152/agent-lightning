@@ -136,11 +136,16 @@ class Metric:
                 return np.max(values)
 
     @classmethod
-    def aggregate_dp(cls, metric_lists: list["Metric"]) -> float:
+    def aggregate_dp(cls, metric_lists: list["Metric"], *, allow_uneven: bool = False) -> float:
         if not metric_lists:
             raise ValueError("Cannot aggregate an empty list of metrics.")
         value_lists = [ml.values for ml in metric_lists]
         if not all(len(ls) == len(value_lists[0]) for ls in value_lists):
+            if not allow_uneven:
+                raise ValueError(
+                    f"All Metric instances must have the same number of values "
+                    f"for dp aggregation: {[len(ls) for ls in value_lists]}"
+                )
             # Turn-context replay can produce a different number of local
             # replay chunks on each DP rank.  The values are therefore not
             # positionally aligned, so aggregate each rank locally first and

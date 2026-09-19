@@ -1484,11 +1484,17 @@ class AgentLoopManager:
             )
 
     async def _init_global_load_balancer(self) -> None:
-        # A single rollout replica has no routing decision to make.  Avoid
-        # creating an extra Ray actor in this common case; besides reducing
-        # overhead, this bypasses a native Ray worker that is unnecessary for
-        # single-server inference.
-        if len(self.server_addresses) == 1:
+        # ALFWorld opts into this optimization for its single-server launch.
+        # Shared VERL workflows keep the historical load-balancer behavior by
+        # default, even when they happen to use one rollout replica.
+        skip_single_server_lb = bool(
+            OmegaConf.select(
+                self.config,
+                "actor_rollout_ref.rollout.agent.skip_load_balancer_for_single_server",
+                default=False,
+            )
+        )
+        if skip_single_server_lb and len(self.server_addresses) == 1:
             self.global_load_balancer = None
             return
 
@@ -1515,17 +1521,23 @@ class AgentLoopManager:
             ]
         )
 
-        # Each worker builds optional extra fields from the trajectories in its
-        # own chunk.  A field that is produced by only some trajectories can
-        # therefore be absent from some worker outputs.  Normalize the worker
-        # schemas before concatenation so DataProto receives one batch-aligned
-        # array for every non-tensor key.
-        all_non_tensor_keys = set().union(*(output.non_tensor_batch.keys() for output in outputs))
-        for output in outputs:
-            batch_size = len(output)
-            for key in all_non_tensor_keys:
-                if key not in output.non_tensor_batch:
-                    output.non_tensor_batch[key] = np.full(batch_size, None, dtype=object)
+        normalize_non_tensor_keys = bool(
+            OmegaConf.select(
+                self.config,
+                "actor_rollout_ref.rollout.agent.normalize_non_tensor_batch_keys",
+                default=False,
+            )
+        )
+        if normalize_non_tensor_keys:
+            # ALFWorld workers can emit task fields only for some trajectories.
+            # Keep this normalization opt-in so other VERL workflows retain
+            # the original DataProto schema contract.
+            all_non_tensor_keys = set().union(*(output.non_tensor_batch.keys() for output in outputs))
+            for output in outputs:
+                batch_size = len(output)
+                for key in all_non_tensor_keys:
+                    if key not in output.non_tensor_batch:
+                        output.non_tensor_batch[key] = np.full(batch_size, None, dtype=object)
         output = DataProto.concat(outputs)
 
         # calculate performance metrics

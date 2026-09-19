@@ -310,7 +310,10 @@ class TrainingWorker(Worker, DistProfilerExtension):
                         # flattn dp and micro batch
                         if isinstance(val, list):
                             output[key] = (
-                                Metric.aggregate_dp(val)
+                                Metric.aggregate_dp(
+                                    val,
+                                    allow_uneven=self.config.turn_context_chunk_tokens is not None,
+                                )
                                 if isinstance(val[0], Metric)
                                 else list(chain.from_iterable(val))
                             )

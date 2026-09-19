@@ -96,6 +96,8 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
       num_workers: 1  # 启动一个 AgentLoop Ray Worker 负责异步轨迹执行
       num_gpus_per_worker: 0.0  # AgentLoop Worker 不申请 GPU，避免占用 GPU0/1 之外的设备
       default_agent_loop: tool_agent  # 使用支持工具调用的默认 Agent 循环实现
+      skip_load_balancer_for_single_server: false  # 保留共享 VERL 的默认负载均衡行为
+      normalize_non_tensor_batch_keys: false  # 保留共享 VERL 的原始 batch schema 约束
 
     multi_turn:  # 配置多轮生成、工具调用和轨迹预算
       enable: true  # 启用多轮 Agent Rollout

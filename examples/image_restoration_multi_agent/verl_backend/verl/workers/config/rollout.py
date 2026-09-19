@@ -121,6 +121,10 @@ class AgentLoopConfig(BaseConfig):
     # Fractional GPU resource to request per AgentLoopWorker via Ray.
     # Must be > 0 so Ray populates CUDA_VISIBLE_DEVICES. Co-locates with rollout servers.
     num_gpus_per_worker: float = 0.0
+    # ALFWorld-only compatibility switches. Keep both disabled by default so
+    # shared VERL workflows retain their historical manager behavior.
+    skip_load_balancer_for_single_server: bool = False
+    normalize_non_tensor_batch_keys: bool = False
 
 
 @dataclass

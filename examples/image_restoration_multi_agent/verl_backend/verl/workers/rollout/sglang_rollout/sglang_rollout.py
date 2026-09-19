@@ -284,9 +284,17 @@ class ServerAdapter(BaseRollout):
             value = peft_config_json.get(key)
             if hasattr(value, "value"):
                 peft_config_json[key] = value.value
-        peft_config_json["target_modules"] = _normalize_sglang_lora_target_modules(
-            peft_config_json.get("target_modules")
-        )
+        if os.environ.get("ALFWORLD_MODEL_PROFILE"):
+            # The compatibility conversion belongs to the isolated ALFWorld
+            # launch path. Other VERL workflows retain the original PEFT
+            # serialization behavior.
+            peft_config_json["target_modules"] = _normalize_sglang_lora_target_modules(
+                peft_config_json.get("target_modules")
+            )
+        else:
+            target_modules = peft_config_json.get("target_modules")
+            if target_modules is not None and not isinstance(target_modules, list):
+                peft_config_json["target_modules"] = list(target_modules)
 
         # lora weights
         processed_weights: dict[str, torch.Tensor] = {

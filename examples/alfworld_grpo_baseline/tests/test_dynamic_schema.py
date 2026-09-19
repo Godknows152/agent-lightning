@@ -173,4 +173,6 @@ def test_qwen35_9b_lora_targets_are_supported_by_sglang_dynamic_loading():
         "up_proj",
         "down_proj",
     ]
+    assert config.actor_rollout_ref.rollout.agent.skip_load_balancer_for_single_server is True
+    assert config.actor_rollout_ref.rollout.agent.normalize_non_tensor_batch_keys is True
     assert config.actor_rollout_ref.model.enable_activation_offload is False
