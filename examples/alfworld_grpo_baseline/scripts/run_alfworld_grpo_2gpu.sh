@@ -158,6 +158,18 @@ if [[ "${RUN_KIND}" == "smoke" ]]; then
   EXPERIMENT_NAME="alfworld_${MODEL_PROFILE}_v1_smoke_seed${SEED}"
 elif [[ "${RUN_KIND}" == "pilot" ]]; then
   EXPERIMENT_NAME="alfworld_${MODEL_PROFILE}_v1_pilot_seed${SEED}"
+else
+  # Honor an explicit versioned experiment name for full/resumed runs.
+  # Smoke/pilot launches retain their isolated names; other profiles keep
+  # the existing model/seed default unless they explicitly set a name.
+  EXPERIMENT_NAME="$("${PYTHON_BIN}" - "${CONFIG_PATH}/${CONFIG_NAME}.yaml" "${EXPERIMENT_NAME}" <<'PYNAME'
+import sys
+from omegaconf import OmegaConf
+
+config = OmegaConf.load(sys.argv[1])
+print(OmegaConf.select(config, "trainer.experiment_name") or sys.argv[2])
+PYNAME
+)"
 fi
 
 for override in "$@"; do
@@ -178,6 +190,15 @@ overrides=(
   "trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=${LOG_DIR}"
   "variables.SEED=${SEED}"
 )
+# Resolve the published checkpoint at each launch instead of pinning an old step.
+# Its marker is consumed by Tracking with resume="must" and the original run ID.
+if [[ "${RUN_KIND}" == "full" && "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
+  RESUME_CKPT="$("${PYTHON_BIN}" -m alfworld_baseline.resume "${OUTPUT_DIR}" "${EXPERIMENT_NAME}")"
+  if [[ -n "${RESUME_CKPT}" ]]; then
+    overrides+=("trainer.resume_mode=resume_path" "trainer.resume_from_path=${RESUME_CKPT}")
+    echo "Resuming checkpoint: ${RESUME_CKPT}; preserving the original SwanLab run."
+  fi
+fi
 if [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]]; then
   overrides+=(
     "variables.NUM_ROLLOUTS=2"
