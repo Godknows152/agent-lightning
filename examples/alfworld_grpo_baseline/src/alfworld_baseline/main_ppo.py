@@ -11,7 +11,7 @@ from alfworld_baseline.ray_startup import install_ray_agent_port_guard
 assert_native_verl()
 from verl.trainer import main_ppo as _base_main
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
-from verl.utils.config import validate_config
+from verl.utils.config import omega_conf_to_dataclass, validate_config
 from verl.utils.device import auto_set_device
 from verl.utils.import_utils import load_class_from_fqn
 from verl.utils.logging_utils import configure_verl_logging
@@ -93,6 +93,8 @@ def main(config):
     from alfworld_baseline.resume import validate_native_resume
     validate_native_step_config(config)
     configure_environment_driven_rollout(config)
+    # Validate the effective config, including CLI overrides, before starting Ray.
+    omega_conf_to_dataclass(config.actor_rollout_ref.rollout)
     validate_native_resume(config)
     auto_set_device(config)
     validate_config(config, use_reference_policy=need_reference_policy(config), use_critic=need_critic(config))

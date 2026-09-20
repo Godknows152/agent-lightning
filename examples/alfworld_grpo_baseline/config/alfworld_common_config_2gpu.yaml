@@ -49,13 +49,11 @@ actor_rollout_ref:
       format: ${variables.MULTI_TURN_FORMAT}
       max_user_turns: null
       max_assistant_turns: null
-      max_generated_response_length: null
       tool_config_path: ${variables.TOOL_CONFIG}
     agent:
       default_agent_loop: alfworld_tool_agent
       agent_loop_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/agent_loops.yaml
       num_workers: 1
-      num_gpus_per_worker: 0.0
   actor:
     loss_agg_mode: token-mean
     data_loader_seed: ${variables.SEED}

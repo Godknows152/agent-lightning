@@ -43,7 +43,6 @@ def configure_environment_driven_rollout(config: DictConfig) -> ALFWorldDecision
     with open_dict(config):
         config.data.max_response_length = budget.response_capacity
         rollout.response_length = budget.response_capacity
-        rollout.multi_turn.max_generated_response_length = None
         rollout.multi_turn.max_assistant_turns = None
         rollout.multi_turn.max_user_turns = None
     return budget

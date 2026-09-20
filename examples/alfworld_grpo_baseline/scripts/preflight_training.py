@@ -8,7 +8,7 @@ from pathlib import Path
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 from verl.trainer.ppo.utils import need_critic, need_reference_policy
-from verl.utils.config import validate_config
+from verl.utils.config import omega_conf_to_dataclass, validate_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,6 +65,8 @@ def main() -> int:
     validate_native_step_config(cfg)
     budget = configure_environment_driven_rollout(cfg)
     assert budget is not None
+    # Match the worker's recursive schema validation before allocating GPUs.
+    omega_conf_to_dataclass(cfg.actor_rollout_ref.rollout)
     print(f"native_trainer={get_trainer_cls(cfg.trainer.v1.trainer_mode).__name__} manager={AgentLoopManagerTQ.__name__}")
     assert cfg.trainer.logger == ["console", "swanlab"]
     assert cfg.trainer.enable_penalty_logging is False

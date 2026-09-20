@@ -62,6 +62,18 @@ if [[ "${1:-}" == "--smoke" ]]; then RUN_KIND="smoke"; shift; fi
 if [[ "${1:-}" == "--pilot" ]]; then RUN_KIND="pilot"; shift; fi
 
 OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/v1/2gpu/seed${SEED}}"
+# Use the 2B experiment's configured output for full runs and preflight.
+# Explicit environment overrides and smoke/pilot directories retain priority.
+if [[ "${MODEL_PROFILE}" == "qwen35_2b" && ( "${RUN_KIND}" == "full" || "${RUN_KIND}" == "preflight" ) && -z "${ALFWORLD_OUTPUT_DIR:-}" ]]; then
+  OUTPUT_DIR="$("${PYTHON_BIN}" - "${CONFIG_PATH}/${CONFIG_NAME}.yaml" <<'PYOUTPUT'
+import sys
+from omegaconf import OmegaConf
+
+config = OmegaConf.load(sys.argv[1])
+print(config.trainer.default_local_dir)
+PYOUTPUT
+)"
+fi
 LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/v1/2gpu/seed${SEED}}"
 SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
 SWANLAB_MODE="${ALFWORLD_SWANLAB_MODE:-cloud}"

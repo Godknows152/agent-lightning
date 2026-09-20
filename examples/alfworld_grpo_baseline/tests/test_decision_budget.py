@@ -281,6 +281,8 @@ def test_invalid_budget_rejected(key, value):
 
 @pytest.mark.parametrize('profile,expected_steps', [('qwen35_2b', 50), ('qwen35_9b', 50)])
 def test_composed_config_uses_native_multiturn_storage(profile, expected_steps):
+    from verl.utils.config import omega_conf_to_dataclass
+
     path = ROOT / 'config' / 'alfworld' / profile / 'v1'
     with initialize_config_dir(config_dir=str(path), version_base=None):
         config = compose(config_name='alfworld_config_2gpu')
@@ -291,7 +293,11 @@ def test_composed_config_uses_native_multiturn_storage(profile, expected_steps):
     assert config.actor_rollout_ref.rollout.multi_turn.max_assistant_turns is None
     assert config.data.max_response_length == 768
     assert config.actor_rollout_ref.rollout.response_length == 768
-    assert config.actor_rollout_ref.rollout.multi_turn.max_generated_response_length is None
+    # Reproduce worker initialization: legacy keys must not reach native schemas.
+    rollout = omega_conf_to_dataclass(config.actor_rollout_ref.rollout)
+    assert rollout.response_length == budget.response_capacity
+    assert rollout.multi_turn.max_assistant_turns is None
+    assert rollout.agent.default_agent_loop == 'alfworld_tool_agent'
 
 
 def test_storage_resizes_when_tool_budget_changes(tmp_path):

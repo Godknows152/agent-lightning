@@ -78,9 +78,9 @@ actor_rollout_ref:
       impl_backend: torch
 
 trainer:
-  experiment_name: alfworld_qwen35_2b_prompt_no_repeat_0916
+  experiment_name: qwen3.5_2B_0920
   resume_mode: auto
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_2b/v1/2gpu/seed0
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.

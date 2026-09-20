@@ -72,6 +72,20 @@ def test_rejects_legacy_trainer_before_dispatch():
         entry.main.__wrapped__(cfg)
 
 
+@pytest.mark.parametrize('key,value', [
+    ('multi_turn.max_generated_response_length', None),
+    ('agent.num_gpus_per_worker', 0.0),
+])
+def test_rejects_unsupported_rollout_fields_before_ray_dispatch(monkeypatch, key, value):
+    from hydra.errors import InstantiationException
+
+    cfg = config_for('qwen35_2b')
+    OmegaConf.update(cfg, f'actor_rollout_ref.rollout.{key}', value, force_add=True)
+    monkeypatch.setattr(entry._base_main, 'run_ppo', lambda *args, **kwargs: pytest.fail('Ray was started'))
+    with pytest.raises(InstantiationException, match=key.rsplit('.', 1)[-1]):
+        entry.main.__wrapped__(cfg)
+
+
 def test_metrics_read_v1_extra_fields_and_exclude_padding(monkeypatch):
     calls = []
     rows = np.array([
