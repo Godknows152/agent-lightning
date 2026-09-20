@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from typing import Optional
 
-SUPPORTED_SCHEDULES = frozenset({"constant", "wsd_cosine"})
+SUPPORTED_SCHEDULES = frozenset({"constant", "delayed_constant", "wsd_cosine"})
 
 
 def get_first_token_entropy_coeff(
@@ -15,6 +15,7 @@ def get_first_token_entropy_coeff(
     start: float,
     end: Optional[float] = None,
     schedule: str = "constant",
+    start_ratio: float = 0.0,
     ramp_ratio: float = 0.05,
     stable_end_ratio: float = 0.20,
     decay_end_ratio: float = 0.85,
@@ -24,7 +25,9 @@ def get_first_token_entropy_coeff(
     ``wsd_cosine`` follows a short ramp, a high-exploration stable phase, and
     a half-cosine decay to ``end``. Ratios are measured against the complete
     training run, so checkpoint resumes continue at the same schedule point.
-    ``constant`` preserves the legacy fixed-coefficient behavior.
+    ``constant`` preserves the legacy fixed-coefficient behavior.  The
+    ``delayed_constant`` schedule keeps the coefficient at zero until
+    ``start_ratio`` progress, then enables ``start`` and keeps it fixed.
     """
 
     if not isinstance(step, int):
@@ -36,6 +39,7 @@ def get_first_token_entropy_coeff(
 
     for name, value in (
         ("start", start),
+        ("start_ratio", start_ratio),
         ("ramp_ratio", ramp_ratio),
         ("stable_end_ratio", stable_end_ratio),
         ("decay_end_ratio", decay_end_ratio),
@@ -44,6 +48,8 @@ def get_first_token_entropy_coeff(
             raise ValueError(f"{name} must be finite")
     if start < 0:
         raise ValueError("start must be non-negative")
+    if not 0.0 <= start_ratio <= 1.0:
+        raise ValueError("start_ratio must be between 0 and 1")
 
     resolved_end = start if end is None else float(end)
     if not math.isfinite(resolved_end) or resolved_end < 0:
@@ -52,11 +58,17 @@ def get_first_token_entropy_coeff(
         raise ValueError("end must not exceed start for wsd_cosine")
     if not 0.0 <= ramp_ratio <= stable_end_ratio <= decay_end_ratio <= 1.0:
         raise ValueError("schedule ratios must satisfy 0 <= ramp_ratio <= stable_end_ratio <= decay_end_ratio <= 1")
-    if schedule == "constant" or total_steps == 1:
+    if schedule == "constant":
         return float(start)
+
+    if total_steps == 1:
+        return float(start) if schedule != "delayed_constant" or start_ratio <= 0.0 else 0.0
 
     bounded_step = min(max(step, 1), total_steps)
     progress = (bounded_step - 1) / float(total_steps - 1)
+
+    if schedule == "delayed_constant":
+        return float(start) if progress >= start_ratio else 0.0
 
     if ramp_ratio > 0.0 and progress < ramp_ratio:
         return float(start * progress / ramp_ratio)

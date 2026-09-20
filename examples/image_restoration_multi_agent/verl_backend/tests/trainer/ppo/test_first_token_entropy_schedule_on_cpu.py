@@ -18,6 +18,20 @@ def test_constant_schedule_preserves_legacy_coefficient() -> None:
     assert values == [pytest.approx(0.003)] * 4
 
 
+def test_delayed_constant_schedule_starts_at_threshold_and_stays_fixed() -> None:
+    kwargs = {
+        "total_steps": 101,
+        "start": 0.008,
+        "schedule": "delayed_constant",
+        "start_ratio": 0.4,
+    }
+
+    assert get_first_token_entropy_coeff(step=1, **kwargs) == pytest.approx(0.0)
+    assert get_first_token_entropy_coeff(step=40, **kwargs) == pytest.approx(0.0)
+    assert get_first_token_entropy_coeff(step=41, **kwargs) == pytest.approx(0.008)
+    assert get_first_token_entropy_coeff(step=101, **kwargs) == pytest.approx(0.008)
+
+
 def test_wsd_cosine_schedule_has_ramp_stable_decay_and_floor() -> None:
     kwargs = {
         "total_steps": 101,

@@ -103,11 +103,14 @@ decision_point_first_token_entropy_min_pure_image_reward: 0.0
 # Maximum repeated-action occurrences allowed in quality_validity and reverse_quality_validity modes
 decision_point_first_token_entropy_max_repeated_actions: 1
 
-# Schedule for the first-token entropy coefficient: constant or wsd_cosine
+# Schedule for the first-token entropy coefficient: constant, delayed_constant, or wsd_cosine
 decision_point_first_token_entropy_schedule: constant
 
 # Final coefficient used by the wsd_cosine schedule; null preserves the starting value
 decision_point_first_token_entropy_coeff_end: null
+
+# Progress threshold at which delayed_constant enables the coefficient
+decision_point_first_token_entropy_start_ratio: 0.0
 
 # Fraction of total training steps used for the initial coefficient ramp
 decision_point_first_token_entropy_ramp_ratio: 0.05

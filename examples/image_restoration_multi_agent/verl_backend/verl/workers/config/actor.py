@@ -139,9 +139,11 @@ class ActorConfig(BaseConfig):
         decision_point_first_token_entropy_max_repeated_actions (int): Maximum allowed repeated restoration-action
             occurrences when ``quality_validity`` gating is enabled.
         decision_point_first_token_entropy_schedule (str): Schedule for the first-token entropy coefficient.
-            ``constant`` preserves fixed-coefficient behavior; ``wsd_cosine`` provides a warmup-stable-decay schedule.
+            ``constant`` preserves fixed-coefficient behavior; ``delayed_constant`` enables it after a
+            configured progress threshold; ``wsd_cosine`` provides a warmup-stable-decay schedule.
         decision_point_first_token_entropy_coeff_end (Optional[float]): Final coefficient for ``wsd_cosine``.
             If None, the schedule ends at its starting coefficient.
+        decision_point_first_token_entropy_start_ratio (float): Progress threshold used by ``delayed_constant``.
         decision_point_first_token_entropy_ramp_ratio (float): Fraction of training used to ramp up the coefficient.
         decision_point_first_token_entropy_stable_end_ratio (float): Progress at which the stable phase ends.
         decision_point_first_token_entropy_decay_end_ratio (float): Progress at which cosine decay ends.
@@ -200,6 +202,7 @@ class ActorConfig(BaseConfig):
     decision_point_first_token_entropy_max_repeated_actions: int = 1
     decision_point_first_token_entropy_schedule: str = "constant"
     decision_point_first_token_entropy_coeff_end: Optional[float] = None
+    decision_point_first_token_entropy_start_ratio: float = 0.0
     decision_point_first_token_entropy_ramp_ratio: float = 0.05
     decision_point_first_token_entropy_stable_end_ratio: float = 0.20
     decision_point_first_token_entropy_decay_end_ratio: float = 0.85
@@ -277,10 +280,14 @@ class ActorConfig(BaseConfig):
             raise ValueError("decision_point_first_token_entropy_min_pure_image_reward must be finite")
         if self.decision_point_first_token_entropy_max_repeated_actions < 0:
             raise ValueError("decision_point_first_token_entropy_max_repeated_actions must be non-negative")
-        if self.decision_point_first_token_entropy_schedule not in {"constant", "wsd_cosine"}:
+        if self.decision_point_first_token_entropy_schedule not in {"constant", "delayed_constant", "wsd_cosine"}:
             raise ValueError(
-                "decision_point_first_token_entropy_schedule must be 'constant' or 'wsd_cosine'"
+                "decision_point_first_token_entropy_schedule must be 'constant', 'delayed_constant', or 'wsd_cosine'"
             )
+        if not math.isfinite(self.decision_point_first_token_entropy_start_ratio):
+            raise ValueError("decision_point_first_token_entropy_start_ratio must be finite")
+        if not 0.0 <= self.decision_point_first_token_entropy_start_ratio <= 1.0:
+            raise ValueError("decision_point_first_token_entropy_start_ratio must be between 0 and 1")
         if self.decision_point_first_token_entropy_coeff_end is not None:
             if self.decision_point_first_token_entropy_coeff_end < 0:
                 raise ValueError("decision_point_first_token_entropy_coeff_end must be non-negative")

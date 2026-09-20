@@ -67,7 +67,7 @@ actor_rollout_ref:  # 配置训练 Actor、推理 Rollout 服务和参考策略
       param_offload: true  # 非计算阶段将 FSDP 参数卸载到 CPU 以节省 GPU 显存
       optimizer_offload: true  # 将优化器状态卸载到 CPU 以节省 GPU 显存
     ppo_mini_batch_size: 8  # 每次 PPO 更新使用的全局小批次大小
-    ppo_micro_batch_size_per_gpu: 1  # 每张 GPU 单次前后向计算处理的样本数
+    ppo_micro_batch_size_per_gpu: 2  # 每张 GPU 单次前后向计算处理的样本数
 
   rollout:  # 配置用于生成训练轨迹的推理服务
     name: sglang  # 使用 SGLang 作为异步 Rollout 推理后端

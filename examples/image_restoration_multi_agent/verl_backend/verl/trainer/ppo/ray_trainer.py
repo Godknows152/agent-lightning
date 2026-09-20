@@ -1952,6 +1952,7 @@ class RayPPOTrainer:
             start=float(actor_config.decision_point_first_token_entropy_coeff),
             end=getattr(actor_config, "decision_point_first_token_entropy_coeff_end", None),
             schedule=getattr(actor_config, "decision_point_first_token_entropy_schedule", "constant"),
+            start_ratio=float(getattr(actor_config, "decision_point_first_token_entropy_start_ratio", 0.0)),
             ramp_ratio=float(getattr(actor_config, "decision_point_first_token_entropy_ramp_ratio", 0.05)),
             stable_end_ratio=float(
                 getattr(actor_config, "decision_point_first_token_entropy_stable_end_ratio", 0.20)

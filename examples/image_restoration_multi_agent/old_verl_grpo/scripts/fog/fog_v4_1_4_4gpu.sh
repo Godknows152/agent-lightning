@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Old-verl GRPO launcher for fog expert (v4.1.4)
-# v4.1.4: Quality-and-validity-gated legal-action first-token entropy with cosine decay (0.008 -> 0.0008).
+# v4.1.4: Quality-validity-gated first-token entropy, enabled at 40% and held at 0.008.
 set -euo pipefail
 
 EXPERT="fog"
@@ -10,7 +10,7 @@ CONFIG_VERSION="v4.1.4"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 OLD_VERL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}/${EXPERT}_config_4gpu.yaml"
-export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/4gpu}"
+export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/4gpu/0.4熵正则}"
 LOG_DIR="${OLD_VERL_LOG_DIR}"
 
 mkdir -p "${LOG_DIR}"
