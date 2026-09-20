@@ -59,7 +59,7 @@ def test_xml_classification_and_penalty(output, status, reason):
     assert data.extra_fields.get('alfworld_repeated_action_penalty_count', 0) == 0
     assert data.extra_fields['alfworld_last_decision_reason'] == ('executed' if status == 'valid' else reason)
     assert data.extra_fields['alfworld_decision_steps'] == 1
-    assert data.extra_fields['alfworld_turn_contexts'][0]['response_ids'] == loop.tokenizer.encode(output)
+    assert data.step_outputs[0].response_ids == loop.tokenizer.encode(output)
     assert data.response_logprobs == [-0.1] * len(output)
     assert data.response_mask == [1] * len(output)
     if status == 'invalid_action':
@@ -92,8 +92,8 @@ def test_xml_repeat_compares_command_and_schema_failure_resets_streak():
             assert await loop._process_environment_decision(data) == AgentState.GENERATING
 
     asyncio.run(run())
-    assert data.tool_rewards == [0, 0, 0, -.1, -.1, 0, -.1, 0]
-    assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 1
+    assert data.tool_rewards == [0, 0, 0, 0, -.1, 0, -.1, 0]
+    assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 4
     assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 2
     assert data.extra_fields['alfworld_valid_tool_call_count'] == 6
 

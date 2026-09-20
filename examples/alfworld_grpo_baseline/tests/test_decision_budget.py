@@ -43,12 +43,13 @@ class Parser:
 def make_loop(max_steps=50, per_turn=256):
     loop = ALFWorldToolAgentLoop.__new__(ALFWorldToolAgentLoop)
     loop._environment_budget = ALFWorldDecisionBudget(max_steps, per_turn)
-    loop.response_length = max_steps * per_turn
+    loop.response_length = per_turn
     # These legacy cutoffs must not influence the opted-in path.
     loop.max_generated_response_length = 1
     loop.max_assistant_turns = 1
     loop.max_user_turns = 1
     loop._thinking_enabled = False
+    loop.processor = None
     loop.tokenizer = Tokenizer()
     loop.tool_parser = Parser()
     loop.tool_schemas = [ALFWorldToolRegistry(('look',)).build_tool_schema()]
@@ -61,7 +62,13 @@ def make_loop(max_steps=50, per_turn=256):
 
 
 def make_data(loop):
-    data = AgentData([], None, None, {}, 'test', {})
+    data = AgentData(
+        messages=[], image_data=None, video_data=None, audio_data=None,
+        mm_processor_kwargs={}, metrics={}, request_id='test', tools_kwargs={},
+    )
+    data.total_tool_calls = 0
+    data.action_history = []
+    data.successful_action_history = []
     data.data_source = 'alfworld'
     data.prompt_ids = [900, 901]
     data.generation_prompt_ids = [900, 901]
@@ -88,7 +95,7 @@ def test_no_action_ends_run_after_one_generation_retains_tokens_and_releases_too
     # The first missing action terminates, but its generated tokens remain trainable.
     set_server(loop, 'x' * 256)
     loop.process_vision_info = AsyncMock(return_value={})
-    loop._release_tool_instances = AsyncMock()
+    loop._release_native_tool_instances = AsyncMock()
 
     async def initial(data):
         data.alfworld_mission = 'finish task'
@@ -97,12 +104,15 @@ def test_no_action_ends_run_after_one_generation_retains_tokens_and_releases_too
         data._active_tool_schemas = loop.tool_schemas
 
     loop._set_authoritative_initial_prompt = initial
-    output = asyncio.run(loop.run({}, raw_prompt=[{'role': 'user', 'content': 'task'}], data_source='alfworld'))
+    outputs = asyncio.run(loop.run({}, raw_prompt=[{'role': 'user', 'content': 'task'}], data_source='alfworld'))
+    assert len(outputs) == 1
+    output = outputs[0]
     assert len(output.response_ids) == 256
     assert len(output.response_logprobs) == 256
     assert output.response_mask == [1] * 256
-    assert len(output.extra_fields['alfworld_turn_contexts']) == 1
-    assert output.extra_fields['alfworld_turn_contexts'][-1]['response_offset'] == 0
+    assert 'alfworld_turn_contexts' not in output.extra_fields
+    assert output.extra_fields['alfworld_is_final_step']
+    assert output.reward_score == -5.0
     assert output.extra_fields['alfworld_decision_steps'] == 1
     assert output.extra_fields['alfworld_terminal_reason'] == 'no_tool_call'
     assert 'penalty_records' not in output.extra_fields
@@ -115,26 +125,11 @@ def test_no_action_ends_run_after_one_generation_retains_tokens_and_releases_too
     for call in loop.server_manager.generate.await_args_list:
         assert call.kwargs['sampling_params']['max_new_tokens'] == 256
         assert call.kwargs['prompt_ids'] == [900, 901, 902]
-    loop._release_tool_instances.assert_awaited_once()
-
-    # Verify packed model-only loss slots still replay every real prompt,
-    # including the final token of the failed decision.
-    import torch
-    from tensordict import TensorDict
-    from verl.utils import tensordict_utils as tu
-    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
-
-    batch = TensorDict({}, batch_size=[1])
-    batch["input_ids"] = torch.nested.as_nested_tensor(
-        [torch.tensor(output.prompt_ids + output.response_ids)], layout=torch.jagged
-    )
-    batch["loss_mask"] = torch.ones((1, 256))
-    batch["temperature"] = torch.tensor([1.0])
-    tu.assign_non_tensor(batch, alfworld_turn_contexts=[output.extra_fields["alfworld_turn_contexts"]])
-    expanded, source, target = expand_turn_contexts(batch)
-    assert len(expanded["input_ids"].unbind()) == 1
-    assert len(source) == len(target) == 256
-    assert target[-1].item() == len(output.prompt_ids) + 256 - 2
+    assert loop._release_native_tool_instances.await_count >= 1
+    row = output.as_dict()
+    assert row['responses'].tolist() == output.response_ids
+    assert row['rm_scores'][-1] == -5.0
+    assert row['response_mask'].sum() == 256
 
 
 @pytest.mark.parametrize('text', ['x' * 256, '<tool_call>' + 'x' * 245])
@@ -184,12 +179,12 @@ def test_valid_actions_finish_only_on_done_or_max_steps_and_ignore_long_observat
     asyncio.run(run())
     n = done_at or 3
     assert len(executed) == n
-    assert len(data.response_mask) == n * len(CALL)
+    assert sum(len(out.response_mask) for out in data.step_outputs) == n * len(CALL)
     assert data.extra_fields['alfworld_terminal_reason'] == ('success' if done_at else 'decision_limit')
     assert sum(data.tool_rewards) == pytest.approx(10.0 if done_at else 0.0)
     assert data.extra_fields['alfworld_valid_tool_call_count'] == n
     assert data.successful_action_history == ['look'] * n
-    assert len(data.extra_fields['alfworld_turn_contexts']) == n
+    assert len(data.step_outputs) == n
 
 
 @pytest.mark.parametrize('name,args', [
@@ -285,18 +280,18 @@ def test_invalid_budget_rejected(key, value):
 
 
 @pytest.mark.parametrize('profile,expected_steps', [('qwen35_2b', 50), ('qwen35_9b', 50)])
-def test_composed_config_selects_thinking_and_derives_storage_from_shared_tool_budget(profile, expected_steps):
+def test_composed_config_uses_native_multiturn_storage(profile, expected_steps):
     path = ROOT / 'config' / 'alfworld' / profile / 'v1'
     with initialize_config_dir(config_dir=str(path), version_base=None):
         config = compose(config_name='alfworld_config_2gpu')
     budget = configure_environment_driven_rollout(config)
-    assert config.data.apply_chat_template_kwargs.enable_thinking is (profile == "qwen35_2b")
+    assert config.data.apply_chat_template_kwargs.enable_thinking is True
     assert config.trainer.enable_penalty_logging is False
-    assert budget == ALFWorldDecisionBudget(expected_steps, 768)
-    assert config.data.max_response_length == expected_steps * 768
-    assert config.actor_rollout_ref.rollout.response_length == expected_steps * 768
-    assert config.actor_rollout_ref.rollout.multi_turn.max_generated_response_length is None
+    assert budget.max_steps == expected_steps
     assert config.actor_rollout_ref.rollout.multi_turn.max_assistant_turns is None
+    assert config.data.max_response_length == 768
+    assert config.actor_rollout_ref.rollout.response_length == 768
+    assert config.actor_rollout_ref.rollout.multi_turn.max_generated_response_length is None
 
 
 def test_storage_resizes_when_tool_budget_changes(tmp_path):
@@ -312,9 +307,9 @@ def test_storage_resizes_when_tool_budget_changes(tmp_path):
             'rollout': {'multi_turn': {'tool_config_path': str(tool_path)}},
         },
     })
-    assert configure_environment_driven_rollout(config).response_capacity == 861
-    assert config.data.max_response_length == 861
-    assert config.actor_rollout_ref.rollout.response_length == 861
+    assert configure_environment_driven_rollout(config).response_capacity == 123
+    assert config.data.max_response_length == 123
+    assert config.actor_rollout_ref.rollout.response_length == 123
 
 
 def test_terminal_metrics_distinguish_environment_done_and_max_steps():
@@ -331,17 +326,15 @@ def test_terminal_metrics_distinguish_environment_done_and_max_steps():
 
 
 def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
-    from verl.experimental.agent_loop.agent_loop import _GenerationToolPhaseCoordinator
 
     async def run():
-        coordinator = _GenerationToolPhaseCoordinator(2)
         jobs = []
         for index in range(2):
             loop = make_loop(max_steps=2)
             # One trajectory exits early; the other continues through invalid calls.
             set_server(loop, "no call" if index == 0 else CALL.replace("alfworld_action", "unknown_tool"))
             loop.process_vision_info = AsyncMock(return_value={})
-            loop._release_tool_instances = AsyncMock()
+            loop._release_native_tool_instances = AsyncMock()
 
             async def initial(data):
                 data.alfworld_mission = "task"
@@ -351,20 +344,20 @@ def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
             loop._set_authoritative_initial_prompt = initial
             jobs.append(loop.run(
                 {}, raw_prompt=[{"role": "user", "content": "task"}],
-                data_source="alfworld", phase_coordinator=coordinator,
+                data_source="alfworld",
             ))
         return await asyncio.wait_for(asyncio.gather(*jobs), timeout=3)
 
     outputs = asyncio.run(run())
-    assert [out.extra_fields["alfworld_decision_steps"] for out in outputs] == [1, 2]
-    assert [out.extra_fields["alfworld_terminal_reason"] for out in outputs] == ["no_tool_call", "decision_limit"]
+    assert [out[-1].extra_fields["alfworld_decision_steps"] for out in outputs] == [1, 2]
+    assert [out[-1].extra_fields["alfworld_terminal_reason"] for out in outputs] == ["no_tool_call", "decision_limit"]
 
 
-def test_multiple_generated_calls_are_trimmed_and_feedback_precedes_next_generation():
+def test_generated_tokens_preserved_and_feedback_precedes_next_generation():
     """Flattened rollout output is not evidence of concurrent tool execution."""
     loop = make_loop(max_steps=2)
     data = make_data(loop)
-    set_server(loop, CALL + CALL)
+    set_server(loop, CALL)
     events = []
     original_generate = loop.server_manager.generate
 
@@ -396,8 +389,8 @@ def test_multiple_generated_calls_are_trimmed_and_feedback_precedes_next_generat
     asyncio.run(run())
     assert events == ["generate", "tool", "generate", "tool"]
     assert data.total_tool_calls == 2
-    assert len(data.extra_fields["alfworld_turn_contexts"]) == 2
-    assert loop.tokenizer.decode(data.prompt_ids[2:]) == CALL + CALL
+    assert len(data.step_outputs) == 2
+    assert [loop.tokenizer.decode(out.response_ids) for out in data.step_outputs] == [CALL, CALL]
 
 
 @pytest.mark.parametrize("actions, expected_rewards, repeat_count", [
@@ -475,7 +468,8 @@ def test_pending_state_resets_consecutive_action_streak(monkeypatch):
     assert data.alfworld_last_valid_action is None
     assert data.alfworld_action_streak_length == 0
     loop._set_authoritative_initial_prompt.assert_awaited_once_with(data)
-    parent_handler.assert_awaited_once_with(data, {})
+    parent_handler.assert_not_awaited()
+    assert data.generation_prompt_ids == [900, 901, 902]
 
 
 @pytest.mark.parametrize("prior", [1, 2, 4, 5, 6, 15])

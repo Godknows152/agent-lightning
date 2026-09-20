@@ -42,7 +42,7 @@ def main() -> int:
     print(f"cxx20_compiler={cxx} nvcc={nvcc}")
     from transformers import AutoTokenizer
     from alfworld_baseline.xml_actions import parse_xml_decision
-    from alfworld_baseline.prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
+    from alfworld_baseline.prompts_gigpo import QWEN3_ALFWORLD_CHAT_TEMPLATE
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
     model = Path(os.environ.get("ALFWORLD_MODEL", "/home/LXJ/Python_Projects/Models/Qwen3.5-2B"))
     tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True, trust_remote_code=True)
@@ -60,7 +60,7 @@ def main() -> int:
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=thinking,
-            chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE,
+            chat_template=QWEN3_ALFWORLD_CHAT_TEMPLATE,
         )
         if "example_function_name" in rendered or "If you choose to call a function" in rendered:
             raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")

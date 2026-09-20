@@ -105,7 +105,9 @@ export CXX="${ALFWORLD_CXX}"
 export CUDAHOSTCXX="${ALFWORLD_CXX}"
 export NVCC_CCBIN="${ALFWORLD_CXX}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
-export PYTHONPATH="${ROOT}/src:${PROJECT_ROOT}/examples/image_restoration_multi_agent/old_verl_grpo/.pydeps:${PROJECT_ROOT}/examples/image_restoration_multi_agent/verl_backend:${PYTHONPATH:-}"
+ALFWORLD_VERL_ROOT="${ALFWORLD_VERL_ROOT:-/home/LXJ/Python_Projects/verl}"
+export ALFWORLD_VERL_ROOT
+export PYTHONPATH="${ROOT}/src:${ALFWORLD_VERL_ROOT}:${PROJECT_ROOT}/examples/image_restoration_multi_agent/old_verl_grpo/.pydeps:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 export SWANLAB_MODE SWANLAB_LOG_DIR
 export VERL_LOG_DIR="${LOG_DIR}"
@@ -174,7 +176,7 @@ fi
 
 for override in "$@"; do
   case "${override}" in
-    trainer.experiment_name=*|trainer.default_local_dir=*|trainer.project_name=*|trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=*|trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=*)
+    trainer.experiment_name=*|trainer.default_local_dir=*|trainer.project_name=*|ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=*|ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=*)
       echo "Use ALFWORLD_OUTPUT_DIR/LOG_DIR/SWANLAB_LOG_DIR or the versioned YAML for naming paths; rejected: ${override}" >&2
       exit 2
       ;;
@@ -185,20 +187,14 @@ overrides=(
   "trainer.default_local_dir=${OUTPUT_DIR}"
   "trainer.experiment_name=${EXPERIMENT_NAME}"
   "trainer.total_training_steps=${TOTAL_STEPS}"
-  "trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE}"
-  "trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=${SWANLAB_LOG_DIR}"
-  "trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=${LOG_DIR}"
+  "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE}"
+  "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=${SWANLAB_LOG_DIR}"
+  "ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=${LOG_DIR}"
   "variables.SEED=${SEED}"
 )
-# Resolve the published checkpoint at each launch instead of pinning an old step.
-# Its marker is consumed by Tracking with resume="must" and the original run ID.
-if [[ "${RUN_KIND}" == "full" && "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
-  RESUME_CKPT="$("${PYTHON_BIN}" -m alfworld_baseline.resume "${OUTPUT_DIR}" "${EXPERIMENT_NAME}")"
-  if [[ -n "${RESUME_CKPT}" ]]; then
-    overrides+=("trainer.resume_mode=resume_path" "trainer.resume_from_path=${RESUME_CKPT}")
-    echo "Resuming checkpoint: ${RESUME_CKPT}; preserving the original SwanLab run."
-  fi
-fi
+# Native veRL's ``resume_mode=auto`` resolves the latest checkpoint in
+# ``trainer.default_local_dir``. The ALFWorld entry validates checkpoint shards
+# and reconnects SwanLab using the persisted run ID.
 if [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]]; then
   overrides+=(
     "variables.NUM_ROLLOUTS=2"

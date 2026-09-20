@@ -40,3 +40,47 @@ if __name__ == "__main__":
     parser.add_argument("experiment_name")
     args = parser.parse_args()
     print(resolve_resume_checkpoint(args.output_dir, args.experiment_name) or "")
+
+
+def validate_native_resume(config) -> None:
+    """Validate published checkpoint files before Ray allocates any workers."""
+    trainer = config.trainer
+    root = Path(trainer.default_local_dir).resolve()
+    mode = trainer.resume_mode
+    if mode == "disable":
+        if (root / "latest_checkpointed_iteration.txt").exists():
+            raise ValueError("resume_mode=disable requires a new output directory")
+        return
+    if mode == "auto":
+        latest = root / "latest_checkpointed_iteration.txt"
+        if not latest.exists():
+            if any(root.glob("global_step_*")) or (root / ".swanlab_experiment.json").exists():
+                raise ValueError("Existing run has no published checkpoint; refusing an implicit fresh restart")
+            return
+        step = int(latest.read_text().strip())
+        if step < 1:
+            raise ValueError("Checkpoint step must be positive")
+        checkpoint = root / f"global_step_{step}"
+    elif mode == "resume_path":
+        checkpoint = Path(trainer.resume_from_path).resolve()
+        if not checkpoint.name.startswith("global_step_") or not checkpoint.name[12:].isdigit():
+            raise ValueError("resume_from_path must name a global_step_<number> checkpoint")
+    else:
+        raise ValueError(f"Unsupported resume_mode: {mode}")
+    size = int(trainer.n_gpus_per_node) * int(trainer.nnodes)
+    required = [checkpoint / "data.pt", checkpoint / "actor/fsdp_config.json"]
+    required += [checkpoint / "actor" / f"{kind}_world_size_{size}_rank_{rank}.pt"
+                 for rank in range(size) for kind in ("model", "optim", "extra_state")]
+    missing = [str(p) for p in required if not p.is_file() or p.stat().st_size == 0]
+    if missing:
+        raise ValueError(f"Incomplete checkpoint: {missing}")
+    if "swanlab" in trainer.logger:
+        marker = checkpoint.parent / ".swanlab_experiment.json"
+        if not marker.exists():
+            raise ValueError("Missing checkpoint SwanLab identity")
+        identity = json.loads(marker.read_text())
+        if identity.get("experiment_name") != trainer.experiment_name or not identity.get("run_id"):
+            raise ValueError("Checkpoint SwanLab identity differs from launcher configuration")
+        output_marker = root / marker.name
+        if not output_marker.exists() or json.loads(output_marker.read_text()) != identity:
+            raise ValueError("Checkpoint and output directory must have the same SwanLab identity")

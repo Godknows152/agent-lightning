@@ -77,3 +77,20 @@ def test_existing_run_without_checkpoint_rejected(tmp_path):
     (tmp_path / ".swanlab_experiment.json").write_text('{}')
     with pytest.raises(ValueError, match="no published checkpoint"):
         resolve_resume_checkpoint(str(tmp_path), "original")
+
+
+def test_native_resume_validates_all_checkpoint_shards(tmp_path):
+    from omegaconf import OmegaConf
+    from alfworld_baseline.resume import validate_native_resume
+    cfg = OmegaConf.create({'trainer': {'default_local_dir': str(tmp_path), 'resume_mode': 'auto',
+                           'logger': ['swanlab'], 'experiment_name': 'original',
+                           'n_gpus_per_node': 2, 'nnodes': 1}})
+    validate_native_resume(cfg)  # genuinely new output
+    checkpoint = checkpoint_fixture(tmp_path, 20)
+    validate_native_resume(cfg)
+    cfg.trainer.resume_mode = 'resume_path'
+    cfg.trainer.resume_from_path = str(checkpoint)
+    validate_native_resume(cfg)
+    (checkpoint / 'actor/optim_world_size_2_rank_1.pt').unlink()
+    with pytest.raises(ValueError, match='Incomplete checkpoint'):
+        validate_native_resume(cfg)

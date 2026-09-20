@@ -1,12 +1,9 @@
 from __future__ import annotations
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT.parent / "image_restoration_multi_agent" / "verl_backend"))
 from alfworld_baseline.parser import ParseStatus, parse_tool_call
 from alfworld_baseline.prompts import build_messages
 from alfworld_baseline.tool_registry import ALFWorldToolRegistry
@@ -39,35 +36,33 @@ def test_parser_rejects_multiple_calls_and_validator_rejects_unknown_action():
 
 def test_build_messages_contains_current_state_and_schema():
     messages, tools = build_messages(mission="put the apple in the drawer", observation="You see a drawer.", registry=ALFWorldToolRegistry(["open drawer 1"]))
-    assert "put the apple" in messages[1]["content"]
+    assert "put the apple" not in messages[0]["content"]
+    assert "<function=alfworld_action>" in messages[0]["content"]
     assert tools[0]["function"]["name"] == "alfworld_action"
 
 
-def test_prompt_requires_qwen25_json_and_overrides_generic_template_guidance():
+def test_prompt_uses_gigpo_contract_for_all_profiles():
     from alfworld_baseline.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert PROMPT_VERSION == "alfworld_qwen25_json_strict_v1"
-    assert "STRICT QWEN2.5 TOOL-ONLY" in SYSTEM_PROMPT
-    assert "take precedence over generic tool-use examples" in SYSTEM_PROMPT
-    assert '"name":"alfworld_action"' in SYSTEM_PROMPT
+    assert PROMPT_VERSION == "alfworld_gigpo_qwen3_xml_v1"
+    assert SYSTEM_PROMPT == ""
 
 
-def test_qwen35_prompt_profile_uses_text_actions():
+def test_qwen35_prompt_profile_uses_xml_calls():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
-    assert profile.PROMPT_VERSION == "alfworld_qwen35_v7_compact_xml_history_thinking"
+    assert profile.PROMPT_VERSION == "alfworld_gigpo_qwen3_xml_v1"
     assert profile.SYSTEM_PROMPT == ""
     user_prompt = profile.build_user_prompt(
         mission="put the apple in the drawer",
         observation="You see a drawer.",
         admissible_actions=["open drawer 1"],
     )
-    assert "Task goal (not an executable action):" in user_prompt
-    assert "Current admissible actions" in user_prompt
-    assert "alfworld_action" not in user_prompt
-    assert "Recent action/tool history" not in user_prompt
-    assert "Your task is:" not in user_prompt
+    assert "Your current observation" in user_prompt
+    assert "Your admissible actions" in user_prompt
+    assert "<think>" in user_prompt and "<parameter=action>" in user_prompt
+    assert "<action>" not in user_prompt
 
 def test_qwen35_dynamic_schema_enum_matches_latest_admissible_actions():
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
@@ -85,12 +80,12 @@ def test_qwen35_prompt_has_history_and_text_protocol():
         mission="put the apple in the drawer",
         observation="You see a drawer.\nYour task is: put the apple in the drawer.",
         admissible_actions=["open drawer 1"],
+        history=["[Observation 1: 'hall', Action 1: 'look']", "[Observation 2: 'drawer', Action 2: 'open drawer 1']"],
     )
-    assert "Task goal (not an executable action):" in user_prompt
-    assert "Your task is:" not in user_prompt
-    assert "Recent action/tool history" not in user_prompt
-    assert "example_function_name" not in profile.QWEN35_ALFWORLD_CHAT_TEMPLATE
-    assert "If you choose to call a function" not in profile.QWEN35_ALFWORLD_CHAT_TEMPLATE
+    assert "Your task is to:" in user_prompt
+    assert "Prior to this step, you have already taken 2 step(s)." in user_prompt
+    assert "<think>" in user_prompt and "<parameter=action>" in user_prompt
+    assert "<action>" not in user_prompt
 
 
 def test_alfworld_agent_loop_marks_environment_terminal(monkeypatch):
@@ -156,20 +151,6 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
         "alfworld/valid_action_count/max": 4,
         "alfworld/valid_action_count/mean": 7 / 3,
     }
-
-
-def test_alfworld_validation_does_not_select_legacy_num_turns():
-    from verl.trainer.ppo.ray_trainer import _select_validation_turn_counts
-
-    counts, are_tool_calls = _select_validation_turn_counts(
-        {
-            "data_source": np.array(["alfworld", "alfworld"], dtype=object),
-            "__num_turns__": np.array([5, 7]),
-            "tool_call_counts": np.array([3, 4]),
-        }
-    )
-    assert counts is None
-    assert are_tool_calls is False
 
 
 def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():

@@ -1,19 +1,22 @@
-"""ALFWorld-only old-VERL AgentLoop extension."""
+"""ALFWorld step samples for the unmodified native veRL V1 trainer."""
 from __future__ import annotations
 
 import json
 import os
 import re
 from typing import Any, Literal
+from uuid import uuid4
 
-from verl.experimental.agent_loop.agent_loop import register
+from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, register
 from verl.experimental.agent_loop.tool_agent_loop import AgentData, AgentState, ToolAgentLoop
 from verl.experimental.agent_loop.tool_parser import FunctionCall
 from verl.tools.schemas import OpenAIFunctionToolSchema, ToolResponse
 from verl.utils.profiler import simple_timer
+from verl.utils.tokenizer import normalize_token_ids
 
 from .budget import ALFWorldDecisionBudget
-from .prompts_qwen35 import NONTHINKING_PROMPT_VERSION, PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
+from .prompt_profiles import get_prompt_profile
+from .prompts_qwen35 import NONTHINKING_PROMPT_VERSION, PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE
 from .tool_registry import ALFWorldToolRegistry
 from .thinking import ThinkingToolParser, tool_output
 from .text_actions import parse_text_action
@@ -22,40 +25,133 @@ from .xml_actions import parse_xml_decision
 
 @register("alfworld_tool_agent")
 class ALFWorldToolAgentLoop(ToolAgentLoop):
-    """ALFWorld loop with exact per-turn replay and v7 compact XML decisions.
+    """Rebuild each decision context and emit one native training row per step."""
 
-    Qwen3.5 sees the latest observation plus chronological decision history.
-    The template injects a compact static schema without duplicating action enums. Legacy non-Qwen3.5 tool protocols remain supported.
-    """
+    TOOL_CALL_START_TOKEN = "<tool_call>"
+    TOOL_CALL_END_TOKEN = "</tool_call>"
 
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
-        # Qwen3.5 v7 uses compact XML guidance and post-thinking parsing.
-        # Qwen2.5 keeps its existing Hermes path unchanged.
-        model_profile = os.environ.get("ALFWORLD_MODEL_PROFILE", "").lower()
+        config = getattr(self, "config", {})
+        variables = config.get("variables", {}) if hasattr(config, "get") else {}
+        prompt_name = variables.get("PROMPT_PROFILE", "gigpo")
+        self._prompt_profile = get_prompt_profile(str(prompt_name))
+        self._gigpo_prompt = self._prompt_profile.PROMPT_VERSION.startswith("alfworld_gigpo_")
+        model_profile = str(variables.get("MODEL_PROFILE", os.environ.get("ALFWORLD_MODEL_PROFILE", ""))).lower()
         self._is_qwen35_alfworld = model_profile.startswith("qwen35") or self.processor is not None
         self._text_actions = False
-        self._xml_actions = self._is_qwen35_alfworld
+        self._xml_actions = self._gigpo_prompt or self._is_qwen35_alfworld
         if self._xml_actions:
             self.apply_chat_template_kwargs = dict(self.apply_chat_template_kwargs)
-            self.apply_chat_template_kwargs["chat_template"] = QWEN35_ALFWORLD_CHAT_TEMPLATE
+            self.apply_chat_template_kwargs["chat_template"] = (
+                self._prompt_profile.QWEN3_ALFWORLD_CHAT_TEMPLATE if self._gigpo_prompt
+                else QWEN35_ALFWORLD_CHAT_TEMPLATE
+            )
             # Honor the composed training config instead of forcing thinking.
-            self.apply_chat_template_kwargs.setdefault("enable_thinking", False)
-        self._thinking_enabled = self._is_qwen35_alfworld and bool(
-            self.apply_chat_template_kwargs.get("enable_thinking", False)
+            self.apply_chat_template_kwargs.setdefault("enable_thinking", self._gigpo_prompt)
+        self._thinking_enabled = bool(
+            self.apply_chat_template_kwargs.get("enable_thinking", self._gigpo_prompt)
         )
         if self._thinking_enabled and not self._text_actions:
             self.tool_parser = ThinkingToolParser(self.tool_parser, self.tokenizer)
         tool = self.tools.get("alfworld_action")
         tool_config = getattr(tool, "config", {}) or {}
         self._environment_budget = ALFWorldDecisionBudget.from_tool_config(tool_config)
-        if self._xml_actions and self._environment_budget is None:
-            raise ValueError("Qwen3.5 v7 XML actions require environment-driven decision budgeting")
-        if self._environment_budget is not None and self.response_length < self._environment_budget.response_capacity:
-            raise ValueError(
-                "ALFWorld response storage is too small for max_steps * max_new_tokens_per_turn. "
-                "Launch via alfworld_baseline.main_ppo to derive capacity before creating workers."
-            )
+        if self._environment_budget is None:
+            raise ValueError("Native ALFWorld requires environment_driven=true")
+        if self.response_length < self._environment_budget.max_new_tokens_per_turn:
+            raise ValueError("response_length must cover max_new_tokens_per_turn")
+
+    async def apply_chat_template(self, messages, *, tools=None, images=None, videos=None):
+        # Text-only ALFWorld uses the exact same template for every fresh state.
+        options = dict(getattr(self, "apply_chat_template_kwargs", {}))
+        return normalize_token_ids(self.tokenizer.apply_chat_template(
+            messages, tools=tools, tokenize=True, add_generation_prompt=True, **options
+        ))
+
+    async def run(self, sampling_params: dict[str, Any], priority: int = 0, **kwargs) -> list[AgentLoopOutput]:
+        from .reward import compute_score
+
+        if kwargs.get("data_source", "alfworld") != "alfworld":
+            raise ValueError("ALFWorld loop requires data_source=alfworld")
+        data = AgentData(
+            messages=list(kwargs["raw_prompt"]), image_data=None, video_data=None,
+            audio_data=None, mm_processor_kwargs={}, metrics={}, request_id=uuid4().hex,
+            tools_kwargs=kwargs.get("tools_kwargs", {}),
+        )
+        data.data_source = "alfworld"
+        data._active_tools = self.tools
+        data._active_tool_schemas = self.tool_schemas
+        data.total_tool_calls = 0
+        data.action_history = []
+        data.successful_action_history = []
+        data.step_outputs = []
+        try:
+            state = await self._handle_pending_state(data, sampling_params)
+            while state != AgentState.TERMINATED:
+                if state == AgentState.GENERATING:
+                    state = await self._generate_environment_decision(data, sampling_params)
+                elif state == AgentState.PROCESSING_TOOLS:
+                    state = await self._process_environment_decision(data)
+                else:
+                    raise RuntimeError(f"Unexpected ALFWorld state: {state}")
+            extra = dict(data.extra_fields, tool_rewards=list(data.tool_rewards))
+            score = compute_score("alfworld", extra_info=extra)
+            # Native V1 normalizes final rows once per session, then broadcasts
+            # the resulting advantage to all steps. Every row keeps its actual
+            # inference prompt and original generated IDs/log probabilities.
+            for index, output in enumerate(data.step_outputs):
+                output.reward_score = score
+                output.extra_fields.update(extra)
+                output.extra_fields.update(
+                    alfworld_step_index=index,
+                    alfworld_is_final_step=index == len(data.step_outputs) - 1,
+                    reward_extra_info={"score": score},
+                )
+                if index == len(data.step_outputs) - 1:
+                    output.metrics = type(output.metrics)(**data.metrics)
+            return data.step_outputs
+        finally:
+            await self._release_native_tool_instances(data)
+
+    def _selected_prompt_profile(self):
+        """Return the configured profile, including for lightweight test doubles."""
+        profile = getattr(self, "_prompt_profile", None)
+        if profile is not None:
+            return profile
+        return get_prompt_profile("gigpo" if getattr(self, "_gigpo_prompt", False) else "qwen35_v7")
+
+    async def _get_or_create_tool_instance(
+        self,
+        tool_name: str,
+        tool: Any,
+        tools_kwargs: dict[str, Any],
+        agent_data: AgentData,
+    ) -> str:
+        """Keep one ALFWorld environment alive for the entire episode."""
+        instances = getattr(agent_data, "_alfworld_tool_instances", None)
+        if instances is None:
+            instances = {}
+            agent_data._alfworld_tool_instances = instances
+        instance_id = instances.get(tool_name)
+        if instance_id is None:
+            kwargs = tools_kwargs.get(tool_name, {})
+            instance_id, _ = await tool.create(create_kwargs=kwargs.get("create_kwargs", {}))
+            instances[tool_name] = instance_id
+        return instance_id
+
+    async def _release_native_tool_instances(self, agent_data: AgentData) -> None:
+        """Release episode instances, including on generation errors."""
+        instances = getattr(agent_data, "_alfworld_tool_instances", {})
+        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        for tool_name, instance_id in list(instances.items()):
+            tool = active_tools.get(tool_name)
+            if tool is None:
+                continue
+            try:
+                await tool.release(instance_id)
+            finally:
+                instances.pop(tool_name, None)
 
     @staticmethod
     def _mission_from_messages(messages: list[dict[str, Any]]) -> str:
@@ -106,7 +202,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         return [
             {
                 "role": "user",
-                "content": build_user_prompt(
+                "content": self._selected_prompt_profile().build_user_prompt(
                     mission=mission,
                     observation=observation,
                     admissible_actions=actions,
@@ -133,15 +229,15 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         agent_data.alfworld_mission = mission
         agent_data.alfworld_recent_history = []
         agent_data.alfworld_decision_history = []
+        agent_data.alfworld_prompt_history = []
         agent_data.alfworld_current_observation = observation
         agent_data.alfworld_current_actions = actions
         # Remove the dataset's possibly stale state and any custom system
-        # message. The chat template supplies the canonical tool instructions.
+        # message. The selected profile supplies the canonical instructions.
         agent_data.messages = self._state_prompt_messages(
             mission=mission, observation=observation, actions=actions
         )
-        # Keep dynamic execution schemas; the v7 template renders only the
-        # compact static definition, not these action enums.
+        # The XML template renders a compact static schema, without action enums.
         agent_data._active_tool_schemas = (
             [] if getattr(self, "_text_actions", False) else [ALFWorldToolRegistry(actions).build_tool_schema()]
         )
@@ -151,7 +247,10 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             await self._set_authoritative_initial_prompt(agent_data)
             if getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False):
                 agent_data.extra_fields["alfworld_prompt_version"] = (
-                    PROMPT_VERSION if getattr(self, "_thinking_enabled", True) else NONTHINKING_PROMPT_VERSION
+                    (self._selected_prompt_profile().PROMPT_VERSION if getattr(self, "_thinking_enabled", True)
+                     else self._selected_prompt_profile().NONTHINKING_PROMPT_VERSION)
+                    if getattr(self, "_gigpo_prompt", False)
+                    else PROMPT_VERSION if getattr(self, "_thinking_enabled", True) else NONTHINKING_PROMPT_VERSION
                 )
             agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
             agent_data.extra_fields["alfworld_no_action_category"] = ""
@@ -166,10 +265,14 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                     "alfworld_terminal_reason": "running",
                     "alfworld_environment_finished": False,
                 })
-        return await super()._handle_pending_state(agent_data, sampling_params)
+        agent_data.prompt_ids = await self.apply_chat_template(
+            agent_data.messages, tools=getattr(agent_data, "_active_tool_schemas", self.tool_schemas)
+        )
+        agent_data.generation_prompt_ids = list(agent_data.prompt_ids)
+        return AgentState.GENERATING
 
     async def _rebuild_generation_prompt_after_tool(self, agent_data: AgentData) -> None:
-        """Refresh current state, keeping action history but no past reasoning."""
+        """Build the next native sample from current state and recent history."""
         if getattr(agent_data, "data_source", "") != "alfworld":
             return
         if agent_data.extra_fields.get("alfworld_environment_finished"):
@@ -184,7 +287,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         agent_data.alfworld_recent_history = []
         agent_data.alfworld_current_observation = observation
         agent_data.alfworld_current_actions = actions
-        # Dynamic schemas remain internal; v7 renders actions only in the state prompt.
+        # The XML template renders a compact static schema, without action enums.
         agent_data._active_tool_schemas = (
             [] if getattr(self, "_text_actions", False) else [ALFWorldToolRegistry(actions).build_tool_schema()]
         )
@@ -192,12 +295,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             mission=agent_data.alfworld_mission,
             observation=observation,
             actions=actions,
-            history=tuple(getattr(agent_data, "alfworld_decision_history", ()))
+            history=tuple(getattr(agent_data, "alfworld_prompt_history", ()))
+            if getattr(self, "_gigpo_prompt", False)
+            else tuple(getattr(agent_data, "alfworld_decision_history", ()))
             if (getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False)) else (),
         )
-        # Only the next inference context is compacted. prompt_ids retains the
-        # complete VERL trajectory and its response mask for training. Per-turn
-        # contexts are replayed by FSDP for actor/ref logprobs and gradients.
         agent_data.messages = messages
         agent_data.generation_prompt_ids = await self.apply_chat_template(
             messages,
@@ -294,70 +396,13 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         sampling_params: dict[str, Any],
         ignore_termination: bool = False,
     ) -> AgentState:
-        """Use per-decision generation for opted-in ALFWorld runs; preserve legacy behavior."""
-        if getattr(self, "_environment_budget", None) is not None and agent_data.data_source == "alfworld":
-            return await self._generate_environment_decision(agent_data, sampling_params)
-        is_alfworld = getattr(agent_data, "data_source", "") == "alfworld"
-        if is_alfworld:
-            prompt = list(agent_data.generation_prompt_ids or agent_data.prompt_ids)
-            offset = len(agent_data.response_mask)
-            previous_turns = agent_data.assistant_turns
-        state = await super()._handle_generating_state(agent_data, sampling_params, ignore_termination)
-        if is_alfworld and agent_data.assistant_turns > previous_turns:
-            agent_data.extra_fields.setdefault("alfworld_turn_contexts", []).append({
-                "prompt_ids": prompt,
-                "response_ids": list(agent_data.response_ids),
-                "response_offset": offset,
-            })
-            # The legacy loop terminates immediately when extraction yields no
-            # call. Classify that turn after extraction so malformed XML, an
-            # incomplete schema, and ordinary text all share category 1.
-            if agent_data.tool_calls and not self._has_complete_tool_call_schema(agent_data.response_ids):
-                agent_data.tool_calls = []
-            if not agent_data.tool_calls:
-                self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
-                agent_data.extra_fields["alfworld_terminal_reason"] = "no_tool_call"
-                return AgentState.TERMINATED
-        if getattr(agent_data, "data_source", "") != "alfworld" or agent_data.tool_calls:
-            return state
-        return state
+        return await self._generate_environment_decision(agent_data, sampling_params)
 
     def _apply_tool_call_format_guardrails(
         self, agent_data: AgentData, token_ids: list[int], log_probs: list[float] | None
     ) -> tuple[list[int], list[float] | None]:
-        """Trim after the first complete call without altering ALFWorld reward."""
-        if getattr(self, "_text_actions", False) or getattr(self, "_xml_actions", False):
-            # v7 must classify the entire decision, not silently discard extra calls.
-            return token_ids, log_probs
-        if getattr(agent_data, "data_source", "") != "alfworld" or not token_ids:
-            return super()._apply_tool_call_format_guardrails(agent_data, token_ids, log_probs)
-
-        format_token_ids = self._strip_trailing_termination_tokens(token_ids)
-        full_text = self.tokenizer.decode(format_token_ids)
-        text, reasoning_offset = tool_output(
-            full_text, enable_thinking=getattr(self, "_thinking_enabled", False)
-        )
-        start = text.find(self.TOOL_CALL_START_TOKEN)
-        end = text.find(self.TOOL_CALL_END_TOKEN, start) if start >= 0 else -1
-        if start < 0 or end < 0:
-            return token_ids, log_probs
-
-        call_end = end + len(self.TOOL_CALL_END_TOKEN)
-        if getattr(self, "_thinking_enabled", False):
-            # Keep the original reasoning + call IDs and aligned logprobs.
-            # XML examples inside reasoning must not truncate the real call.
-            target = reasoning_offset + call_end
-            keep_token_count = next(
-                (i for i in range(1, len(token_ids) + 1)
-                 if len(self.tokenizer.decode(token_ids[:i])) >= target),
-                None,
-            )
-        else:
-            keep_token_count = self._first_complete_tool_call_token_count(token_ids)
-        if keep_token_count is None or keep_token_count >= len(token_ids):
-            return token_ids, log_probs
-        trimmed_log_probs = log_probs[:keep_token_count] if log_probs else None
-        return token_ids[:keep_token_count], trimmed_log_probs
+        """Preserve every generated token; classify the entire decision."""
+        return token_ids, log_probs
 
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data: AgentData
@@ -450,28 +495,17 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         return response, reward, metrics
 
     async def _handle_processing_tools_state(self, agent_data: AgentData) -> AgentState:
-        if getattr(self, "_environment_budget", None) is not None and agent_data.data_source == "alfworld":
-            return await self._process_environment_decision(agent_data)
-        state = await super()._handle_processing_tools_state(agent_data)
-        if getattr(agent_data, "data_source", "") == "alfworld" and agent_data.extra_fields.get(
-            "alfworld_environment_finished"
-        ):
-            return AgentState.TERMINATED
-        return state
+        return await self._process_environment_decision(agent_data)
 
     async def _generate_environment_decision(
         self, agent_data: AgentData, sampling_params: dict[str, Any]
     ) -> AgentState:
-        """Generate one bounded decision without trajectory-token/turn cutoffs.
-
-        Only model tokens occupy loss slots. Observations live in the recorded
-        real inference prompts and are replayed by the ALFWorld FSDP path.
-        This keeps storage provably bounded by max_steps * per-turn tokens,
-        rather than dropping tool feedback or truncating the final decision.
-        """
+        """Generate one native prompt/response row, bounded per decision."""
         budget = self._environment_budget
         assert budget is not None
         prompt = list(agent_data.generation_prompt_ids or agent_data.prompt_ids)
+        if len(prompt) > getattr(self, "prompt_length", float("inf")):
+            raise ValueError(f"ALFWorld step prompt has {len(prompt)} tokens, exceeding prompt_length")
         generation_params = dict(sampling_params)
         generation_params.pop("max_tokens", None)
         generation_params.pop("max_generated_response_length", None)
@@ -488,6 +522,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         # clipping training tokens or accepting a trajectory with no loss slots.
         if not output.token_ids or len(output.token_ids) > budget.max_new_tokens_per_turn:
             raise RuntimeError("ALFWorld generation must return 1..max_new_tokens_per_turn tokens")
+        if sampling_params.get("logprobs") and output.log_probs is None:
+            raise RuntimeError("ALFWorld requested rollout log probabilities but the server returned none")
         if output.log_probs is not None and len(output.log_probs) != len(output.token_ids):
             raise RuntimeError("ALFWorld generation returned misaligned token log probabilities")
         if agent_data.metrics.get("num_preempted") is None:
@@ -499,25 +535,24 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         response_ids, log_probs = self._apply_tool_call_format_guardrails(
             agent_data, output.token_ids, output.log_probs
         )
-        offset = len(agent_data.response_mask)
-        if offset + len(response_ids) > self.response_length:
-            raise RuntimeError("ALFWorld response storage invariant violated; refusing to truncate trajectory")
+        if len(response_ids) > self.response_length:
+            raise RuntimeError("ALFWorld response row too small; refusing to truncate")
         agent_data.response_ids = list(response_ids)
-        agent_data.prompt_ids.extend(response_ids)
-        agent_data.response_mask.extend([1] * len(response_ids))
-        if log_probs is not None:
-            agent_data.response_logprobs.extend(log_probs)
-        agent_data.extra_fields.setdefault("alfworld_turn_contexts", []).append({
-            "prompt_ids": prompt,
-            "response_ids": list(response_ids),
-            "response_offset": offset,
-        })
+        agent_data.response_mask = [1] * len(response_ids)
+        agent_data.response_logprobs = list(log_probs) if log_probs is not None else []
+        if not hasattr(agent_data, "step_outputs"):
+            agent_data.step_outputs = []
+        agent_data.step_outputs.append(AgentLoopOutput(
+            prompt_ids=prompt, response_ids=list(response_ids),
+            response_mask=[1] * len(response_ids), response_logprobs=log_probs,
+            num_turns=1, metrics={}, extra_fields=dict(getattr(output, "extra_fields", None) or {}),
+        ))
 
         if getattr(self, "_text_actions", False):
-            action = parse_text_action(
-                self.tokenizer.decode(response_ids, skip_special_tokens=False),
-                enable_thinking=self._thinking_enabled,
-            )
+            # Legacy test adapter only. All configured ALFWorld profiles set
+            # _text_actions=False and use the Qwen3 XML branch below.
+            text = self.tokenizer.decode(response_ids, skip_special_tokens=False)
+            action = parse_text_action(text, enable_thinking=self._thinking_enabled)
             agent_data.alfworld_pending_text_action = action
             # Internal adapter only: no serialized tool call enters training tokens.
             agent_data.tool_calls = [] if action is None else [FunctionCall(
@@ -558,6 +593,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
     async def _process_environment_decision(self, agent_data: AgentData) -> AgentState:
         """Execute at most one call and retain rewards, not tool-text loss slots."""
+        # _call_tool updates the current observation; history needs the state
+        # seen by the model before it chose this action (GiGPO SimpleMemory).
+        agent_data.alfworld_previous_observation = agent_data.alfworld_current_observation
         decision = getattr(agent_data, "alfworld_xml_decision", None)
         if getattr(self, "_xml_actions", False) and decision is not None:
             agent_data.extra_fields["alfworld_last_decision_reason"] = decision.reason
@@ -644,19 +682,28 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             status = "rejected" if rejected else ("no action" if action is None else "executed")
             history.append(f"{action or ('(invalid XML call)' if rejected else '(no parseable action)')} [{status}]")
             agent_data.alfworld_decision_history = history
+            if getattr(self, "_gigpo_prompt", False):
+                prompt_history = getattr(agent_data, "alfworld_prompt_history", [])
+                step = len(prompt_history) + 1
+                observation = agent_data.alfworld_previous_observation
+                prompt_history.append(f"[Observation {step}: '{observation}', Action {step}: '{action}']")
+                agent_data.alfworld_prompt_history = prompt_history
         budget = self._environment_budget
         assert budget is not None
         steps = int(agent_data.extra_fields.get("alfworld_decision_steps", 0)) + 1
         agent_data.extra_fields["alfworld_decision_steps"] = steps
         agent_data.user_turns += 1
         if agent_data.extra_fields.get("alfworld_terminal_reason") == "no_tool_call":
+            await self._release_native_tool_instances(agent_data)
             return AgentState.TERMINATED
         if agent_data.extra_fields.get("alfworld_environment_finished"):
             if agent_data.extra_fields.get("alfworld_terminal_reason") == "truncated":
                 agent_data.extra_fields["alfworld_terminal_reason"] = "environment_timeout"
+            await self._release_native_tool_instances(agent_data)
             return AgentState.TERMINATED
         if steps >= budget.max_steps:
             agent_data.extra_fields["alfworld_terminal_reason"] = "decision_limit"
+            await self._release_native_tool_instances(agent_data)
             return AgentState.TERMINATED
         await self._rebuild_generation_prompt_after_tool(agent_data)
         return AgentState.GENERATING

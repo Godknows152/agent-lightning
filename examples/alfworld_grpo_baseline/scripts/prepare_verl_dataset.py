@@ -5,6 +5,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -19,7 +20,7 @@ sys.path.insert(0, str(ROOT / "src"))
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", choices=("train", "test"), required=True)
-    parser.add_argument("--profile", choices=("qwen25", "qwen35"), required=True)
+    parser.add_argument("--profile", choices=("qwen25", "qwen35", "gigpo"), required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--chunk-size", type=int, default=64)
     parser.add_argument("--output", type=Path, default=None)
@@ -63,8 +64,10 @@ def main() -> int:
             actions = tuple(str(action) for action in info["admissible_commands"][offset])
             game_file = str(game_file)
             observation = str(observation)
-            mission = observation.split("Your task is to: ", 1)[-1] if "Your task is to: " in observation else observation
-            observation = observation.replace(f"Your task is to: {mission}.", "").replace(f"Your task is to: {mission}", "").strip()
+            task_match = re.search(r"Your task is to:\s*(.*?)(?:\n|$)", observation)
+            mission = task_match.group(1).strip() if task_match else observation
+            if not prompt_profile.PROMPT_VERSION.startswith("alfworld_gigpo"):
+                observation = re.sub(r"^.*Your task is to:.*(?:\n|$)", "", observation, count=1).strip()
             prompt = []
             if prompt_profile.SYSTEM_PROMPT.strip():
                 prompt.append({"role": "system", "content": prompt_profile.SYSTEM_PROMPT})

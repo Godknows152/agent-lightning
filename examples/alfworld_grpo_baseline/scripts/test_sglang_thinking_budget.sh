@@ -3,7 +3,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "${ROOT}/../.." && pwd)"
-export PYTHONPATH="${ROOT}/src:${PROJECT_ROOT}/examples/image_restoration_multi_agent/old_verl_grpo/.pydeps:${PROJECT_ROOT}/examples/image_restoration_multi_agent/verl_backend:${PYTHONPATH:-}"
+ALFWORLD_VERL_ROOT="${ALFWORLD_VERL_ROOT:-/home/LXJ/Python_Projects/verl}"
+export PYTHONPATH="${ROOT}/src:${ALFWORLD_VERL_ROOT}:${PROJECT_ROOT}/examples/image_restoration_multi_agent/old_verl_grpo/.pydeps:${PYTHONPATH:-}"
 export ALFWORLD_DATA="${ALFWORLD_DATA:-${PROJECT_ROOT}/contrib/recipes/envs/agl_envs/alfworld/alfworld_source}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
 export CC="${CC:-/usr/bin/gcc-10}" CXX="${CXX:-/usr/bin/g++-10}"

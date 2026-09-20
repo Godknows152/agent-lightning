@@ -1,7 +1,7 @@
 # ALFWorld GRPO 训练文件规范
 
-本实验沿用 `examples/image_restoration_multi_agent/old_verl_grpo` 的版本化配置、后台主日志、
-独立 checkpoint 输出与 SwanLab 本地记录方式，但所有文件保持在 ALFWorld 隔离目录内。
+本实验使用原生 veRL 的版本化配置、后台主日志、独立 checkpoint 输出与 SwanLab 本地记录方式，
+但所有文件保持在 ALFWorld 隔离目录内。图像修复继续使用自己的旧后端和目录。
 
 ```text
 examples/alfworld_grpo_baseline/
@@ -18,9 +18,9 @@ examples/alfworld_grpo_baseline/
     ├── seed0/
     │   ├── global_step_*/
     │   ├── latest_checkpointed_iteration.txt
+    │   ├── .swanlab_experiment.json
     │   ├── rollouts/
-    │   ├── swanlab/
-    │   └── .swanlab_experiment.json
+    │   └── swanlab/
     └── # seed1/seed2 仅在后续需要多次独立重复时创建
 ```
 
@@ -43,10 +43,14 @@ SEED=0 bash examples/alfworld_grpo_baseline/scripts/alfworld/alfworld_v1.sh
 bash examples/alfworld_grpo_baseline/run_three_seeds_serial_2gpu.sh
 ```
 
-当前 baseline 默认只训练 `seed0`，正式训练默认 `resume_mode=disable`。不同 seed 绝不复用输出目录；
-只有在后续需要论文统计稳健性时才启用 seed1/seed2。若后续需要恢复，应显式提供
-Hydra override `trainer.resume_mode=resume_path trainer.resume_from_path=/path/to/global_step_N`，并保持
-原 seed 的 `trainer.experiment_name` 与输出目录不变，以便 old-VERL 的 SwanLab marker 续接同一 run。
+当前 baseline 默认只训练 `seed0`，正式训练使用原生 veRL 的 `resume_mode=auto`，会从当前
+`trainer.default_local_dir` 自动选择最新 checkpoint。不同 seed 绝不复用输出目录；只有在后续需要
+论文统计稳健性时才启用 seed1/seed2。若需指定 checkpoint，可显式提供 Hydra override
+`trainer.resume_mode=resume_path trainer.resume_from_path=/path/to/global_step_N`。
 
 可用环境覆盖：`ALFWORLD_OUTPUT_DIR`、`ALFWORLD_LOG_DIR`、`ALFWORLD_SWANLAB_LOG_DIR`、
 `ALFWORLD_SWANLAB_MODE`、`ALFWORLD_TOTAL_STEPS`、`CUDA_VISIBLE_DEVICES` 和 `PYTHON_BIN`。
+
+入口在创建 Ray workers 前检查所有 checkpoint 分片。开启 SwanLab 时，续训还要求
+原 `.swanlab_experiment.json`，并使用原 run ID 与 `resume=must`。
+本轮只验证 CPU 文件检查与 SDK 调用参数，未运行真实分布式恢复。

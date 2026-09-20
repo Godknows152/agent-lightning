@@ -53,7 +53,8 @@ def make_thinking_environment_loop(parser):
 
 
 def make_thinking_data(loop):
-    data = AgentData([], None, None, {}, 'thinking-test', {})
+    from test_decision_budget import make_data
+    data = make_data(loop)
     data.data_source = 'alfworld'
     data.prompt_ids = [900, 901]
     data.generation_prompt_ids = [900, 901]
@@ -204,7 +205,7 @@ def test_compact_xml_preserves_history_and_original_replay_tokens():
     asyncio.run(run())
     assert data.alfworld_decision_history == ['look [executed]']
     assert 'look [executed]' in data.messages[0]['content']
-    assert data.extra_fields['alfworld_turn_contexts'][0]['response_ids'] == loop.tokenizer.encode(text)
+    assert data.step_outputs[0].response_ids == loop.tokenizer.encode(text)
     assert data.response_logprobs == [-0.1] * len(text)
     rendered = Environment().from_string(QWEN35_ALFWORLD_CHAT_TEMPLATE).render(
         messages=data.messages, tools=data._active_tool_schemas,

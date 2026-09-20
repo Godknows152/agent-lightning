@@ -1,8 +1,8 @@
-# ALFWorld GRPO v1 for Qwen3.5-2B and its native XML tool calls.
+# ALFWorld GRPO v1 for Qwen3.5-2B using the GiGPO context with Qwen3 XML tool calls.
 hydra:
   searchpath:
     - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
-    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+    - file:///home/LXJ/Python_Projects/verl/verl/trainer/config
 
 defaults:
   - /alfworld_common_config_2gpu
@@ -12,6 +12,7 @@ defaults:
 # Match the 2B profile's sampling scale and selected memory-saving settings.
 variables:
   NUM_ROLLOUTS: 8
+  PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v1
 
 data:
   apply_chat_template_kwargs:
@@ -21,8 +22,6 @@ data:
 
 actor_rollout_ref:
   rollout:
-    # Release the SGLang LoRA engine fully while the Actor is updated.
-    force_full_sleep_for_lora: true
     # Chunk long prompt prefill to reduce rollout peak memory.
     enable_chunked_prefill: true
     # Preserve token log-probs produced during rollout so old-log-prob
@@ -32,8 +31,7 @@ actor_rollout_ref:
     agent:
       num_workers: 8
   ref:
-    # Use the frozen thinking-mode SFT LoRA as the KL reference policy.
-    use_separate_lora_reference: true
+    # Native veRL LoRA reference disables adapters and uses the frozen base model.
     log_prob_micro_batch_size_per_gpu: 4
 
   actor:
@@ -47,9 +45,6 @@ actor_rollout_ref:
     ppo_mini_batch_size: 4
     # Keep each backward micro-batch small for the standard FSDP training path.
     ppo_micro_batch_size_per_gpu: 4
-    # Bound turn-level replay so long ALFWorld histories do not form one
-    # oversized forward/backward activation graph.
-    turn_context_chunk_tokens: 16393
     fsdp_config:
       # LoRA leaves only adapter parameters trainable, so CPU offload is no
       # longer needed for the optimizer and costs a host-device transfer.

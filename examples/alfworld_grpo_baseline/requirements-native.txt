@@ -1,0 +1,4 @@
+# Install with uv --no-config pip --python <alfworld-verl python>; preserve existing numerical dependencies.
+TransferQueue @ git+https://github.com/Ascend/TransferQueue.git@fc33c979db6bd661802f6af458e75e850055fb20
+numpy==1.26.4
+setuptools==70.2.0

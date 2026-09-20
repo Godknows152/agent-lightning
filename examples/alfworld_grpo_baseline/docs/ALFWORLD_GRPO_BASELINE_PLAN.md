@@ -2,21 +2,18 @@
 
 ## 1. 后端确认
 
-当前项目 `examples/image_restoration_multi_agent/old_verl_grpo/` 使用的是项目内定制的
-VERL 后端，而不是直接依赖 Conda 环境中的通用 pip 版 VERL。
+ALFWorld 使用独立的原生 veRL checkout，不加载图像修复目录下的共享后端。
 
-- 后端源码：`examples/image_restoration_multi_agent/verl_backend/`
-- 后端版本：`verl/version/version = 0.8.0.dev`
-- 当前后端 commit：`f5b5eae0c5789e9c5af3698a4154f56473a0ab67`
+- 后端源码：`/home/LXJ/Python_Projects/verl/`
+- 后端配置：`/home/LXJ/Python_Projects/verl/verl/trainer/config/`
 - 训练入口：`python -m verl.trainer.main_ppo`
 - 原始 Python：`/home/LXJ/anaconda3/envs/verl/bin/python`
 - 统一 Python：`/home/LXJ/anaconda3/envs/alfworld-verl/bin/python`
 - Ray：`/home/LXJ/anaconda3/envs/alfworld-verl/bin/ray`
 
-ALFWorld baseline 必须复用相同的 `verl_backend`、但使用新建的统一 `alfworld-verl` Conda
-环境和 `main_ppo` 入口；原始 `verl` 环境保持不变。
-launcher 必须显式设置 `PYTHONPATH`，并在 preflight 中打印 `verl.__file__`，确认解析到
-项目内 `examples/image_restoration_multi_agent/verl_backend/verl/`。
+ALFWorld launcher 通过 `ALFWORLD_VERL_ROOT`（默认 `/home/LXJ/Python_Projects/verl`）显式设置
+`PYTHONPATH`，并使用 `main_ppo` 入口；图像修复 launcher 继续使用自己的共享后端，二者不共用
+本次 ALFWorld 的训练路径修改。
 
 ## 2. 目录隔离
 
@@ -231,26 +228,25 @@ ToolRegistry、Prompt、Template、Parser、Validator 的职责必须保持分�
 协议和上下文，Parser 负责结构解析，Validator 负责环境动作契约；不能把 Validator 的动作
 白名单硬编码到 prompt，也不能把 parser 当作约束解码器。
 
-### 4.1.1 old-VERL 后端隔离边界
+### 4.1.1 veRL 后端隔离边界
 
-ALFWorld 需要的后端扩展仅通过隔离配置和外部 AgentLoop 注册完成：
+ALFWorld 的训练配置只加载原生 veRL checkout，并通过本目录的外部 AgentLoop 注册完成：
 
 - `config/agent_loops.yaml` 注册 `alfworld_tool_agent`；
 - `config/alfworld_tool_config.yaml` 注册 `ALFWorldTool`；
 - `config/grpo_qwen2.5_1.5b.yaml` 仅覆盖 ALFWorld 的 `default_agent_loop`、
   `agent_loop_config_path`、`tool_config_path`、`multi_turn.format` 和本地数据/输出路径；
-   - Qwen3.5 tokenizer 原生 `chat_template` 由 old-VERL 模型加载路径直接使用；ALFWorld 不覆盖共享模板；
+   - Qwen3.5 tokenizer 原生 `chat_template` 由原生 veRL 模型加载路径直接使用；
 - `data/*.parquet` 通过 `data_source=alfworld`、`agent_name=alfworld_tool_agent` 和
   `extra_info.tools_kwargs` 把任务传给工具实例。
 
-不得为 ALFWorld 修改共享 `tool_agent_loop.py`、共享 reward manager、共享 tokenizer/parser
-注册表或图像修复配置。任何确需修改共享后端的 bugfix，必须先建立等价的 ALFWorld 隔离
-覆盖、补充图像修复回归测试，并单独记录影响评估。
+不得为 ALFWorld 修改 `examples/image_restoration_multi_agent/verl_backend/` 下的共享
+`tool_agent_loop.py`、reward manager、tokenizer/parser 注册表或图像修复配置。
 
-当前已实施的隔离扩展：`src/alfworld_baseline/agent_loop.py` 继承共享 `ToolAgentLoop`，
+当前已实施的隔离扩展：`src/alfworld_baseline/agent_loop.py` 继承原生 veRL `ToolAgentLoop`，
 只在 `data_source=alfworld` 时将工具 metrics 中的 `done/truncated` 映射为
 `AgentState.TERMINATED`；图像修复仍走原有 `tool_agent`。后续若需修改 VERL 的 dataset、
-   reward、parser 或 tokenizer 行为，也必须优先采用同样的外部扩展/独立配置方式，并把共享
+   reward、parser 或 tokenizer 行为，也必须优先采用同样的外部扩展/独立配置方式，并把图像修复共享
 后端改动视为需要单独回归的例外。
 
 ### 4.2 Baseline 与原生文本动作的关系

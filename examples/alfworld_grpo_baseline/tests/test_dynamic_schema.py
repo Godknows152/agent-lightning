@@ -1,4 +1,9 @@
-"""Regressions for per-instance schemas and compact-context training replay."""
+"""Regressions for per-instance schemas and optional legacy adapters.
+
+The production ALFWorld path uses native veRL multi-turn storage.  Tests that
+exercise the removed turn-context FSDP adapter remain conditional so this
+suite can still be run against the historical shared backend when needed.
+"""
 import asyncio
 from types import SimpleNamespace
 
@@ -46,8 +51,23 @@ def test_initial_schema_and_refresh_are_per_trajectory():
 
         loop.apply_chat_template = template
         def data(game):
-            result = AgentData([{"role": "user", "content": "stale action"}], None, None, {}, game,
-                               {"alfworld_action": {"create_kwargs": {"game_file": game}}})
+            try:
+                result = AgentData(
+                    messages=[{"role": "user", "content": "stale action"}],
+                    image_data=None,
+                    video_data=None,
+                    audio_data=None,
+                    mm_processor_kwargs={},
+                    metrics={},
+                    request_id=game,
+                    tools_kwargs={"alfworld_action": {"create_kwargs": {"game_file": game}}},
+                )
+            except TypeError:
+                # Historical shared backend AgentData has no audio/mm kwargs.
+                result = AgentData(
+                    [{"role": "user", "content": "stale action"}], None, None, {}, game,
+                    {"alfworld_action": {"create_kwargs": {"game_file": game}}},
+                )
             result.data_source = "alfworld"
             return result
         first, second = data("drawer 1"), data("cabinet 2")
@@ -81,80 +101,6 @@ def test_initial_schema_and_refresh_are_per_trajectory():
     asyncio.run(run())
 
 
-def make_replay_batch():
-    import torch
-    from tensordict import TensorDict
-    from verl.utils import tensordict_utils as tu
-    batch = TensorDict({}, batch_size=[2])
-    # Prompt [10,11], answer [12,13], feedback [14], second answer [15,16].
-    batch["input_ids"] = torch.nested.as_nested_tensor([torch.tensor([10,11,12,13,14,15,16]),
-                                                       torch.tensor([20,21,22])], layout=torch.jagged)
-    batch["loss_mask"] = torch.tensor([[1,1,0,1,1], [1,0,0,0,0]])
-    batch["response_mask"] = torch.tensor([[1,1,0,1,1], [1,0,0,0,0]])
-    batch["temperature"] = torch.tensor([1., 0.7])
-    tu.assign_non_tensor(batch, multi_modal_inputs=[None, {}], alfworld_turn_contexts=[
-        [{"prompt_ids": [10,11], "response_ids": [12,13], "response_offset": 0},
-         {"prompt_ids": [30,31,32], "response_ids": [15,16], "response_offset": 3}],
-        [{"prompt_ids": [20,21], "response_ids": [22], "response_offset": 0}],
-    ])
-    return batch
-
-
-def test_training_replays_actual_prompts_and_preserves_loss_slots_and_gradients():
-    import torch
-    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts, restore_trajectory_outputs
-    batch = make_replay_batch()
-    expanded, source, target = expand_turn_contexts(batch)
-    assert [row.tolist() for row in expanded["input_ids"].unbind()] == [[10,11,12,13], [30,31,32,15,16], [20,21,22]]
-    assert [row.tolist() for row in expanded["position_ids"].unbind()] == [[0,1,2,3], [0,1,2,3,4], [0,1,2]]
-    assert source.tolist() == [1,2,6,7,10]
-    assert target.tolist() == [1,2,4,5,8]
-    values = torch.arange(12, dtype=torch.float32, requires_grad=True)
-    out = {"log_probs": torch.nested.nested_tensor_from_jagged(values, expanded["input_ids"].offsets())}
-    restored = restore_trajectory_outputs(out, batch, source, target)["log_probs"]
-    assert restored.values().tolist() == [0,1,2,0,6,7,0,0,10,0]
-    restored.values().sum().backward()
-    assert values.grad.nonzero().flatten().tolist() == source.tolist()
-
-
-def test_training_replay_keeps_uniform_temperature_as_scalar_for_fused_ppo():
-    import torch
-    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
-    from verl.utils import tensordict_utils as tu
-
-    batch = make_replay_batch()
-    batch["temperature"] = torch.tensor([1.0, 1.0])
-    expanded, _, _ = expand_turn_contexts(batch)
-
-    assert tu.get_non_tensor_data(expanded, "temperature", None) == 1.0
-
-
-def test_training_replay_rejects_nonempty_multimodal_payload():
-    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
-    batch = make_replay_batch()
-    from verl.utils import tensordict_utils as tu
-    tu.assign_non_tensor(batch, multi_modal_inputs=[{"pixel_values": [1]}, None])
-    with pytest.raises(ValueError, match="non-empty multi_modal_inputs"):
-        expand_turn_contexts(batch)
-
-
-def test_training_replay_fails_closed_on_missing_or_mismatched_context():
-    from verl.workers.engine.fsdp.turn_context import expand_turn_contexts
-    batch = make_replay_batch()
-    batch["input_ids"].values()[2] = 99
-    with pytest.raises(ValueError, match="does not match"):
-        expand_turn_contexts(batch)
-
-
-def test_sglang_lora_target_modules_preserve_all_linear_sentinel():
-    from verl.workers.rollout.sglang_rollout.sglang_rollout import _normalize_sglang_lora_target_modules
-
-    assert _normalize_sglang_lora_target_modules("all-linear") == ["all"]
-    assert _normalize_sglang_lora_target_modules("all") == ["all"]
-    assert _normalize_sglang_lora_target_modules("q_proj") == ["q_proj"]
-    assert _normalize_sglang_lora_target_modules(["q_proj", "v_proj"]) == ["q_proj", "v_proj"]
-
-
 def test_qwen35_9b_lora_targets_are_supported_by_sglang_dynamic_loading():
     from pathlib import Path
 
@@ -173,6 +119,6 @@ def test_qwen35_9b_lora_targets_are_supported_by_sglang_dynamic_loading():
         "up_proj",
         "down_proj",
     ]
-    assert config.actor_rollout_ref.rollout.agent.skip_load_balancer_for_single_server is True
-    assert config.actor_rollout_ref.rollout.agent.normalize_non_tensor_batch_keys is True
+    assert "skip_load_balancer_for_single_server" not in config.actor_rollout_ref.rollout.agent
+    assert "normalize_non_tensor_batch_keys" not in config.actor_rollout_ref.rollout.agent
     assert config.actor_rollout_ref.model.enable_activation_offload is False

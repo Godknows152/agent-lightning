@@ -14,6 +14,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    # Configuration validation alone does not import the executable entrypoint.
+    from alfworld_baseline.backend import assert_native_verl
+    from alfworld_baseline.main_ppo import ALFWorldTaskRunner
+
+    from verl.trainer.ppo.v1 import get_trainer_cls, AgentLoopManagerTQ
+    from alfworld_baseline.budget import configure_environment_driven_rollout, validate_native_step_config
+
+    print(f"native_verl={assert_native_verl()} runner={ALFWorldTaskRunner.__name__}")
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=int(os.environ.get("SEED", "0")))
     parser.add_argument("--kind", choices=("full", "smoke", "pilot"), default="full")
@@ -35,9 +43,9 @@ def main() -> int:
     overrides = [
         f"trainer.default_local_dir={output}",
         f"trainer.experiment_name={experiment_name}",
-        f"trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR={swanlab_dir}",
-        f"trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE={swanlab_mode}",
-        f"trainer.ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR={log_dir}",
+        f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR={swanlab_dir}",
+        f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE={swanlab_mode}",
+        f"ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR={log_dir}",
         f"variables.SEED={args.seed}",
     ]
     if args.kind in {"smoke", "pilot"}:
@@ -54,6 +62,10 @@ def main() -> int:
         ]
     with initialize_config_dir(config_dir=str(args.config_dir.resolve()), version_base=None):
         cfg = compose(config_name=args.config_name, overrides=overrides)
+    validate_native_step_config(cfg)
+    budget = configure_environment_driven_rollout(cfg)
+    assert budget is not None
+    print(f"native_trainer={get_trainer_cls(cfg.trainer.v1.trainer_mode).__name__} manager={AgentLoopManagerTQ.__name__}")
     assert cfg.trainer.logger == ["console", "swanlab"]
     assert cfg.trainer.enable_penalty_logging is False
     assert cfg.actor_rollout_ref.rollout.name == "sglang"
@@ -66,20 +78,22 @@ def main() -> int:
     assert int(cfg.data.seed) == args.seed
     assert int(cfg.actor_rollout_ref.actor.data_loader_seed) == args.seed
     assert int(cfg.actor_rollout_ref.actor.fsdp_config.seed) == args.seed
-    if args.model_profile.startswith("qwen35"):
-        from alfworld_baseline.prompts_qwen35 import NONTHINKING_PROMPT_VERSION, PROMPT_VERSION
-        from alfworld_baseline.budget import configure_environment_driven_rollout
+    if args.model_profile.startswith("qwen35") or args.model_profile.startswith("qwen25"):
+        from alfworld_baseline.prompts_gigpo import NONTHINKING_PROMPT_VERSION, PROMPT_VERSION
         thinking = cfg.data.apply_chat_template_kwargs.enable_thinking
         assert isinstance(thinking, bool)
         prompt_version = PROMPT_VERSION if thinking else NONTHINKING_PROMPT_VERSION
         assert cfg.variables.PROMPT_VERSION == prompt_version
-        assert configure_environment_driven_rollout(cfg) is not None
-        print(f"prompt_version={prompt_version} output=compact_xml_tool_call thinking={str(thinking).lower()}")
+        assert cfg.variables.PROMPT_PROFILE == "gigpo"
+        assert cfg.actor_rollout_ref.rollout.multi_turn.format == "qwen3_coder"
+        assert cfg.actor_rollout_ref.rollout.multi_turn.max_assistant_turns is None
+        assert cfg.actor_rollout_ref.rollout.response_length == budget.max_new_tokens_per_turn
+        print(f"prompt_version={prompt_version} output=qwen3_xml_tool_call thinking={str(thinking).lower()}")
     validate_config(cfg, use_reference_policy=need_reference_policy(cfg), use_critic=need_critic(cfg))
     print(OmegaConf.to_yaml(cfg.trainer))
     assert cfg.trainer.experiment_name == experiment_name
-    assert str(cfg.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR) == str(swanlab_dir)
-    assert str(cfg.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE) == swanlab_mode
+    assert str(cfg.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR) == str(swanlab_dir)
+    assert str(cfg.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE) == swanlab_mode
     print(f"training_preflight_ok seed={args.seed} kind={args.kind} output={output}")
     return 0
 

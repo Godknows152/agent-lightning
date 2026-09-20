@@ -27,6 +27,10 @@ class ThinkingToolParser:
         self.parser = parser
         self.tokenizer = tokenizer
 
+    @property
+    def stop_token_ids(self):
+        return getattr(self.parser, "stop_token_ids", [])
+
     async def extract_tool_calls(self, responses_ids: list[int], tools: Any = None):
         text = self.tokenizer.decode(responses_ids, skip_special_tokens=False)
         output, _ = tool_output(text, enable_thinking=True)

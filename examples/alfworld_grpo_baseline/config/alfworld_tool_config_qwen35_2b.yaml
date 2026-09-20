@@ -1,13 +1,12 @@
-# Qwen3.5-2B-only ALFWorld tool configuration.
+# Qwen3.5-2B-only ALFWorld tool configuration for native veRL turns.
 # Qwen3.5-9B and Qwen2.5 profiles keep the shared tool configuration.
 tools:
   - class_name: "alfworld_baseline.alfworld_tool.ALFWorldTool"
     config:
       type: native
-      # One shared decision budget, including failed/invalid attempts.
+      # Optional 16-step profile; select explicitly with variables.TOOL_CONFIG.
       max_steps: 16
       environment_driven: true
-      # Total per-decision generation budget: thinking plus the final action.
       max_new_tokens_per_turn: 768
       # Reuse initialized TextWorld instances in the 2B AgentLoop workers.
       # The pool is per worker and each acquire reloads the requested game file,

@@ -1,12 +1,14 @@
-"""Explicit ALFWorld prompt profiles keyed by base-model tool protocol."""
+"""Explicit ALFWorld prompt profiles keyed by training prompt contract."""
 from __future__ import annotations
 
 from importlib import import_module
 from types import ModuleType
 
 _MODULES = {
-    "qwen25": "alfworld_baseline.prompts_qwen25",
-    "qwen35": "alfworld_baseline.prompts_qwen35",
+    "qwen25": "alfworld_baseline.prompts_gigpo",
+    "qwen35": "alfworld_baseline.prompts_gigpo",
+    "qwen35_v7": "alfworld_baseline.prompts_qwen35",
+    "gigpo": "alfworld_baseline.prompts_gigpo",
 }
 
 

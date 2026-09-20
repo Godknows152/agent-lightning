@@ -1,16 +1,16 @@
-# ALFWorld GRPO v1 for Qwen3.5-9B and its native XML tool calls.
+# ALFWorld GRPO v1 for Qwen3.5-9B using the GiGPO context with Qwen3 XML tool calls.
 hydra:
   searchpath:
     - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
-    - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/verl_backend/verl/trainer/config
+    - file:///home/LXJ/Python_Projects/verl/verl/trainer/config
 
 defaults:
   - /alfworld_common_config_2gpu
   - /model_profiles@_global_: qwen35_9b
   - _self_
 
-# Match the 2B profile's sampling scale and selected memory-saving settings.
 variables:
+  PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v1
   NUM_ROLLOUTS: 3
 
 data:
@@ -33,9 +33,6 @@ actor_rollout_ref:
     ppo_mini_batch_size: 8
     # Keep each backward micro-batch small for the standard FSDP training path.
     ppo_micro_batch_size_per_gpu: 2
-    # Bound turn-level replay so long ALFWorld histories do not form one
-    # oversized forward/backward activation graph.
-    turn_context_chunk_tokens: 16384
     fsdp_config:
       # LoRA leaves only adapter parameters trainable, so CPU offload is no
       # longer needed for the optimizer and costs a host-device transfer.
@@ -59,7 +56,7 @@ actor_rollout_ref:
       - gate_proj
       - up_proj
       - down_proj
-    # Retain 16384-token replay chunks, but restore checkpointing after actor OOM.
+    # Retain checkpointing after actor OOM.
     enable_gradient_checkpointing: true
     # Keep CPU activation transfers disabled.
     enable_activation_offload: false

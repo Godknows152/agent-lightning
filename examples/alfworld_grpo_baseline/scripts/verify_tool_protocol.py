@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the ALFWorld prompt/template and Qwen2.5 tool-call surface.
+"""Verify GiGPO context construction and the Qwen3 XML tool-call protocol.
 
 This diagnostic is intentionally independent of Ray/VERL.  It renders the
 exact chat template used by the isolated baseline and, when requested,
@@ -26,25 +26,27 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageText
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from alfworld_baseline.prompts_qwen35 import PROMPT_VERSION, QWEN35_ALFWORLD_CHAT_TEMPLATE, build_user_prompt
+from alfworld_baseline.prompts_gigpo import (
+    NONTHINKING_PROMPT_VERSION, PROMPT_VERSION, QWEN3_ALFWORLD_CHAT_TEMPLATE, build_user_prompt,
+)
+from alfworld_baseline.tool_registry import ALFWorldToolRegistry
 from alfworld_baseline.xml_actions import parse_xml_decision
-from alfworld_baseline.thinking import tool_output
 
 PROFILES = {
     "qwen25_1_5b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen2.5-1.5B-Instruct"),
         "data": ROOT / "data" / "qwen25_1_5b" / "train.parquet",
-        "template": "Qwen2.5 tokenizer native chat_template",
+        "template": "GiGPO context / Qwen3 XML chat_template",
     },
     "qwen35_9b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen3.5-9B"),
         "data": ROOT / "data" / "qwen35_2b" / "train.parquet",
-        "template": "Qwen3.5 v7 compact XML/history chat_template",
+        "template": "GiGPO context / Qwen3 XML chat_template",
     },
     "qwen35_2b": {
         "model": Path("/home/LXJ/Python_Projects/Models/Qwen3.5-2B"),
         "data": ROOT / "data" / "qwen35_2b" / "train.parquet",
-        "template": "Qwen3.5 v7 compact XML/history chat_template",
+        "template": "GiGPO context / Qwen3 XML chat_template",
     },
 }
 RUNTIME_TERMINATION_MARKERS = ("<|im_end|>", "<|endoftext|>")
@@ -52,11 +54,6 @@ STRICT_XML_RE = re.compile(
     r"^<tool_call>\s*<function=alfworld_action>\s*"
     r"<parameter=action>\s*(.*?)\s*</parameter>\s*"
     r"</function>\s*</tool_call>$",
-    re.DOTALL,
-)
-STRICT_QWEN25_JSON_RE = re.compile(
-    r'^<tool_call>\s*\{\s*"name"\s*:\s*"alfworld_action"\s*,\s*'
-    r'"arguments"\s*:\s*\{\s*"action"\s*:\s*".*?"\s*\}\s*\}\s*</tool_call>$',
     re.DOTALL,
 )
 
@@ -84,16 +81,12 @@ def strip_runtime_termination(text: str) -> tuple[str, list[str]]:
 
 def classify(text: str) -> str:
     stripped, _ = strip_runtime_termination(text)
-    if STRICT_QWEN25_JSON_RE.fullmatch(stripped):
-        return "qwen25_json_strict"
     if STRICT_XML_RE.fullmatch(stripped):
         return "qwen3_xml_strict"
     if "<tool_call>" in text and "</tool_call>" in text and "<function=" in text and "<parameter=" in text:
         return "qwen3_xml_complete_with_extra_text"
     if "<tool_call>" in text:
         return "qwen3_xml_incomplete"
-    if text.lstrip().startswith("{"):
-        return "bare_json"
     return "other"
 
 
@@ -108,6 +101,7 @@ def _admissible_actions(messages: list[dict[str, object]]) -> tuple[str, ...]:
 
     user = next((str(m.get("content", "")) for m in messages if m.get("role") == "user"), "")
     markers = (
+        "Your admissible actions of the current situation are: [",
         "Current admissible actions (the action value must be copied exactly from this list):\n",
         "Current admissible actions (copy exactly one):\n",
     )
@@ -115,6 +109,8 @@ def _admissible_actions(messages: list[dict[str, object]]) -> tuple[str, ...]:
     if marker is None:
         return ()
     section = user.split(marker, 1)[1].split("\n\n", 1)[0]
+    if marker.startswith("Your admissible"):
+        return tuple(re.findall(r"'([^']*)'", section))
     return tuple(line[2:] for line in section.splitlines() if line.startswith("- "))
 
 
@@ -126,8 +122,10 @@ def main() -> int:
     ap.add_argument("--no-generate", action="store_true")
     ap.add_argument("--profile", choices=sorted(PROFILES), default="qwen35_2b")
     ap.add_argument("--enable-thinking", action=argparse.BooleanOptionalAction, default=None)
+    ap.add_argument("--avoid-repeated-actions", action=argparse.BooleanOptionalAction, default=None)
     args = ap.parse_args()
-    thinking = args.enable_thinking if args.enable_thinking is not None else args.profile.startswith("qwen35")
+    thinking = args.enable_thinking if args.enable_thinking is not None else True
+    avoid_repeated = args.avoid_repeated_actions if args.avoid_repeated_actions is not None else args.profile == "qwen35_2b"
 
     profile = PROFILES[args.profile]
     model_path = profile["model"]
@@ -138,20 +136,28 @@ def main() -> int:
     messages = row["prompt"].tolist() if hasattr(row["prompt"], "tolist") else row["prompt"]
     messages = [dict(x) for x in messages]
     admissible_actions = _admissible_actions(messages)
-    from alfworld_baseline.tool_registry import ALFWorldToolRegistry
-
     if not admissible_actions:
         raise RuntimeError("could not extract admissible actions from the prepared prompt")
     tools = [ALFWorldToolRegistry.static_tool_schema()]
-    if args.profile.startswith("qwen35"):
-        # Saved parquet may be v4; runtime rebuilds from the environment. This
-        # first-turn diagnostic rebuilds the same current state fields from the saved state.
-        user = next(str(m["content"]) for m in messages if m["role"] == "user")
+    # Saved parquet may contain an older prompt. Runtime rebuilds the first
+    # request with the GiGPO profile and current admissible action list.
+    user = next(str(m["content"]) for m in messages if m["role"] == "user")
+    if "Task goal (not an executable action):" in user:
         mission = user.split("Task goal (not an executable action):", 1)[1].split("\n\n", 1)[0].strip()
         observation = user.split("Current observation:\n", 1)[1].split("\n\nCurrent admissible actions", 1)[0]
-        messages = [{"role": "user", "content": build_user_prompt(
-            mission=mission, observation=observation, admissible_actions=admissible_actions
-        )}]
+        observation = observation.split("\n\nRecent action/tool history:", 1)[0]
+    else:
+        mission_match = re.search(r"Your task is to:\s*(.+?)(?:\n|$)", user)
+        mission = mission_match.group(1).strip() if mission_match else "Complete the ALFWorld task."
+        if "Your current observation is:" in user:
+            observation = user.split("Your current observation is:", 1)[1].split("\nYour admissible actions", 1)[0].strip()
+        else:
+            observation = user.split("Current observation:", 1)[1].split("\n\nRecent action/tool history:", 1)[0]
+            observation = observation.split("\n\nCurrent admissible actions", 1)[0].strip()
+    messages = [{"role": "user", "content": build_user_prompt(
+        mission=mission, observation=observation, admissible_actions=admissible_actions,
+        enable_thinking=thinking, avoid_repeated_actions=avoid_repeated,
+    )}]
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     rendered = tokenizer.apply_chat_template(
@@ -160,7 +166,8 @@ def main() -> int:
         add_generation_prompt=True,
         tokenize=False,
         enable_thinking=thinking,
-        chat_template=QWEN35_ALFWORLD_CHAT_TEMPLATE if args.profile.startswith("qwen35") else None,
+        avoid_repeated_actions=avoid_repeated,
+        chat_template=QWEN3_ALFWORLD_CHAT_TEMPLATE,
     )
     result: dict[str, object] = {
         "profile": args.profile,
@@ -172,11 +179,11 @@ def main() -> int:
         "rendered_prompt_chars": len(rendered),
         "rendered_prompt_tokens": len(tokenizer(rendered, add_special_tokens=False)["input_ids"]),
         "prompt_contract": {
-            "version": PROMPT_VERSION if args.profile.startswith("qwen35") else row["extra_info"].get("prompt_version"),
+            "version": PROMPT_VERSION if thinking else NONTHINKING_PROMPT_VERSION,
             "enable_thinking": thinking,
             "required_function": "alfworld_action",
             "required_parameter": "action",
-            "output_format": "compact XML tool call" if args.profile.startswith("qwen35") else "Hermes tool call",
+            "output_format": "Qwen3 XML tool call",
             "runtime_termination_ignored": list(RUNTIME_TERMINATION_MARKERS),
         },
         "admissible_action_count": len(admissible_actions),
@@ -184,9 +191,6 @@ def main() -> int:
     }
     if not args.no_generate:
         import torch
-        from alfworld_baseline.parser import parse_tool_call
-        from alfworld_baseline.tool_registry import ALFWorldToolRegistry
-        from alfworld_baseline.validator import validate_tool_call
         model_config = AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
         model_cls = AutoModelForCausalLM if getattr(model_config, "model_type", "") == "qwen2" else AutoModelForImageTextToText
         model = model_cls.from_pretrained(
@@ -205,39 +209,19 @@ def main() -> int:
         generations = []
         for seq in generated_ids[:, prompt_len:]:
             text = tokenizer.decode(seq, skip_special_tokens=False)
-            executable_text, _ = tool_output(text, enable_thinking=thinking)
-            if args.profile.startswith("qwen35"):
-                decision = parse_xml_decision(text, enable_thinking=thinking)
-                status = decision.status
-                reason = decision.reason
-                if status == "valid" and decision.action not in admissible_actions:
-                    status, reason = "invalid_action", "inadmissible_action"
-                generations.append({"class": status, "parser_status": decision.status,
-                                    "validation_status": status, "reason": reason,
-                                    "strict_xml": decision.status == "valid",
-                                    "action": decision.action, "text": text})
-                continue
-            parsed = parse_tool_call(executable_text)
-            visible_text, terminal_tokens = strip_runtime_termination(executable_text)
-            validation = validate_tool_call(parsed, ALFWorldToolRegistry(admissible_actions)) if admissible_actions else None
-            generations.append(
-                {
-                    "class": classify(executable_text),
-                    "strict_xml": classify(executable_text) in {"qwen25_json_strict", "qwen3_xml_strict"},
-                    "runtime_termination_tokens": terminal_tokens,
-                    "visible_text": visible_text,
-                    "parser_status": parsed.status.value,
-                    "validation_status": validation.status.value if validation is not None else None,
-                    "action": validation.action if validation is not None and validation.is_valid else None,
-                    "text": text,
-                }
-            )
+            decision = parse_xml_decision(text, enable_thinking=thinking)
+            status, reason = decision.status, decision.reason
+            if decision.status == "valid" and decision.action not in admissible_actions:
+                status, reason = "invalid_action", "inadmissible_action"
+            generations.append({"class": status, "strict_xml": decision.status == "valid",
+                                "parser_status": decision.status, "validation_status": status,
+                                "reason": reason, "action": decision.action, "text": text})
         result["generation"] = generations
         result["generation_class_counts"] = dict(Counter(x["class"] for x in generations))
         result["parser_status_counts"] = dict(Counter(x["parser_status"] for x in generations))
         result["validation_status_counts"] = dict(Counter(x["validation_status"] for x in generations))
+        result["valid_action_rate"] = sum(x["class"] == "valid" for x in generations) / len(generations) if generations else 0.0
         result["strict_xml_rate"] = sum(x["strict_xml"] for x in generations) / len(generations) if generations else 0.0
-        result["strict_qwen25_json_rate"] = sum(x["class"] == "qwen25_json_strict" for x in generations) / len(generations) if generations else 0.0
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({k: result[k] for k in ("sample_id", "rendered_prompt_chars", "rendered_prompt_tokens", "generation_class_counts", "parser_status_counts") if k in result}, ensure_ascii=False))
