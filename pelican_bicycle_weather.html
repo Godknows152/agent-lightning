@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#132238">
+  <title>鹈鹕的天气骑行</title>
+  <style>
+    :root {
+      --ink: #f7fbff;
+      --muted: rgba(239, 247, 255, .72);
+      --panel: rgba(13, 28, 49, .68);
+      --panel-border: rgba(255, 255, 255, .14);
+      --accent: #ffcf62;
+      --scene-sky-top: #70c9ef;
+      --scene-sky-bottom: #edf8ff;
+      --scene-hill-back: #9bd18b;
+      --scene-hill-front: #5ba36b;
+      --scene-ground: #e7f1d3;
+      --scene-road: #38536a;
+      --scene-road-line: #f9e18c;
+      --scene-water: #67cbd2;
+      --scene-shadow: rgba(28, 56, 72, .22);
+      --weather-filter: none;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      min-height: 100svh;
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(52, 146, 197, .3), transparent 35%),
+        linear-gradient(145deg, #0d1c30 0%, #172c47 52%, #0d1729 100%);
+      overflow-x: hidden;
+    }
+
+    .app {
+      width: min(1180px, calc(100% - 28px));
+      padding: clamp(18px, 4vw, 38px) 0;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 18px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: .72rem;
+      font-weight: 800;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 24px;
+      height: 2px;
+      border-radius: 2px;
+      background: currentColor;
+    }
+
+    h1 {
+      max-width: 650px;
+      margin: 0;
+      font-size: clamp(1.85rem, 5vw, 4rem);
+      line-height: .98;
+      letter-spacing: -.055em;
+    }
+
+    .intro {
+      max-width: 590px;
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: clamp(.9rem, 1.5vw, 1.08rem);
+      line-height: 1.55;
+    }
+
+    .weather-readout {
+      min-width: 172px;
+      padding: 14px 16px;
+      border: 1px solid var(--panel-border);
+      border-radius: 18px;
+      background: var(--panel);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      text-align: right;
+      box-shadow: 0 16px 38px rgba(0, 0, 0, .18);
+    }
+
+    .weather-icon {
+      display: block;
+      font-size: 1.7rem;
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+
+    .weather-name {
+      display: block;
+      font-weight: 800;
+      font-size: 1rem;
+    }
+
+    .weather-next {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: .72rem;
+    }
+
+    .scene-shell {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: clamp(22px, 4vw, 34px);
+      background: #163654;
+      box-shadow: 0 28px 70px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255,255,255,.14);
+    }
+
+    .scene-shell::after {
+      content: "";
+      position: absolute;
+      z-index: 3;
+      inset: 0;
+      pointer-events: none;
+      background: var(--weather-filter);
+      transition: background 1.15s ease;
+    }
+
+    .scene {
+      display: block;
+      width: 100%;
+      height: auto;
+      min-height: clamp(390px, 52vw, 625px);
+      background: var(--scene-sky-bottom);
+    }
+
+    .scene * { vector-effect: non-scaling-stroke; }
+
+    .sky, .hills, .ground, .road, .weather, .sun, .clouds, .rain, .bird, .bike, .birds-far, .wind, .dashes { transition: opacity 1.15s ease, filter 1.15s ease; }
+
+    .sun { transform-box: fill-box; transform-origin: center; animation: sun-pulse 5s ease-in-out infinite; }
+    .sun-ray { transform-box: fill-box; transform-origin: center; animation: ray-spin 26s linear infinite; }
+
+    .clouds { opacity: 0; }
+    .clouds.cloud-a { animation: cloud-drift-a 25s linear infinite; }
+    .clouds.cloud-b { animation: cloud-drift-b 32s linear infinite; }
+
+    .bike-wheel { transform-box: fill-box; transform-origin: center; animation: wheel-roll .8s linear infinite; }
+    .pedal-crank { transform-box: fill-box; transform-origin: center; animation: pedal-turn 1.05s linear infinite; }
+    .pelican-body { transform-box: fill-box; transform-origin: center bottom; animation: body-bob 1.05s ease-in-out infinite; }
+    .pelican-head { transform-box: fill-box; transform-origin: center bottom; animation: head-bob 1.05s ease-in-out infinite; }
+    .leg-a { transform-box: fill-box; transform-origin: top center; animation: leg-pump-a 1.05s ease-in-out infinite; }
+    .leg-b { transform-box: fill-box; transform-origin: top center; animation: leg-pump-b 1.05s ease-in-out infinite; }
+    .wind-line { animation: wind-sweep 3.7s linear infinite; }
+    .wind-line:nth-child(2) { animation-delay: -1.4s; }
+    .wind-line:nth-child(3) { animation-delay: -2.5s; }
+
+    .rain { opacity: 0; }
+    .rain-line { animation: rain-fall .85s linear infinite; }
+    .rain-line:nth-child(2n) { animation-delay: -.4s; }
+    .rain-line:nth-child(3n) { animation-delay: -.7s; }
+
+    .road-dash { animation: road-move 1.15s linear infinite; }
+    .road-dash:nth-child(2n) { animation-delay: -.55s; }
+
+    .weather--sunny .sun { opacity: 1; }
+    .weather--sunny .clouds { opacity: .12; }
+    .weather--sunny .rain { opacity: 0; }
+    .weather--sunny .wind { opacity: .32; }
+    .weather--sunny .scene-shell { --weather-filter: none; }
+
+    .weather--cloudy .sun { opacity: .25; filter: saturate(.6); }
+    .weather--cloudy .clouds { opacity: .9; }
+    .weather--cloudy .rain { opacity: 0; }
+    .weather--cloudy .wind { opacity: .2; }
+    .weather--cloudy .scene-shell { --weather-filter: rgba(52, 67, 91, .12); }
+
+    .weather--rainy .sun { opacity: 0; }
+    .weather--rainy .clouds { opacity: 1; }
+    .weather--rainy .rain { opacity: .92; }
+    .weather--rainy .wind { opacity: .08; }
+    .weather--rainy .scene-shell { --weather-filter: rgba(14, 35, 67, .26); }
+
+    .scene-label {
+      position: absolute;
+      z-index: 5;
+      left: clamp(16px, 3vw, 32px);
+      bottom: clamp(16px, 3vw, 30px);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 13px;
+      border: 1px solid rgba(255,255,255,.2);
+      border-radius: 999px;
+      color: #fff;
+      background: rgba(11, 30, 47, .55);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      font-size: clamp(.68rem, 1.2vw, .82rem);
+      letter-spacing: .02em;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #74f7a3;
+      box-shadow: 0 0 0 4px rgba(116,247,163,.16), 0 0 16px rgba(116,247,163,.7);
+      animation: live-pulse 1.6s ease-in-out infinite;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 15px;
+    }
+
+    .timeline-item {
+      display: grid;
+      gap: 8px;
+      padding: 12px 14px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 16px;
+      background: rgba(255,255,255,.055);
+      color: var(--muted);
+      font-size: .78rem;
+    }
+
+    .timeline-item strong { color: var(--ink); font-size: .82rem; }
+
+    .timeline-bar {
+      position: relative;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 10px;
+      background: rgba(255,255,255,.13);
+    }
+
+    .timeline-fill {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 0%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--accent), #74f7a3);
+      transition: width .2s linear;
+    }
+
+    .footer-note {
+      margin: 13px 0 0;
+      color: rgba(239,247,255,.47);
+      font-size: .72rem;
+      text-align: center;
+    }
+
+    @keyframes sun-pulse { 0%, 100% { transform: scale(.97); } 50% { transform: scale(1.04); } }
+    @keyframes ray-spin { to { transform: rotate(360deg); } }
+    @keyframes cloud-drift-a { 0%, 100% { transform: translateX(-2%); } 50% { transform: translateX(2%); } }
+    @keyframes cloud-drift-b { 0%, 100% { transform: translateX(2%); } 50% { transform: translateX(-2%); } }
+    @keyframes wheel-roll { to { transform: rotate(360deg); } }
+    @keyframes pedal-turn { to { transform: rotate(360deg); } }
+    @keyframes body-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2.2px); } }
+    @keyframes head-bob { 0%, 100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-3px) rotate(1deg); } }
+    @keyframes leg-pump-a { 0%, 100% { transform: rotate(14deg); } 50% { transform: rotate(-18deg); } }
+    @keyframes leg-pump-b { 0%, 100% { transform: rotate(-18deg); } 50% { transform: rotate(14deg); } }
+    @keyframes wind-sweep { 0% { transform: translateX(0); opacity: 0; } 12% { opacity: 1; } 75% { opacity: .8; } 100% { transform: translateX(90px); opacity: 0; } }
+    @keyframes rain-fall { from { transform: translateY(-18px); } to { transform: translateY(45px); } }
+    @keyframes road-move { from { transform: translateX(0); } to { transform: translateX(-92px); } }
+    @keyframes live-pulse { 0%, 100% { opacity: .65; transform: scale(.86); } 50% { opacity: 1; transform: scale(1.1); } }
+
+    @media (max-width: 680px) {
+      .app { width: min(100% - 20px, 560px); padding-top: 20px; }
+      .topbar { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 13px; }
+      .weather-readout { min-width: 112px; padding: 10px 11px; }
+      .weather-icon { font-size: 1.4rem; }
+      .weather-name { font-size: .86rem; }
+      .weather-next { font-size: .65rem; }
+      .intro { line-height: 1.45; }
+      .scene { min-height: 510px; }
+      .timeline { gap: 7px; }
+      .timeline-item { padding: 10px 9px; font-size: .68rem; }
+      .timeline-item strong { font-size: .73rem; }
+    }
+
+    @media (max-width: 390px) {
+      .topbar { grid-template-columns: 1fr; }
+      .weather-readout { display: flex; align-items: center; gap: 9px; width: max-content; }
+      .weather-icon { margin: 0; }
+      .weather-next { margin: 0; }
+      .scene { min-height: 540px; }
+      .timeline-item { padding: 9px 7px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body class="weather--sunny">
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">A DAY ON TWO WHEELS</p>
+        <h1>鹈鹕的天气骑行</h1>
+        <p class="intro">沿着海边慢慢前进，天空每 5 秒换一种心情。车轮不停，风也不停。</p>
+      </div>
+      <aside class="weather-readout" aria-live="polite">
+        <span class="weather-icon" id="weatherIcon" aria-hidden="true">☀️</span>
+        <span class="weather-name" id="weatherName">晴天骑行</span>
+        <span class="weather-next" id="weatherNext">下一站：阴天 · 05 秒</span>
+      </aside>
+    </header>
+
+    <section class="scene-shell" aria-label="鹈鹕骑自行车的动态天气场景">
+      <svg class="scene" viewBox="0 0 1200 680" role="img" aria-labelledby="sceneTitle sceneDesc" preserveAspectRatio="xMidYMid slice">
+        <title id="sceneTitle">鹈鹕在海边骑自行车</title>
+        <desc id="sceneDesc">一只戴着蓝色头盔的鹈鹕骑着红色自行车沿着海边前行，天气自动在晴天、阴天和雨天之间切换。</desc>
+
+        <defs>
+          <linearGradient id="skyGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--scene-sky-top)" />
+            <stop offset="100%" stop-color="var(--scene-sky-bottom)" />
+          </linearGradient>
+          <linearGradient id="roadGradient" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#496b7d" />
+            <stop offset="100%" stop-color="var(--scene-road)" />
+          </linearGradient>
+          <linearGradient id="featherGradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#fffdf5" />
+            <stop offset="100%" stop-color="#d8e8ea" />
+          </linearGradient>
+          <linearGradient id="beakGradient" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#ffc86b" />
+            <stop offset="100%" stop-color="#e78a35" />
+          </linearGradient>
+          <filter id="softShadow" x="-30%" y="-30%" width="160%" height="180%">
+            <feGaussianBlur stdDeviation="9" />
+          </filter>
+          <filter id="smallShadow" x="-30%" y="-30%" width="160%" height="180%">
+            <feGaussianBlur stdDeviation="3" />
+          </filter>
+          <pattern id="roadTexture" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M0 19L20 1" stroke="#ffffff" stroke-opacity=".035" stroke-width="2" />
+          </pattern>
+          <clipPath id="sceneClip"><rect width="1200" height="680" rx="0" /></clipPath>
+        </defs>
+
+        <g clip-path="url(#sceneClip)">
+          <rect class="sky" width="1200" height="680" fill="url(#skyGradient)" />
+          <ellipse class="sun" cx="975" cy="128" rx="58" ry="58" fill="#ffe99a" opacity=".96" />
+          <g class="sun-ray" fill="none" stroke="#ffe69a" stroke-linecap="round" stroke-width="8" opacity=".68">
+            <path d="M975 38v-26M975 244v-26M885 128h-26M1091 128h-26M911 64l-19-19M1039 192l-19-19M1039 64l19-19M911 192l-19 19" />
+          </g>
+
+          <g class="clouds cloud-a" fill="#f8fbff">
+            <path opacity=".92" d="M94 148c0-25 20-45 45-45 12 0 23 5 31 13 11-28 37-47 68-47 37 0 68 28 72 64 6-2 12-3 18-3 27 0 49 22 49 49H94c0-10 0-20 0-31Z" />
+          </g>
+          <g class="clouds cloud-b" fill="#ffffff">
+            <path opacity=".83" d="M792 211c0-18 15-33 34-33 8 0 17 3 23 9 9-21 29-35 53-35 29 0 53 22 56 50 5-1 9-2 14-2 21 0 38 17 38 38H792v-27Z" />
+          </g>
+
+          <g class="birds-far" fill="none" stroke="#2e718c" stroke-linecap="round" stroke-width="4" opacity=".35">
+            <path d="M235 104q15-13 30 0 15-13 30 0" />
+            <path d="M325 167q11-10 22 0 11-10 22 0" />
+            <path d="M1080 219q14-12 28 0 14-12 28 0" />
+          </g>
+
+          <path class="hills" d="M0 357c128-106 259-129 392-43 101 65 184 63 277-9 116-90 237-84 352-3 62 43 116 62 179 33v170H0Z" fill="var(--scene-hill-back)" opacity=".74" />
+          <path class="hills" d="M0 421c120-48 225-47 326 9 108 59 193 62 295 8 145-78 262-44 367 21 79 48 142 56 212 21v152H0Z" fill="var(--scene-hill-front)" opacity=".9" />
+          <path class="ground" d="M0 451c165-39 302-24 428 37 111 54 207 47 318-12 114-62 231-55 330 2 45 26 86 36 124 28v174H0Z" fill="var(--scene-ground)" />
+          <path d="M0 470c164-41 305-25 432 35 108 51 202 45 312-15 113-62 231-55 330 2 45 26 86 36 126 28" fill="none" stroke="#c8e1ae" stroke-width="7" opacity=".62" />
+
+          <path d="M0 564C213 516 380 521 564 563c192 44 394 35 636-17v170H0Z" fill="url(#roadGradient)" />
+          <path d="M0 564C213 516 380 521 564 563c192 44 394 35 636-17v170H0Z" fill="url(#roadTexture)" opacity=".8" />
+          <path d="M0 562c210-46 384-36 566 7 191 45 396 34 634-19" fill="none" stroke="#66899a" stroke-width="4" opacity=".8" />
+          <g class="dashes" fill="var(--scene-road-line)">
+            <path class="road-dash" d="M88 622l102-12 54 10-102 14Z" />
+            <path class="road-dash" d="M385 599l95-5 52 11-97 8Z" />
+            <path class="road-dash" d="M686 604l94 4 48 13-99-7Z" />
+            <path class="road-dash" d="M978 583l96 3 43 12-98-4Z" />
+          </g>
+
+          <g class="water" opacity=".72" fill="none" stroke="#d7fbf0" stroke-linecap="round">
+            <path d="M41 486h116M71 503h79M1025 469h116M1043 488h82" stroke-width="3" />
+            <path d="M175 535h91M902 529h72" stroke-width="2" opacity=".7" />
+          </g>
+
+          <g class="wind" fill="none" stroke="#ffffff" stroke-linecap="round" stroke-width="4" opacity=".32">
+            <path class="wind-line" d="M65 325h72c15 0 15-22 0-22h-13" />
+            <path class="wind-line" d="M949 336h82c17 0 17-25 0-25h-14" />
+            <path class="wind-line" d="M102 388h48" />
+          </g>
+
+          <g class="rain" stroke="#d9f2ff" stroke-linecap="round" stroke-width="4">
+            <path class="rain-line" d="M88 205l-18 45" /><path class="rain-line" d="M139 247l-18 45" /><path class="rain-line" d="M200 207l-18 45" />
+            <path class="rain-line" d="M266 245l-18 45" /><path class="rain-line" d="M331 209l-18 45" /><path class="rain-line" d="M392 250l-18 45" />
+            <path class="rain-line" d="M460 210l-18 45" /><path class="rain-line" d="M522 247l-18 45" /><path class="rain-line" d="M589 211l-18 45" />
+            <path class="rain-line" d="M652 249l-18 45" /><path class="rain-line" d="M719 211l-18 45" /><path class="rain-line" d="M786 247l-18 45" />
+            <path class="rain-line" d="M855 206l-18 45" /><path class="rain-line" d="M922 245l-18 45" /><path class="rain-line" d="M987 208l-18 45" />
+            <path class="rain-line" d="M1052 250l-18 45" /><path class="rain-line" d="M1114 211l-18 45" /><path class="rain-line" d="M1171 248l-18 45" />
+          </g>
+
+          <ellipse cx="637" cy="594" rx="195" ry="26" fill="var(--scene-shadow)" filter="url(#softShadow)" />
+
+          <!-- Bicycle -->
+          <g class="bike" transform="translate(0 0)">
+            <g fill="none" stroke="#263845" stroke-width="8">
+              <circle class="bike-wheel" cx="524" cy="564" r="72" fill="#d8e9ee" stroke="#263845" stroke-width="7" />
+              <circle class="bike-wheel" cx="788" cy="564" r="72" fill="#d8e9ee" stroke="#263845" stroke-width="7" />
+            </g>
+            <g fill="none" stroke="#87a7b0" stroke-width="2" opacity=".8">
+              <circle cx="524" cy="564" r="58" /><circle cx="788" cy="564" r="58" />
+              <path d="M524 492v144M452 564h144M473 513l102 102M575 513L473 615" />
+              <path d="M788 492v144M716 564h144M737 513l102 102M839 513L737 615" />
+            </g>
+            <g fill="none" stroke="#df5064" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M524 564l104-105 51 105H524l78-2" stroke-width="10" />
+              <path d="M628 459l60-3 53 108" stroke-width="10" />
+              <path d="M628 459l-32-62" stroke-width="10" />
+              <path d="M596 397h-38" stroke-width="12" />
+              <path d="M683 455l34-48" stroke-width="8" />
+              <path d="M717 407h37" stroke-width="8" />
+              <path d="M754 407l-10 18" stroke-width="7" />
+            </g>
+            <g fill="#f57d6b"><circle cx="628" cy="459" r="9" /><circle cx="602" cy="397" r="7" /></g>
+            <g class="pedal-crank" fill="none" stroke="#263845" stroke-width="6">
+              <circle cx="628" cy="539" r="17" fill="#e8b64c" stroke="#263845" />
+              <path d="M628 539l26-25M654 514h18M628 539l-27 25M601 564h-18" />
+            </g>
+            <path d="M581 402l-18-13" fill="none" stroke="#263845" stroke-width="6" stroke-linecap="round" />
+          </g>
+
+          <!-- Pelican rider -->
+          <g class="pelican-body">
+            <path d="M589 356c-7-34 9-71 45-88 39-18 93-1 110 42 13 33-2 73-35 90-30 15-78 12-106-12-8-7-12-18-14-32Z" fill="url(#featherGradient)" stroke="#304858" stroke-width="5" />
+            <path d="M617 318c20-15 41-18 63-8 22 9 35 29 42 50-26-5-46-1-64 9-18 9-38 9-56 1-5-18 1-38 15-52Z" fill="#edf6f4" opacity=".9" />
+            <path d="M623 342c-7 27-18 55-32 77l23 19c22-24 37-53 41-82Z" fill="#d5e7e8" stroke="#304858" stroke-width="4" />
+            <path d="M637 365c-7 26-2 50 14 72l23-11c-11-20-13-41-5-62Z" fill="#ffffff" stroke="#304858" stroke-width="4" />
+            <path d="M679 348c25 7 45 26 52 50" fill="none" stroke="#bed5d8" stroke-width="5" stroke-linecap="round" />
+            <g class="leg-a" fill="none" stroke="#e58a47" stroke-width="9" stroke-linecap="round">
+              <path d="M650 426l-10 86 24 27" />
+            </g>
+            <g class="leg-b" fill="none" stroke="#e58a47" stroke-width="9" stroke-linecap="round">
+              <path d="M689 429l20 81-21 26" />
+            </g>
+            <g fill="none" stroke="#e58a47" stroke-width="6" stroke-linecap="round">
+              <path d="M664 537l-17 7M664 537l8 11M668 536l18 4" />
+              <path d="M687 536l-17 6M687 536l10 10M690 534l16 4" />
+            </g>
+          </g>
+
+          <g class="pelican-head">
+            <path d="M588 278c-7-47 16-82 57-91 39-8 76 16 80 52 3 32-21 62-57 70-29 7-66-4-80-31Z" fill="url(#featherGradient)" stroke="#304858" stroke-width="5" />
+            <path d="M602 235c10-32 35-49 66-46 24 2 42 15 51 35-26 5-43 18-56 35-15 19-37 26-58 22-6-13-7-30-3-46Z" fill="#f9fbf0" />
+            <path d="M608 183c9-17 27-26 48-26 25 0 45 13 54 34-22-8-46-4-63 10-12 10-26 14-41 10-2-10-1-19 2-28Z" fill="#3b8ec2" stroke="#304858" stroke-width="5" />
+            <path d="M661 233c39-3 71 4 104 21-20 12-44 20-72 18-22-2-40-9-51-20 3-9 9-16 19-19Z" fill="url(#beakGradient)" stroke="#304858" stroke-width="5" />
+            <path d="M685 255c24 2 47 0 66-4-13 14-32 22-54 21" fill="none" stroke="#b86438" stroke-width="4" stroke-linecap="round" />
+            <ellipse cx="671" cy="216" rx="7" ry="9" fill="#253b49" />
+            <circle cx="673" cy="213" r="2.2" fill="#fff" />
+            <path d="M603 270c8 13 20 23 35 28" fill="none" stroke="#c5dfe1" stroke-width="5" stroke-linecap="round" />
+          </g>
+
+          <g class="bike-light" fill="#fff4bb" stroke="#eab349" stroke-width="4">
+            <circle cx="756" cy="426" r="10" />
+          </g>
+          <g class="sparkles" fill="#fff1b1">
+            <circle cx="449" cy="431" r="4" /><circle cx="479" cy="399" r="3" /><circle cx="805" cy="391" r="4" />
+          </g>
+        </g>
+      </svg>
+      <div class="scene-label"><span class="live-dot"></span><span id="sceneStatus">实时天气循环中</span></div>
+    </section>
+
+    <section class="timeline" aria-label="天气切换进度">
+      <div class="timeline-item" data-state="sunny"><strong>☀️ 晴天</strong><span>海风轻轻吹</span><div class="timeline-bar"><span class="timeline-fill"></span></div></div>
+      <div class="timeline-item" data-state="cloudy"><strong>☁️ 阴天</strong><span>云朵开始聚会</span><div class="timeline-bar"><span class="timeline-fill"></span></div></div>
+      <div class="timeline-item" data-state="rainy"><strong>🌧️ 雨天</strong><span>雨点落在车铃上</span><div class="timeline-bar"><span class="timeline-fill"></span></div></div>
+    </section>
+    <p class="footer-note">每种天气停留 5 秒 · 画面会自动适配手机竖屏与电脑横屏</p>
+  </main>
+
+  <script>
+    (() => {
+      const states = [
+        { key: 'sunny', icon: '☀️', name: '晴天骑行', next: '阴天', label: '阳光正好，继续出发' },
+        { key: 'cloudy', icon: '☁️', name: '阴天骑行', next: '雨天', label: '云朵路过，风变柔了' },
+        { key: 'rainy', icon: '🌧️', name: '雨天骑行', next: '晴天', label: '雨点落下，铃声更清脆' }
+      ];
+      const duration = 5000;
+      const body = document.body;
+      const name = document.getElementById('weatherName');
+      const icon = document.getElementById('weatherIcon');
+      const next = document.getElementById('weatherNext');
+      const status = document.getElementById('sceneStatus');
+      const cards = [...document.querySelectorAll('.timeline-item')];
+      let startedAt = performance.now();
+      let currentIndex = 0;
+
+      function render(index, now) {
+        const state = states[index];
+        currentIndex = index;
+        body.classList.remove(...states.map(item => `weather--${item.key}`));
+        body.classList.add(`weather--${state.key}`);
+        icon.textContent = state.icon;
+        name.textContent = state.name;
+        next.textContent = `下一站：${state.next} · 05 秒`;
+        status.textContent = state.label;
+        cards.forEach((card, cardIndex) => {
+          card.style.opacity = cardIndex === index ? '1' : '.68';
+          card.style.borderColor = cardIndex === index ? 'rgba(255, 207, 98, .48)' : 'rgba(255,255,255,.1)';
+        });
+        startedAt = now;
+      }
+
+      function tick(now) {
+        const elapsed = now - startedAt;
+        if (elapsed >= duration) {
+          render((currentIndex + Math.floor(elapsed / duration)) % states.length, now);
+        }
+        const progress = Math.min(1, (now - startedAt) / duration);
+        cards.forEach((card, cardIndex) => {
+          const fill = card.querySelector('.timeline-fill');
+          fill.style.width = cardIndex === currentIndex ? `${progress * 100}%` : '0%';
+        });
+        const seconds = Math.max(1, Math.ceil((duration - (now - startedAt)) / 1000));
+        next.textContent = `下一站：${states[(currentIndex + 1) % states.length].name.replace('骑行', '')} · ${String(seconds).padStart(2, '0')} 秒`;
+        requestAnimationFrame(tick);
+      }
+
+      render(0, startedAt);
+      requestAnimationFrame(tick);
+    })();
+  </script>
+</body>
+</html>

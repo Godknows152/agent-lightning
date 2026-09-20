@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>鹈鹕骑自行车 · 天气循环动画</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ui-bg: rgba(11, 22, 38, .62);
+      --ui-line: rgba(255, 255, 255, .17);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+    body {
+      min-height: 100dvh;
+      background: #07111d;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overscroll-behavior: none;
+    }
+    #scene {
+      display: block;
+      width: 100vw;
+      height: 100dvh;
+      touch-action: none;
+    }
+    .hud {
+      position: fixed;
+      inset: max(14px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) auto max(14px, env(safe-area-inset-left));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      pointer-events: none;
+      user-select: none;
+    }
+    .title, .weather {
+      border: 1px solid var(--ui-line);
+      background: var(--ui-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      box-shadow: 0 10px 28px rgba(0,0,0,.16);
+      border-radius: 999px;
+      color: #f8fbff;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .title { padding: 10px 15px; font-size: clamp(12px, 1.8vw, 16px); letter-spacing: .04em; }
+    .weather { padding: 9px 13px 9px 11px; font-size: clamp(12px, 1.8vw, 15px); display: flex; align-items: center; gap: 7px; }
+    .weather-icon { font-size: 1.3em; }
+    .hint {
+      position: fixed;
+      left: 50%;
+      bottom: max(15px, env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      color: rgba(245,250,255,.72);
+      font-size: clamp(11px, 1.8vw, 14px);
+      letter-spacing: .06em;
+      pointer-events: none;
+      user-select: none;
+      text-align: center;
+      text-shadow: 0 1px 3px rgba(0,0,0,.6);
+    }
+    @media (max-width: 520px) {
+      .hud { align-items: flex-start; }
+      .title { max-width: 55vw; white-space: normal; line-height: 1.2; }
+      .weather { padding-right: 10px; }
+      .hint { bottom: max(12px, env(safe-area-inset-bottom)); }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="scene" aria-label="一只鹈鹕在不同天气中骑自行车的动画"></canvas>
+  <div class="hud"><div class="title">鹈鹕的天气骑行日</div><div class="weather"><span class="weather-icon" id="weatherIcon">☀️</span><span id="weatherText">晴天</span></div></div>
+  <div class="hint">天气每 5 秒自动切换 · 点击画面可暂停 / 继续</div>
+  <script>
+    (() => {
+      'use strict';
+      const canvas = document.getElementById('scene');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const weatherIcon = document.getElementById('weatherIcon');
+      const weatherText = document.getElementById('weatherText');
+      const weather = [
+        { name: '晴天', icon: '☀️', sky: ['#58c7f6', '#b8ecff'], tint: [255, 226, 126], rain: false, cloud: .22 },
+        { name: '阴天', icon: '☁️', sky: ['#8da4b4', '#d1d8db'], tint: [232, 240, 240], rain: false, cloud: .82 },
+        { name: '雨天', icon: '🌧️', sky: ['#42586d', '#8297a5'], tint: [176, 205, 220], rain: true, cloud: 1 },
+      ];
+      let dpr = 1, w = 0, h = 0, scale = 1, last = 0, elapsed = 0, paused = false;
+      let currentWeather = 0, weatherProgress = 0;
+      let rainDrops = [], clouds = [], birds = [];
+
+      const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const mix = (a, b, t) => a.map((v, i) => Math.round(lerp(v, b[i], t)));
+      const color = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        dpr = Math.min(2, window.devicePixelRatio || 1);
+        w = Math.max(1, rect.width); h = Math.max(1, rect.height);
+        canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        scale = Math.min(w / 1100, h / 650);
+        clouds = Array.from({length: Math.max(4, Math.ceil(w / 220))}, (_, i) => ({
+          x: (i * 260 + Math.random() * 160) % (w + 320) - 160,
+          y: h * (.13 + Math.random() * .2),
+          s: .65 + Math.random() * .75,
+          speed: 4 + Math.random() * 8,
+          alpha: .38 + Math.random() * .35
+        }));
+        rainDrops = Array.from({length: Math.max(100, Math.ceil(w * h / 6400))}, () => ({ x: Math.random() * w, y: Math.random() * h, l: 10 + Math.random() * 20, speed: 270 + Math.random() * 250, drift: -34 - Math.random() * 30 }));
+        birds = Array.from({length: Math.max(3, Math.ceil(w / 320))}, (_, i) => ({ x: i * 290 + Math.random() * 140, y: h * (.2 + Math.random() * .17), s: .6 + Math.random() * .5, speed: 7 + Math.random() * 8 }));
+      }
+      window.addEventListener('resize', resize, {passive:true});
+      resize();
+
+      function roundedRect(x,y,ww,hh,r) { ctx.beginPath(); ctx.roundRect(x,y,ww,hh,r); }
+      function drawSky(t) {
+        const a = weather[currentWeather], b = weather[(currentWeather + 1) % weather.length];
+        const phase = clamp(weatherProgress, 0, 1);
+        const top = mix(hex(a.sky[0]), hex(b.sky[0]), phase), bot = mix(hex(a.sky[1]), hex(b.sky[1]), phase);
+        const g = ctx.createLinearGradient(0,0,0,h); g.addColorStop(0, color(top)); g.addColorStop(1, color(bot)); ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+        const sunAlpha = (1 - a.cloud) * (1 - phase) + (1 - b.cloud) * phase;
+        ctx.save(); ctx.globalAlpha = .9 * sunAlpha;
+        const sx = w * .78, sy = h * .2, r = Math.max(22, Math.min(w,h) * .055);
+        const glow = ctx.createRadialGradient(sx,sy,0,sx,sy,r*3.7); glow.addColorStop(0,'rgba(255,242,172,.95)'); glow.addColorStop(1,'rgba(255,229,117,0)'); ctx.fillStyle = glow; ctx.beginPath(); ctx.arc(sx,sy,r*3.7,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#ffe38a'; ctx.beginPath(); ctx.arc(sx,sy,r,0,Math.PI*2); ctx.fill(); ctx.restore();
+        drawClouds(t, lerp(a.cloud,b.cloud,phase));
+        const horizon = h * .67;
+        const hill = ctx.createLinearGradient(0,horizon-90,0,horizon+70); hill.addColorStop(0,'rgba(105,164,135,.6)'); hill.addColorStop(1,'rgba(43,95,79,.92)');
+        ctx.fillStyle = hill; ctx.beginPath(); ctx.moveTo(0,horizon+36); for (let x=0;x<=w+70;x+=70) ctx.quadraticCurveTo(x+35,horizon-35-Math.sin(x*.02)*18,x+70,horizon+36); ctx.lineTo(w,h); ctx.lineTo(0,h); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = 'rgba(242,221,163,.42)'; ctx.fillRect(0,horizon+22,w,horizon+74);
+        const roadTop = h * .78; ctx.fillStyle = '#2d3a42'; ctx.fillRect(0,roadTop,w,h-roadTop); ctx.fillStyle = '#536267'; ctx.fillRect(0,roadTop,w,Math.max(3,scale*7));
+        ctx.save(); ctx.setLineDash([42*scale,32*scale]); ctx.lineWidth = Math.max(2,scale*4); ctx.strokeStyle = 'rgba(250,224,139,.72)'; ctx.beginPath(); ctx.moveTo(0,roadTop+(h-roadTop)*.55); ctx.lineTo(w,roadTop+(h-roadTop)*.55); ctx.stroke(); ctx.restore();
+      }
+      function hex(v) { const n = parseInt(v.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+      function drawClouds(t, intensity) {
+        ctx.save();
+        clouds.forEach(c => { c.x += c.speed * .016; if (c.x > w+190) c.x = -190; const alpha = c.alpha * intensity; if (alpha <= .01) return; const x=c.x, y=c.y, s=c.s*scale;
+          ctx.globalAlpha=alpha; ctx.fillStyle='#f4f8fa'; ctx.beginPath(); ctx.ellipse(x,y+18*s,78*s,25*s,0,0,Math.PI*2); ctx.ellipse(x-45*s,y+22*s,45*s,20*s,0,0,Math.PI*2); ctx.ellipse(x+30*s,y+5*s,55*s,38*s,0,0,Math.PI*2); ctx.ellipse(x+76*s,y+22*s,42*s,19*s,0,0,Math.PI*2); ctx.fill();
+        }); ctx.restore();
+      }
+      function drawDistantBirds(t, intensity) {
+        ctx.save(); ctx.strokeStyle = `rgba(29,66,79,${.48 * (1-intensity*.5)})`; ctx.lineWidth=Math.max(1,2*scale); ctx.lineCap='round';
+        birds.forEach(b => { b.x += b.speed * .016; if (b.x>w+30) b.x=-40; const y=b.y+Math.sin(t*.001+b.x)*3; ctx.beginPath(); ctx.arc(b.x,y,6*scale,Math.PI*1.1,Math.PI*1.9); ctx.arc(b.x+12*scale,y,6*scale,Math.PI*1.1,Math.PI*1.9); ctx.stroke(); }); ctx.restore();
+      }
+      function drawRain(dt, intensity) {
+        if (intensity < .03) return; ctx.save(); ctx.globalAlpha=.65*intensity; ctx.strokeStyle='rgba(220,243,255,.75)'; ctx.lineWidth=Math.max(1,scale*1.4); ctx.lineCap='round';
+        rainDrops.forEach(r => { r.x += r.drift*dt; r.y += r.speed*dt; if (r.y>h+25) { r.y=-25; r.x=Math.random()*w; } if(r.x<-30) r.x=w+30; ctx.beginPath(); ctx.moveTo(r.x,r.y); ctx.lineTo(r.x+r.drift*.055,r.y+r.l); ctx.stroke(); }); ctx.restore();
+      }
+      function drawPuddle(t) { const y=h*.885; ctx.save(); ctx.globalAlpha=.24; ctx.fillStyle='#9dc1cb'; for(let i=0;i<7;i++){const x=w*(.08+i*.15)+Math.sin(t*.001+i)*15; ctx.beginPath();ctx.ellipse(x,y+10*Math.sin(i),45*scale,4*scale,0,0,Math.PI*2);ctx.fill();} ctx.restore(); }
+
+      function drawPelicanBike(t) {
+        const ground = h*.805, base = Math.min(w,h), s = clamp(scale, .48, 1.18); const bikeX=w*.49, bikeY=ground-26*s; const bob=Math.sin(t*.006)*2.1*s;
+        ctx.save(); ctx.translate(bikeX,bikeY+bob); ctx.lineCap='round'; ctx.lineJoin='round';
+        // shadow
+        ctx.save(); ctx.globalAlpha=.23; ctx.fillStyle='#0b2028'; ctx.beginPath();ctx.ellipse(0,42*s,124*s,11*s,0,0,Math.PI*2);ctx.fill();ctx.restore();
+        // wheels
+        const wheelR=45*s, rear=-91*s, front=91*s; ctx.strokeStyle='#17262e';ctx.lineWidth=5*s; [rear,front].forEach(x=>{ctx.beginPath();ctx.arc(x,0,wheelR,0,Math.PI*2);ctx.stroke();ctx.strokeStyle='rgba(220,239,236,.38)';ctx.lineWidth=1.5*s;ctx.beginPath();ctx.arc(x,0,wheelR-6*s,0,Math.PI*2);ctx.stroke();});
+        // spokes
+        ctx.strokeStyle='rgba(219,239,239,.34)';ctx.lineWidth=1*s; [rear,front].forEach(x=>{for(let i=0;i<10;i++){let a=i*Math.PI/5;ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x+Math.cos(a)*wheelR, Math.sin(a)*wheelR);ctx.stroke();}});
+        // frame
+        ctx.strokeStyle='#f3a63d';ctx.lineWidth=5*s;ctx.beginPath();ctx.moveTo(rear,0);ctx.lineTo(-20*s,0);ctx.lineTo(20*s, -45*s);ctx.lineTo(rear,0);ctx.moveTo(-20*s,0);ctx.lineTo(20*s,0);ctx.lineTo(20*s,-45*s);ctx.moveTo(20*s,-45*s);ctx.lineTo(front,0);ctx.stroke();
+        // handlebars and seat
+        ctx.strokeStyle='#25353a';ctx.lineWidth=5*s;ctx.beginPath();ctx.moveTo(20*s,-45*s);ctx.lineTo(39*s,-70*s);ctx.lineTo(54*s,-67*s);ctx.stroke();ctx.beginPath();ctx.moveTo(-37*s,-51*s);ctx.lineTo(-8*s,-51*s);ctx.stroke();
+        // pedals
+        const pedalA=t*.008; ctx.strokeStyle='#263841';ctx.lineWidth=4*s;ctx.beginPath();ctx.moveTo(-20*s,0);ctx.lineTo(-20*s+Math.cos(pedalA)*18*s,Math.sin(pedalA)*18*s);ctx.stroke();ctx.beginPath();ctx.arc(-20*s,0,5*s,0,Math.PI*2);ctx.stroke();
+        // pelican body
+        ctx.save(); ctx.translate(-3*s,-103*s); ctx.fillStyle='#f2f4e9';ctx.strokeStyle='#536a6e';ctx.lineWidth=2.2*s;ctx.beginPath();ctx.ellipse(0,24*s,43*s,57*s,-.12,0,Math.PI*2);ctx.fill();ctx.stroke();
+        // wing
+        ctx.fillStyle='#d4ddd8';ctx.beginPath();ctx.ellipse(7*s,22*s,20*s,45*s,-.32,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.strokeStyle='rgba(94,119,119,.55)';ctx.lineWidth=1.5*s; for(let i=0;i<4;i++){ctx.beginPath();ctx.moveTo(-3*s+i*3*s,3*s);ctx.quadraticCurveTo(12*s+i*2*s,27*s,15*s+i*1.3*s,49*s);ctx.stroke();}
+        // neck and head
+        ctx.fillStyle='#f3f5eb';ctx.strokeStyle='#536a6e';ctx.lineWidth=2.2*s;ctx.beginPath();ctx.moveTo(-23*s,-8*s);ctx.quadraticCurveTo(-38*s,-59*s,-12*s,-75*s);ctx.quadraticCurveTo(11*s,-91*s,28*s,-69*s);ctx.lineTo(9*s,-45*s);ctx.quadraticCurveTo(-2*s,-20*s,-23*s,-8*s);ctx.fill();ctx.stroke();
+        ctx.fillStyle='#eef2e5';ctx.beginPath();ctx.arc(8*s,-78*s,27*s,0,Math.PI*2);ctx.fill();ctx.stroke();
+        // beak
+        ctx.fillStyle='#efa84c';ctx.strokeStyle='#9a6338';ctx.lineWidth=2*s;ctx.beginPath();ctx.moveTo(25*s,-72*s);ctx.quadraticCurveTo(68*s,-70*s,84*s,-51*s);ctx.quadraticCurveTo(60*s,-39*s,20*s,-52*s);ctx.closePath();ctx.fill();ctx.stroke();
+        ctx.fillStyle='#e7a142';ctx.beginPath();ctx.moveTo(30*s,-58*s);ctx.quadraticCurveTo(61*s,-51*s,80*s,-51*s);ctx.quadraticCurveTo(55*s,-38*s,25*s,-48*s);ctx.closePath();ctx.fill();
+        // eye
+        ctx.fillStyle='#182a31';ctx.beginPath();ctx.arc(16*s,-82*s,4.2*s,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(17*s,-83*s,1.2*s,0,Math.PI*2);ctx.fill();
+        // feet on pedals
+        ctx.strokeStyle='#e88d37';ctx.lineWidth=5*s;ctx.beginPath();ctx.moveTo(-18*s,0);ctx.lineTo(-35*s,15*s);ctx.lineTo(-45*s,12*s);ctx.stroke();ctx.beginPath();ctx.moveTo(2*s,0);ctx.lineTo(13*s,16*s);ctx.lineTo(24*s,14*s);ctx.stroke();
+        // scarf
+        ctx.strokeStyle='#dc5c58';ctx.lineWidth=7*s;ctx.beginPath();ctx.moveTo(-10*s,-52*s);ctx.quadraticCurveTo(-45*s,-38*s,-60*s,-54*s);ctx.stroke();ctx.lineWidth=4*s;ctx.beginPath();ctx.moveTo(-39*s,-49*s);ctx.lineTo(-63*s,-22*s);ctx.stroke();
+        ctx.restore(); ctx.restore();
+      }
+      function updateHud() { weatherIcon.textContent=weather[currentWeather].icon; weatherText.textContent=weather[currentWeather].name; }
+      function frame(now) {
+        if (!last) last=now; const dt=Math.min(.04,(now-last)/1000); last=now;
+        if (!paused) { elapsed += dt*1000; const total=5000; currentWeather=Math.floor(elapsed/total)%weather.length; weatherProgress=(elapsed%total)/total; }
+        const active=weather[currentWeather], next=weather[(currentWeather+1)%weather.length];
+        drawSky(now); drawDistantBirds(now,lerp(active.cloud,next.cloud,weatherProgress)); drawRain(dt,lerp(active.rain?1:0,next.rain?1:0,weatherProgress)); if(active.rain||next.rain) drawPuddle(now); drawPuddlesAndGrasses(now); drawP(elapsed);
+        updateHud(); requestAnimationFrame(frame);
+      }
+      function drawPuddlesAndGrasses(t) {
+        const ground=h*.78; ctx.save(); ctx.strokeStyle='rgba(39,92,74,.7)'; ctx.lineWidth=Math.max(1,scale*2); for(let x=0;x<w;x+=24*scale){const yy=ground+10*scale;ctx.beginPath();ctx.moveTo(x,yy+15*scale);ctx.quadraticCurveTo(x+3*scale,yy-Math.sin(x*.18+t*.001)*7*scale,x+7*scale,yy+15*scale);ctx.stroke();} ctx.restore();
+      }
+      function drawP(time) { drawPelicanBike(time); }
+      canvas.addEventListener('pointerup',()=>{paused=!paused; if(paused) canvas.setAttribute('aria-label','动画已暂停'); else canvas.setAttribute('aria-label','一只鹈鹕在不同天气中骑自行车的动画');});
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>
