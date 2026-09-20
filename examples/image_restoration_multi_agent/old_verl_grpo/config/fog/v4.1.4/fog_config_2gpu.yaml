@@ -1,5 +1,5 @@
 # Old-verl GRPO config for fog expert on 2 trainer GPUs (v4.1.4).
-# v4.1.4: Reverse-quality-validity-gated legal-action first-token entropy with cosine decay.
+# Continue the four-GPU delayed-entropy run from global_step_140 on two GPUs.
 
 hydra:
   searchpath:
@@ -19,23 +19,39 @@ data:
 actor_rollout_ref:
   model:
     path: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
-    # Actor 从 0731 fog SFT LoRA 初始化并继续更新；冻结参考策略加载同一份初始 LoRA。
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/fog
+    # Actor 加载 step 140 导出的完整 LoRA；KL 参考保持原始 0731 SFT，不随迁移改变。
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.4/entropy_0.4_4gpu_step140/fog
+    reference_lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/image_restoration_experts/outputs/qwen3_5_0731/format_cold_start/fog
   rollout:
     multi_turn:
       tool_config_path: examples/image_restoration_multi_agent/old_verl_grpo/config/tool_config/v2/restoration_tool_config_2gpu.yaml
   actor:
+    # 权重由 LoRA 初始化；只恢复已转换成两卡分片的 Adam、LR scheduler 和 RNG。
+    checkpoint:
+      load_contents: [optimizer, extra]
+      save_contents: [model, optimizer, extra]
+    # 保留原始 3e-5 余弦曲线；恢复 scheduler 后实际 LR 为 1.4708205381669757e-5。
+    optim:
+      lr: 3.0e-5
+      lr_scheduler_type: cosine
+      lr_warmup_steps_ratio: 0.05
+      min_lr_ratio: 0.1
+      num_cycles: 0.5
+    # 两卡降低单卡 micro batch；全局 PPO mini batch 仍为 8，rollout batch 仍为 16×3。
+    ppo_mini_batch_size: 8
+    ppo_micro_batch_size_per_gpu: 1
     entropy_coeff: 0.0012
     kl_loss_coef: 0.06
     # v4.1.4: Average normalized first-token entropy within each trajectory.
     decision_point_entropy_coeff: 0.0
-    decision_point_first_token_entropy_coeff: 0.0092
-    decision_point_first_token_entropy_gate: nonpositive_advantage
+    decision_point_first_token_entropy_coeff: 0.008
+    decision_point_first_token_entropy_gate: quality_validity
     decision_point_first_token_entropy_min_pure_image_reward: 0.0
     decision_point_first_token_entropy_max_repeated_actions: 1
-    # v4.1.4: Keep the gated normalized first-token entropy coefficient fixed at 0.008.
-    decision_point_first_token_entropy_schedule: constant
+    # 保留四卡的绝对步数调度；140/248 已越过 40%，下一步继续使用 0.008。
+    decision_point_first_token_entropy_schedule: delayed_constant
     decision_point_first_token_entropy_coeff_end: null
+    decision_point_first_token_entropy_start_ratio: 0.4
 
 algorithm:
   kl_ctrl:
@@ -43,14 +59,19 @@ algorithm:
 
 trainer:
   project_name: FogRL
-  experiment_name: "fog_v4.1.4"
-  resume_mode: auto
-  resume_from_path: null
-  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.4/2gpu/0.008coeff_na
-  total_epochs: 3
+  experiment_name: "fog_v4.1.4_0.4熵正则"
+  # 显式接续原四卡 SwanLab 实验；输出目录不同也不能新建实验。
+  swanlab_resume_run_id: g7vpp7ps
+  resume_mode: resume_path
+  resume_from_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/LoRA/v4.1.4/entropy_0.4_4gpu_step140/resume_2gpu/global_step_140
+  # 保留四卡源 checkpoint；恢复 data.pt 中第 3 个 epoch 已消费 16 个 batch 的位置。
+  default_local_dir: examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.4/2gpu/0.4熵正则_from4gpu_step140
+  # 从绝对 step 141 训练到 248，共剩余 108 步。
+  total_epochs: 4
+  total_training_steps: 248
   ray_kwargs:
     ray_init:
       runtime_env:
         env_vars:
-          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.4/2gpu/swanlab"
-          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/fog/v4.1.4/2gpu"
+          SWANLAB_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/outputs/fog/v4.1.4/2gpu/0.4熵正则_from4gpu_step140/swanlab"
+          VERL_LOG_DIR: "/home/LXJ/Python_Projects/Agent_Lightning/examples/image_restoration_multi_agent/old_verl_grpo/log/fog/v4.1.4/2gpu/0.4熵正则_from4gpu_step140"

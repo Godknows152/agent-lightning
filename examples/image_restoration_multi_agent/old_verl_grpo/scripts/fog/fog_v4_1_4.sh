@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Old-verl GRPO launcher for fog expert (v4.1.4)
-# v4.1.4: Non-positive-advantage-gated legal-action first-token entropy with cosine decay (0.008 -> 0.0008).
+# Continue the four-GPU step-140 run on two GPUs using its exported LoRA and converted training state.
 set -euo pipefail
 
 EXPERT="fog"
@@ -10,7 +10,7 @@ CONFIG_VERSION="v4.1.4"
 SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
 OLD_VERL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CONFIG_PATH="${OLD_VERL_DIR}/config/${EXPERT}/${CONFIG_VERSION}/${EXPERT}_config_2gpu.yaml"
-export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu}"
+export OLD_VERL_LOG_DIR="${OLD_VERL_LOG_DIR:-${OLD_VERL_DIR}/log/${EXPERT}/${VERSION}/2gpu/0.4熵正则_from4gpu_step140}"
 LOG_DIR="${OLD_VERL_LOG_DIR}"
 
 export PYTORCH_ALLOC_CONF="${PYTORCH_ALLOC_CONF:-pinned_use_cuda_host_register:True,pinned_num_register_threads:8,pinned_use_background_threads:True}"

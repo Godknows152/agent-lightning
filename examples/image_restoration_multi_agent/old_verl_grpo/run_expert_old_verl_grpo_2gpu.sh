@@ -244,6 +244,8 @@ IFS=$'\t' read -r \
   CONFIG_EXPERIMENT_NAME \
   CONFIG_OUTPUT_DIR \
   CONFIG_SWANLAB_LOG_DIR \
+  CONFIG_MODEL_PATH \
+  CONFIG_ADAPTER_PATH \
   < <(
     "${PYTHON_BIN}" - "${CONFIG_DIR}" "${CONFIG_NAME}" <<'PY'
 import sys
@@ -261,10 +263,18 @@ fields = (
     str(config.trainer.experiment_name),
     str(config.trainer.default_local_dir),
     str(config.trainer.ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR),
+    str(config.actor_rollout_ref.model.path),
+    str(config.actor_rollout_ref.model.lora_adapter_path),
 )
 print("\t".join(fields))
 PY
   )
+MODEL_PATH_OVERRIDE="${OLD_VERL_MODEL_PATH:-${CONFIG_MODEL_PATH}}"
+if [[ -n "${OLD_VERL_SFT_ADAPTER_ROOT:-}" && -z "${OLD_VERL_ADAPTER_PATH:-}" ]]; then
+  ADAPTER_PATH_OVERRIDE="${OLD_VERL_SFT_ADAPTER_ROOT}/${EXPERT}"
+else
+  ADAPTER_PATH_OVERRIDE="${OLD_VERL_ADAPTER_PATH:-${CONFIG_ADAPTER_PATH}}"
+fi
 if [[ "${RESUME_MODE_WAS_EXPLICIT}" != "1" ]]; then
   RESUME_MODE_OVERRIDE="${CONFIG_RESUME_MODE}"
 fi
@@ -616,6 +626,8 @@ if [[ "${EXPERT}" == "unified" ]]; then
   if [[ "${SMOKE}" == "1" ]]; then
     echo "Unified smoke mode uses the existing full unified parquet files; sample limits are applied by Hydra." >&2
   fi
+elif [[ -n "${RESUME_FROM_PATH_OVERRIDE}" && -s "${TRAIN_PARQUET}" && -s "${VAL_PARQUET}" ]]; then
+  echo "Reusing existing parquet files to preserve the resumed dataloader's sample order."
 else
   "${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split train --output "${TRAIN_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${TRAIN_LIMIT_ARGS[@]}"
   "${PYTHON_BIN}" "${CONVERTER}" --expert "${EXPERT}" --split val --output "${VAL_PARQUET}" --tool-registry "${TOOL_REGISTRY_PATH}" "${VAL_LIMIT_ARGS[@]}"

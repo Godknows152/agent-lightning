@@ -150,6 +150,7 @@ class Tracking:
             # explicit resume_path, or auto/empty resume_mode with an existing
             # latest checkpoint (mirrors verl's own _load_checkpoint behavior).
             trainer_resume_mode = trainer_cfg.get("resume_mode")
+            configured_run_id = trainer_cfg.get("swanlab_resume_run_id")
             is_resume_launch = trainer_resume_mode == "resume_path"
             if not is_resume_launch and trainer_resume_mode in ("auto", ""):
                 try:
@@ -185,6 +186,14 @@ class Tracking:
                     # Legacy experiment without a marker: try to continue under the
                     # passed experiment_name, fall back to creating a new experiment.
                     swanlab_resume = "allow"
+            # Cross-directory checkpoint migration cannot discover the original
+            # run from the new output directory. An explicit ID must never fall
+            # back to creating a different cloud experiment.
+            if is_resume_launch and configured_run_id:
+                if SWANLAB_RESUME_RUN_ID and SWANLAB_RESUME_RUN_ID != configured_run_id:
+                    raise ValueError("Configured SwanLab resume run ID does not match the output directory marker")
+                SWANLAB_RESUME_RUN_ID = configured_run_id
+                swanlab_resume = "must"
             init_kwargs = {}
             if SWANLAB_RESUME_RUN_ID:
                 init_kwargs["id"] = SWANLAB_RESUME_RUN_ID
@@ -199,13 +208,13 @@ class Tracking:
             )
             self.logger["swanlab"] = swanlab
             # Persist this run's experiment name so future resumes can continue it.
-            if marker_path and swanlab_resume != "must":
+            if marker_path:
                 os.makedirs(default_local_dir, exist_ok=True)
-                run_id = None
+                run_id = SWANLAB_RESUME_RUN_ID
                 try:
                     run_id = swanlab.get_run().id
                 except Exception:
-                    run_id = None
+                    pass
                 with open(marker_path, "w", encoding="utf-8") as f:
                     json.dump({"experiment_name": experiment_name, "run_id": run_id}, f, ensure_ascii=False)
 
