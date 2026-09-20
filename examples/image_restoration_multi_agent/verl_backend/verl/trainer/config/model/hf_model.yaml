@@ -54,6 +54,9 @@ exclude_modules: null
 # Path to pre-trained LoRA adapter to load for continued training
 lora_adapter_path: null
 
+# Optional independent frozen KL reference adapter; null shares the actor's initial adapter.
+reference_lora_adapter_path: null
+
 # whether to use liger. Only valid when we use hf model definition
 use_liger: False
 

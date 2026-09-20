@@ -513,6 +513,10 @@ class ActorRolloutRefWorker(Worker, DistProfilerExtension):
 
             # The ref model does not need to enable MTP; force it to false.
             ref_config.model_config = deepcopy(model_config)
+            if model_config.reference_lora_adapter_path:
+                reference_model_config = deepcopy(self.config.model)
+                reference_model_config.lora_adapter_path = model_config.reference_lora_adapter_path
+                ref_config.model_config = omega_conf_to_dataclass(reference_model_config)
             ref_config.model_config.mtp = MtpConfig(enable=False)
 
             # construct TrainingWorkerConfig

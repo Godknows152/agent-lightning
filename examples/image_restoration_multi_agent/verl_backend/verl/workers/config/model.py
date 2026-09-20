@@ -133,6 +133,8 @@ class HFModelConfig(BaseConfig):
 
     # path to pre-trained LoRA adapter to load for continued training
     lora_adapter_path: Optional[str] = None
+    # Keep the original frozen KL anchor when the actor starts from an exported RL adapter.
+    reference_lora_adapter_path: Optional[str] = None
     use_liger: bool = False
 
     use_fused_kernels: bool = False
