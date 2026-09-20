@@ -196,7 +196,10 @@ class RestorationToolkit:
             model_name: Name of the model to load
 
         Returns:
-            The loaded model, or None if loading failed
+            The loaded model, or None for an unknown model name.
+
+        Raises:
+            RuntimeError: A configured model could not be loaded.
         """
         if model_name in self.models:
             return self.models[model_name]
@@ -269,7 +272,7 @@ class RestorationToolkit:
                 return self.models.get(model_name)
             except Exception as e:
                 logger.error(f"Error loading model {model_name}: {e}")
-                return None
+                raise RuntimeError(f"Failed to load restoration model '{model_name}': {e}") from e
 
     def unload_single_model(self, model_name):
         """
