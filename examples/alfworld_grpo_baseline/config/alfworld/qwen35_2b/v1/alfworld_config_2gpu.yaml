@@ -39,7 +39,7 @@ actor_rollout_ref:
     # Enable KL against the frozen base policy. With LoRA, VERL computes
     # reference log-probs by disabling adapters on the shared actor engine.
     use_kl_loss: true
-    entropy_coeff: 0.06
+    entropy_coeff: 0.005
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     ppo_mini_batch_size: 4

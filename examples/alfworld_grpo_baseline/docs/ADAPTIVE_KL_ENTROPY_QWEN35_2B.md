@@ -114,3 +114,25 @@ bash /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/s
 - old logprob 耗时约 21.56 秒，reference 25.66 秒，actor 更新 138.44 秒。
 - 已读取主进程、TaskRunner、Actor worker、AgentLoop worker 的环境，确认 TMPDIR/TMP/TEMP/RAY_TMPDIR 均指向新专用目录。
 - 当前仍在后台训练；首步成功不代表已证实长期稳定或奖励持续改善。至少在 5–10 个完整更新后比较同一 Prompt 下的窗口，不因单点熵偏低再次自动加大正则。
+
+## 2026-09-22：按用户要求停止训练并降低熵系数
+
+- 实验：`qwen3.5_2B_0920`，SwanLab run：`vmiofur4`。
+- 诊断窗口：第 1–5 步 token 熵均值为 0.39483，第 31–34 步为 1.32228；
+  第 31 步峰值为 1.5739，第 34 步回落至 1.1251，未发现指标 NaN/Inf。
+- 无动作或非法动作占全部决策的比例从第 1–5 步的 6.26% 升至第 31–34 步的 23.16%。
+  平均训练奖励从第 26–30 步的 -11.67460 降至第 31–34 步的 -15.13246；
+  第 10/20/30 步验证奖励分别为 -25.82964、-26.14786、-30.03714。
+- 唯一参数调整：`actor_rollout_ref.actor.entropy_coeff` 从本次运行的 `0.01` 降至 `0.005`。
+  `kl_loss_coef` 保持 `0.001`，其余训练参数保持本次调整前的值。
+  这是降低熵奖励的对照尝试，当前相关趋势尚不能证明退化的唯一原因。
+- 向已核实属于本次实验的进程组 `3547500` 发送 SIGTERM，主 PID 为 `3547514`。
+  核对的 173 个进程均已退出或成为不占计算资源的僵尸进程；GPU 查询已无本次
+  Actor/SGLang 进程。其他实验进程 PID `90309` 正常保留。
+- 停止前已完成第 34 步；最近保存的是 `global_step_30`，第 31–34 步未保存为 checkpoint。
+- 保留输出目录 `examples/alfworld_grpo_baseline/outputs/qwen3.5_2B`、其中的 checkpoint、
+  rollout 和本地 SwanLab 数据，以及日志
+  `examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/v1/2gpu/seed0/alfworld_v1_seed0_20260922_003827.log`。
+  未删除任何本地实验产物或云端 run。
+- 本次仅停止和调整参数，未重新启动训练；新系数的训练效果待后续启动后观察。
+- 参数和记录单独提交；提交前已存在的其他源码、配置和验证完整轨迹展示改动保留在工作区。
