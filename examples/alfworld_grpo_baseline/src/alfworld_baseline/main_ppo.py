@@ -54,12 +54,13 @@ class ALFWorldTaskRunner:
         configure_verl_logging()
         import transfer_queue as tq
         from verl.trainer.ppo.v1 import AgentLoopManagerTQ, get_trainer_cls
+        from alfworld_baseline.validation_logging import ALFWorldValidationLoggingMixin
         from alfworld_baseline.workers import ALFWorldWorkerMixin
 
         base_trainer = get_trainer_cls(config.trainer.v1.trainer_mode)
         trainer_cls = type(
             "ALFWorldTrainer",
-            (ALFWorldWorkerMixin, ALFWorldMetricsMixin, base_trainer),
+            (ALFWorldWorkerMixin, ALFWorldMetricsMixin, ALFWorldValidationLoggingMixin, base_trainer),
             {},
         )
         config.transfer_queue.enable = True

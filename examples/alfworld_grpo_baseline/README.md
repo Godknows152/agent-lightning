@@ -13,6 +13,21 @@ LoRA 动态加载遵循当前 SGLang 的 `serialized_tensors` 协议，发送一
 ALFWorld 指标汇总直接迭代 TensorDict 返回的 `extra_fields`，兼容 `LinkedList`，
 并只统计非 padding 轨迹的最后一个环境步。
 
+## 验证采样中的完整轨迹
+
+SwanLab 的 `val/generations` 每条记录展示一条完整轨迹：`input` 是首步输入，
+`output` 按 `Step 1`、`Step 2` 等顺序保留每步的完整输入、模型思考和回答，
+包括格式错误或无效动作；`score` 是整条轨迹的最终奖励。
+`trainer.log_val_generations: 8` 表示抽取 8 条轨迹。
+
+`validation_logging.py` 通过 ALFWorld 专用 trainer 的验证导出钩子聚合步骤，
+保持原生逐步训练样本和奖励统计不变。所有验证步骤同时保存至
+`${trainer.default_local_dir}/validation/<global_step>.jsonl`，其中 `uid` 为
+`<task_uid>_<rollout_id>_<step_index>`，步序号从 0 开始。
+完整展示依赖 `trainer.validation_data_dir`；显式设为 `null` 会恢复原生的末步展示。
+原生 `num_turns` 仍表示单步样本的轮数，完整轨迹长度见展示文本的 `decision steps`。
+已启动的训练进程需要在重启/续训后才会加载新的展示逻辑，旧验证表不会自动补全。
+
 ## 当前重复动作惩罚（2026-09-18）
 
 本节取代下文历史版本中的“连续重复、每次固定 −0.1”规则。

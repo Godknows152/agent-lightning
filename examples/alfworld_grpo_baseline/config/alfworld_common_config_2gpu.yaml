@@ -91,6 +91,8 @@ trainer:
   resume_mode: auto
   default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
   rollout_data_dir: ${trainer.default_local_dir}/rollouts
+  # The full-row dump hook also supplies complete trajectories to val/generations.
+  validation_data_dir: ${trainer.default_local_dir}/validation
   project_name: ALFWorldRL
   experiment_name: alfworld_v1_seed0
   log_val_generations: 8
