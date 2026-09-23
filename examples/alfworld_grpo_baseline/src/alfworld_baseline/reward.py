@@ -27,9 +27,9 @@ def compute_score(
     """Return the episode reward emitted by ALFWorldTool.
 
     ALFWorld emits sparse environment rewards (10 on a solved task and 0 otherwise).
-    The first decision without a parseable action ends the trajectory and appends a
-    one-time ``-5`` penalty, retaining previous rewards. Complete but invalid XML
-    decisions receive ``-0.1`` and may continue. Repeated valid actions are counted
+    Each decision without a parseable action appends a ``-2`` penalty and continues
+    within the decision budget, retaining previous rewards. Complete but invalid XML
+    decisions receive ``-2`` and may continue. Repeated valid actions are counted
     across the whole trajectory. The k-th repeated action costs
     ``0.1 + 0.05 * (k - 1)``, summed over all repeats regardless of action identity.
     This aggregate repeated-action penalty is gated off when the trajectory receives

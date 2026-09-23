@@ -10,7 +10,7 @@
 第 k 次重复惩罚为 `−0.1 − 0.05 × (k − 1)`，轨迹结束后累加所有重复惩罚：
 `−0.1 × n − 0.025 × n × (n − 1)`。例如三次重复共扣 `−0.45`，十五次共扣 `−6.75`，不设上限。
 `A → A → B → B → A` 共三次重复，依次扣 `−0.1、−0.15、−0.2`。
-保留成功轨迹豁免重复惩罚的规则；无动作 `−5`、非法动作 `−0.1` 独立累计。
+保留成功轨迹豁免重复惩罚的规则；当前无动作 `−2`、非法动作 `−2` 独立累计。
 `alfworld_penalty/repeated_action_count` 仍统计次数，实际重复扣分只在最终奖励中计算一次。
 
 ## 当前 GiGPO 提示词（`alfworld_gigpo_qwen3_xml_v1`）
@@ -142,7 +142,7 @@ After thinking, output exactly one Qwen3 XML tool call.
 
 | 类别 | v5 判定 | 单次奖励 |
 |---|---|---:|
-| 无动作 | thinking 未闭合或没有可解析的单行文本动作（含多动作、XML/JSON 等） | 首次出现立即终止轨迹，追加一次 -5 |
+| 无动作 | thinking 未闭合或没有可解析的单行文本动作（含多动作、XML/JSON 等） | 每次扣 -2，消耗一个决策步后继续 |
 | 非法动作 | 文本命令已解析，但不在当前 admissible 列表中，或环境执行报错 | -0.1 |
 | 连续重复动作 | 连续有效执行相同的完整命令，从第二次开始逐次计数 | -0.1 |
 
@@ -182,7 +182,7 @@ incurs none. Commands are compared including arguments (not just the shared
 `alfworld_action` tool name). A different command, invalid call, or missing call
 breaks the streak. Streak state resets per trajectory, including when reusing
 pooled environments.
-Each decision receives at most one category: no call (one-time -5, terminates trajectory), invalid call (-0.1),
+Each decision receives at most one category: no call (-2 per decision, continues within the step budget), invalid call (-0.1),
 or valid consecutive repeated action. Terminal success reward is preserved.
 `alfworld_penalty/repeated_action_count` retains its name but now counts only
 penalized consecutive repeats, summed over the rollout batch. No state-change bonus or history
@@ -197,12 +197,14 @@ context is introduced.
 这是独立采样测试，不是正式 PPO 开关：预算强制 token 的 log-prob 与原始模型概率不同，
 在接入思考预算控制前需要处理确定性边界的 loss mask/概率一致性。
 
-### 无动作立即终止（2026-09-10）
+### 无动作后继续生成（2026-09-21）
 
-首次无可解析动作后不再采样后续步；失败步 token 和 log-prob 仍参与训练。
-追加一次 -5 惩罚，不覆盖此前环境奖励、非法动作或连续重复动作惩罚。
-终止原因是 `no_tool_call`，统计为 `alfworld_termination/no_action_count`，不计入环境成功或步数耗尽。
-非法动作和连续重复动作仍各扣 -0.1，不因本项规则提前终止。
+每次没有可解析的工具调用时扣 2 分，消耗一个决策步，不调用环境、不释放环境实例。
+保留当前任务、观察和合法动作，将失败决策纳入历史后重建下一步输入并继续生成。
+失败步的原始 token 和 log-prob 仍参与训练；累计惩罚保留此前奖励，即使随后成功也不会豁免。
+轨迹仅在环境结束或达到决策步数上限时正常结束；当前上限为 50 步，全部无动作时累计 -100。
+`alfworld_penalty/no_action_count` 及其分类指标按发生次数累计，旧终止原因 `no_tool_call` 仅兼容历史数据。
+非法动作与重复动作规则保持不变。
 
 ### v6：简短思考与512-token单步预算
 
@@ -211,7 +213,7 @@ context is introduced.
 保留动作历史、无schema文本动作和thinking模式；这是提示词软约束，不强制插入结束token。
 原生 veRL 路径不使用 `max_new_tokens_per_turn` 或按环境预算派生 response 容量；
 每轮生成和整条多轮响应长度由训练 YAML 控制。
-无动作立即终止并追加−5、非法/连续重复动作各−0.1的规则保持不变。
+无动作每步扣 2 分并继续，其他动作惩罚规则保持不变。
 
 ### v7：精简XML工具schema（历史版本）
 
@@ -230,7 +232,7 @@ context is introduced.
 ```
 
 解析只检查thinking之后的调用，执行时仍按当前环境合法动作严格校验。
-无可解析/完整调用立即终止并追加−5；非法调用、连续重复有效动作仍各−0.1。
+无可解析/完整调用每步扣 2 分并继续；非法调用与重复动作惩罚规则保持不变。
 SwanLab保持统一action命名；回放保留原始生成token及log-prob。
 
 ### v7 惩罚分类与完整输出校验（2026-09-11）
@@ -239,7 +241,7 @@ SwanLab保持统一action命名；回放保留原始生成token及log-prob。
 
 | 输出情况 | 处理 |
 |---|---|
-| thinking未闭合、没有XML调用、调用/函数/参数标签不完整 | 无动作，追加−5，立即结束轨迹 |
+| thinking未闭合、没有XML调用、调用/函数/参数标签不完整 | 无动作，每步扣 2 分，继续至环境结束或决策步数上限 |
 | 完整调用但工具名错误，参数缺失、为空、重复、多余或为多行 | 非法动作，−0.1，不执行环境动作，继续（除非步数耗尽） |
 | 多个调用、一个完整调用后又开始第二个调用 | 非法动作，−0.1；不再截断后执行第一个 |
 | 调用前后有额外说明（thinking内说明除外） | 非法动作，−0.1，不执行 |
@@ -255,8 +257,8 @@ XML模式不再裁掉首个调用后的生成内容，避免掩盖多调用和�
 ### 思考超长无动作统计（2026-09-11）
 
 单步输出预算从512增加到768 token。若XML模式生成达到上限仍未生成 `</think>`，
-该步按无动作规则追加−5并终止轨迹，同时记录 `alfworld_penalty/thinking_truncated_no_action_count`。
-该指标按rollout batch统计轨迹数，不是token数；只有“thinking未闭合”计入，
+该步按无动作规则扣 2 分并继续，累计到 `alfworld_penalty/no_action/overlong_thinking_count`。
+该指标按 rollout batch 统计无动作决策次数，不是 token 数；只有“thinking未闭合”计入，
 已闭合thinking但XML缺失/不完整的无动作不计入。
 
 ### Ray dashboard agent 端口冲突防护（2026-09-12）
@@ -295,7 +297,7 @@ Agent 尊重配置，不再强制开启 thinking；初始及后续状态提示�
 2B profile 保持 thinking 开启。9B 使用与非思考 SFT 相同的输入侧空
 `<think>\n\n</think>\n\n` 前缀；模型应直接生成 XML，无须自己生成 `</think>`。
 空 thinking 标签出现在输入中不代表模型生成了思考。
-严格 XML、无动作立即终止并罚 −5、非法及重复动作惩罚不变。启动预检同时支持两种模式，
+严格 XML；无动作每步扣 2 分并继续，非法及重复动作惩罚不变。启动预检同时支持两种模式，
 并验证 PROMPT_VERSION 与开关一致。切换模式时需同时更新 profile 的开关和版本名。
 
 ### SwanLab 轨迹终止指标（2026-09-12）
@@ -305,7 +307,7 @@ Agent 尊重配置，不再强制开启 thinking；初始及后续状态提示�
 - `success_count`：环境返回 `won=True`，任务真正完成；
 - `environment_timeout_count`：环境步数达到 50 步且未完成；
 - `decision_limit_count`：Agent 决策次数达到上限，且未被其他原因终止；
-- `no_tool_call_count`：模型输出无法解析为可执行动作；
+- `no_tool_call_count`：兼容历史无动作终止；当前无动作不再终止，此项为 0；
 - `env_failure_count`：其他环境终止或未分类终止；
 - `total_trajectories`：本 rollout batch 的轨迹总数。
 

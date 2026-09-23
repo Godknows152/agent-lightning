@@ -254,6 +254,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 )
             agent_data.extra_fields.setdefault("alfworld_no_tool_call_penalty_count", 0)
             agent_data.extra_fields["alfworld_no_action_category"] = ""
+            for category in ("thinking_unclosed", "tool_call_format", "overlong_thinking", "other"):
+                agent_data.extra_fields[f"alfworld_no_action_{category}_count"] = 0
             agent_data.extra_fields.setdefault("alfworld_invalid_tool_call_penalty_count", 0)
             agent_data.extra_fields.setdefault("alfworld_valid_tool_call_count", 0)
             agent_data.extra_fields.setdefault("alfworld_repeated_action_penalty_count", 0)
@@ -308,8 +310,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             videos=None,
         )
 
-    ALFWORLD_NO_TOOL_CALL_PENALTY = -5.0
-    ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.1
+    ALFWORLD_NO_TOOL_CALL_PENALTY = -2.0
+    ALFWORLD_INVALID_TOOL_CALL_PENALTY = -2.0
     ALFWORLD_REPEATED_ACTION_PENALTY = -0.1
 
     def _record_alfworld_penalty(
@@ -325,7 +327,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         Legacy internal counter names are retained. In v7 no_tool_call means
         absent/incomplete post-thinking XML; invalid_tool_call means a complete
         but schema-invalid decision or an action rejected by the environment.
-        A missing action ends the trajectory with a one-time -5 penalty.
+        Each missing action costs -2 and consumes one decision without ending the trajectory.
         Repeated valid actions are counted across the whole trajectory. The
         aggregate repeated-action penalty is applied by the final reward
         function, where successful trajectories can be exempted. Protocol
@@ -501,6 +503,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         self, agent_data: AgentData, sampling_params: dict[str, Any]
     ) -> AgentState:
         """Generate one native prompt/response row, bounded per decision."""
+        agent_data.extra_fields["alfworld_no_action_category"] = ""
         budget = self._environment_budget
         assert budget is not None
         prompt = list(agent_data.generation_prompt_ids or agent_data.prompt_ids)
@@ -585,7 +588,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if agent_data.tool_calls:
             return AgentState.PROCESSING_TOOLS
 
-        # A missing or malformed call terminates in the tool phase, preserving coordinator balance.
+        # A missing or malformed call is penalized in the tool phase, preserving coordinator balance.
         agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
         # Still pass through the tool phase: shared phase coordinators require
         # one after_tool arrival for every nonterminal generation, even a no-op.
@@ -621,8 +624,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         if not agent_data.tool_calls:
             self._record_alfworld_penalty(agent_data, "no_tool_call", append_reward=True)
             agent_data.alfworld_last_tool_metrics = {"error": "no_tool_call"}
-            agent_data.extra_fields.setdefault("alfworld_no_action_category", "other")
-            agent_data.extra_fields["alfworld_terminal_reason"] = "no_tool_call"
+            category = agent_data.extra_fields.get("alfworld_no_action_category") or "other"
+            count_key = f"alfworld_no_action_{category}_count"
+            agent_data.extra_fields[count_key] = int(agent_data.extra_fields.get(count_key, 0)) + 1
             return await self._finish_environment_decision(agent_data)
         tool_call = agent_data.tool_calls[0]
         agent_data.total_tool_calls += 1
@@ -666,8 +670,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _finish_environment_decision(self, agent_data: AgentData) -> AgentState:
         """Share the tool's Max Steps budget across valid and failed decisions.
 
-        Missing actions terminate immediately with -5; parsed invalid actions
-        leave TextWorld unchanged, cost -0.1, and consume one decision step.
+        Missing actions and parsed invalid actions both cost -2. Both leave
+        TextWorld unchanged, consume one decision step, and allow another attempt.
         Environment completion takes precedence on the last allowed step,
         so a last-step success is not labelled truncated.
         """
@@ -693,9 +697,6 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         steps = int(agent_data.extra_fields.get("alfworld_decision_steps", 0)) + 1
         agent_data.extra_fields["alfworld_decision_steps"] = steps
         agent_data.user_turns += 1
-        if agent_data.extra_fields.get("alfworld_terminal_reason") == "no_tool_call":
-            await self._release_native_tool_instances(agent_data)
-            return AgentState.TERMINATED
         if agent_data.extra_fields.get("alfworld_environment_finished"):
             if agent_data.extra_fields.get("alfworld_terminal_reason") == "truncated":
                 agent_data.extra_fields["alfworld_terminal_reason"] = "environment_timeout"

@@ -64,10 +64,10 @@ def run_episode(success=True):
     loop, calls, released, prompts = episode(success)
     outputs = asyncio.run(loop.run({}, raw_prompt=[{'role': 'user', 'content': 'stale state'}]))
     assert released == ['instance']
-    assert len(outputs) == (3 if success else 1)
+    assert len(outputs) == 3
     assert [out.prompt_ids for out in outputs] == [[11 + i, 42] for i in range(len(outputs))]
     assert [call.kwargs['prompt_ids'] for call in loop.server_manager.generate.await_args_list] == [out.prompt_ids for out in outputs]
-    assert all(out.reward_score == (10 if success else -5) for out in outputs)
+    assert all(out.reward_score == (10 if success else -6) for out in outputs)
     assert sum(out.extra_fields['alfworld_is_final_step'] for out in outputs) == 1
     assert all('alfworld_turn_contexts' not in out.extra_fields for out in outputs)
     if success:
@@ -99,7 +99,8 @@ def test_native_queue_rows_rewards_advantages_padding_and_cpu_optimizer(monkeypa
         asyncio.run(method(worker, outputs, False, uid='task_with_underscore', session_id=session_id,
                            global_steps=3, partition_id='train'))
     assert keys == ['task_with_underscore_0_0', 'task_with_underscore_0_1',
-                    'task_with_underscore_0_2', 'task_with_underscore_1_0']
+                    'task_with_underscore_0_2', 'task_with_underscore_1_0',
+                    'task_with_underscore_1_1', 'task_with_underscore_1_2']
     for row, tag in zip(rows, tags):
         assert row['input_ids'].tolist() == row['prompts'].tolist() + row['responses'].tolist()
         assert row['position_ids'].tolist() == list(range(len(row['input_ids'])))
@@ -114,21 +115,21 @@ def test_native_queue_rows_rewards_advantages_padding_and_cpu_optimizer(monkeypa
     rows.append(padding)
     keys.append('pad-only_0_0')
     # Shuffle rows: final-session selection must use output indices, not order.
-    order = [3, 2, 4, 0, 1]
+    order = [3, 2, 6, 0, 5, 1, 4]
     rows = [rows[i] for i in order]
     keys = [keys[i] for i in order]
     masks = torch.nn.utils.rnn.pad_sequence([r['response_mask'] for r in rows], batch_first=True)
     rewards = torch.nn.utils.rnn.pad_sequence([r['rm_scores'] for r in rows], batch_first=True)
-    batch = DataProto(batch=TensorDict({'response_mask': masks, 'token_level_rewards': rewards}, batch_size=[5]),
+    batch = DataProto(batch=TensorDict({'response_mask': masks, 'token_level_rewards': rewards}, batch_size=[7]),
                       non_tensor_batch={'uid': np.array([r['uid'] for r in rows], dtype=object)})
     result = compute_advantage_for_multi_trajectories(batch, keys, AdvantageEstimator.GRPO)
-    expected = 1 / np.sqrt(2)  # sample std over [10, -5], irrespective of step count
+    expected = 1 / np.sqrt(2)  # sample std over [10, -6], irrespective of step count
     for index, key in enumerate(keys):
         advantage = result.batch['advantages'][index]
         if key.startswith('pad'):
             assert torch.count_nonzero(advantage) == 0
         else:
-            sign = -1 if '_1_0' in key else 1
+            sign = -1 if key.rsplit('_', 2)[1] == '1' else 1
             assert torch.allclose(advantage[masks[index].bool()], torch.full_like(advantage[masks[index].bool()], sign * expected), atol=1e-6)
     # Native PPO objective/backward, including real per-step masks and padding.
     from omegaconf import OmegaConf
@@ -151,6 +152,48 @@ def test_environment_released_when_generation_raises():
     with pytest.raises(RuntimeError, match='server failed'):
         asyncio.run(loop.run({}, raw_prompt=[]))
     assert released == ['instance']
+
+
+def test_no_calls_preserve_environment_and_penalties_before_later_success():
+    from alfworld_baseline.metrics import compute_alfworld_rollout_metrics
+
+    loop, calls, released, prompts = episode()
+    loop._thinking_enabled = True
+    texts = iter(['x' * 256, '</think>No call.', '</think>' + CALL])
+
+    async def generate(**kwargs):
+        ids = loop.tokenizer.encode(next(texts))
+        return SimpleNamespace(token_ids=ids, log_probs=[-.1] * len(ids),
+                               num_preempted=0, routed_experts=None)
+
+    tool = loop.tools['alfworld_action']
+    tool.execute = AsyncMock(return_value=(ToolResponse(text='solved'), 10.0, {
+        'action': 'look', 'won': True, 'done': True,
+        'observation': 'solved', 'admissible_commands': ['look'],
+    }))
+    loop.server_manager.generate = AsyncMock(side_effect=generate)
+    outputs = asyncio.run(loop.run({}, raw_prompt=[]))
+    assert len(outputs) == 3
+    assert all(out.reward_score == 6.0 for out in outputs)
+    assert released == ['instance']
+    tool.execute.assert_awaited_once()
+    assert tool.execute.await_args.args[0] == 'instance'
+    assert all('room 0' in prompt for prompt in prompts)
+    assert "Action 1: 'None'" in prompts[1]
+    final = outputs[-1].extra_fields
+    assert final['tool_rewards'] == [-2.0, -2.0, 10.0]
+    assert final['alfworld_terminal_reason'] == 'success'
+    assert final['alfworld_no_tool_call_penalty_count'] == 2
+    assert final['alfworld_no_action_overlong_thinking_count'] == 1
+    assert final['alfworld_no_action_tool_call_format_count'] == 1
+    metrics = compute_alfworld_rollout_metrics(SimpleNamespace(
+        non_tensor_batch={key: [value] for key, value in final.items()}
+    ))
+    assert metrics['alfworld_penalty/no_action_count'] == 2
+    assert metrics['alfworld_penalty/no_action/overlong_thinking_count'] == 1
+    assert metrics['alfworld_penalty/no_action/tool_call_format_count'] == 1
+    assert metrics['alfworld_penalty/no_action/other_count'] == 0
+    assert metrics['alfworld_termination/no_tool_call_count'] == 0
 
 
 def test_prompt_limit_fails_without_truncating_or_calling_server():
@@ -208,9 +251,9 @@ def test_real_constructor_and_native_qwen35_processor_without_model_weights():
             tokenizer=tokenizer, processor=processor, hf_model_type='qwen3_5',
             dataset_cls=RLHFDataset, data_config=DictConfigWrap(cfg.data), tools=ToolListWrap([tool]))
         return await loop.run({}, raw_prompt=[{'role': 'user', 'content': 'stale'}])
-    output = asyncio.run(run())[0]
+    output = asyncio.run(run())[-1]
     assert released == ['instance']
-    assert output.reward_score == -5
+    assert output.reward_score == -6
     assert output.prompt_ids == server.generate.await_args.kwargs['prompt_ids']
     assert output.response_ids == ids
     worker = SimpleNamespace(processor=processor, tokenizer=tokenizer,

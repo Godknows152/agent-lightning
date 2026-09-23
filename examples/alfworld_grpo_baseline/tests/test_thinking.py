@@ -149,7 +149,8 @@ def test_thinking_output_without_post_think_tool_call_gets_no_tool_penalty():
 
     assert asyncio.run(loop._generate_environment_decision(data, {})) == AgentState.PROCESSING_TOOLS
     assert asyncio.run(loop._process_environment_decision(data)) == AgentState.TERMINATED
-    assert data.tool_rewards == [-5.0]
+    assert data.tool_rewards == [-2.0]
+    assert data.extra_fields["alfworld_terminal_reason"] == "decision_limit"
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
     assert data.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
     assert data.extra_fields.get('alfworld_valid_tool_call_count', 0) == 0

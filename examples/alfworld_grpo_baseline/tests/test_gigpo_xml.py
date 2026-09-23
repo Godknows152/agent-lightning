@@ -149,7 +149,7 @@ def test_gigpo_loop_rejects_non_qwen3_output(output):
         set_server(loop, '<think>Inspect.</think>' + output)
         assert await loop._generate_environment_decision(data, {}) == AgentState.PROCESSING_TOOLS
         assert data.tool_calls == []
-        assert await loop._process_environment_decision(data) == AgentState.TERMINATED
+        assert await loop._process_environment_decision(data) == AgentState.GENERATING
         loop._call_tool.assert_not_awaited()
         assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
 

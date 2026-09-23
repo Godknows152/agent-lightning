@@ -86,26 +86,26 @@ def test_text_decisions_history_penalties_and_unmodified_replay():
             replay = data.step_outputs[-1]
             assert replay.response_ids == ids
             state = await loop._process_environment_decision(data)
-            assert state == (AgentState.TERMINATED if i == 5 else AgentState.GENERATING)
+            assert state == (AgentState.TERMINATED if i == 7 else AgentState.GENERATING)
             assert data._active_tool_schemas == []
-            if i < 5:
+            if i < 7:
                 assert 'Previous actions' in data.messages[0]['content']
                 assert data.alfworld_decision_history[-1] in data.messages[0]['content']
                 assert loop.apply_chat_template.call_args.kwargs['tools'] == []
             if state == AgentState.TERMINATED:
                 break
-        assert data.extra_fields["alfworld_terminal_reason"] == "no_tool_call"
+        assert data.extra_fields["alfworld_terminal_reason"] == "decision_limit"
         assert [v for out in data.step_outputs for v in out.response_ids] == all_ids
         assert [v for out in data.step_outputs for v in out.response_mask] == [1] * len(all_ids)
         assert [v for out in data.step_outputs for v in out.response_logprobs] == [-0.1] * len(all_ids)
         # Repeated commands are counted across the trajectory, including a
         # repeat after another valid command.
-        assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 2
+        assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 4
         assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 1
         assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
-        assert data.extra_fields['alfworld_valid_tool_call_count'] == 4
-        assert sum(data.tool_rewards) == pytest.approx(-5.1)
-        assert len(data.alfworld_decision_history) == 6
+        assert data.extra_fields['alfworld_valid_tool_call_count'] == 6
+        assert sum(data.tool_rewards) == pytest.approx(-4.0)
+        assert len(data.alfworld_decision_history) == 8
         assert data.alfworld_decision_history[4].endswith('[rejected]')
         assert data.alfworld_decision_history[5].endswith('[no action]')
     asyncio.run(run())

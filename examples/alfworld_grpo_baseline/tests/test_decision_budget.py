@@ -87,12 +87,12 @@ def set_server(loop, text):
 
 
 @pytest.mark.parametrize("text_actions", [False, True])
-def test_no_action_ends_run_after_one_generation_retains_tokens_and_releases_tool(text_actions):
+def test_no_action_continues_to_budget_retains_tokens_and_releases_tool(text_actions):
     """Exercise inherited run/finalization, not just individual state handlers."""
     loop = make_loop()
     loop._text_actions = text_actions
     loop._thinking_enabled = text_actions
-    # The first missing action terminates, but its generated tokens remain trainable.
+    # Every missing action consumes a step; all generated tokens remain trainable.
     set_server(loop, 'x' * 256)
     loop.process_vision_info = AsyncMock(return_value={})
     loop._release_native_tool_instances = AsyncMock()
@@ -105,50 +105,52 @@ def test_no_action_ends_run_after_one_generation_retains_tokens_and_releases_too
 
     loop._set_authoritative_initial_prompt = initial
     outputs = asyncio.run(loop.run({}, raw_prompt=[{'role': 'user', 'content': 'task'}], data_source='alfworld'))
-    assert len(outputs) == 1
-    output = outputs[0]
+    assert len(outputs) == 50
+    assert all(out.reward_score == -100.0 for out in outputs)
+    assert sum(out.extra_fields["alfworld_is_final_step"] for out in outputs) == 1
+    output = outputs[-1]
     assert len(output.response_ids) == 256
     assert len(output.response_logprobs) == 256
     assert output.response_mask == [1] * 256
     assert 'alfworld_turn_contexts' not in output.extra_fields
     assert output.extra_fields['alfworld_is_final_step']
-    assert output.reward_score == -5.0
-    assert output.extra_fields['alfworld_decision_steps'] == 1
-    assert output.extra_fields['alfworld_terminal_reason'] == 'no_tool_call'
+    assert output.reward_score == -100.0
+    assert output.extra_fields['alfworld_decision_steps'] == 50
+    assert output.extra_fields['alfworld_terminal_reason'] == 'decision_limit'
     assert 'penalty_records' not in output.extra_fields
-    assert output.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
+    assert output.extra_fields['alfworld_no_tool_call_penalty_count'] == 50
     assert output.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
     assert output.extra_fields['alfworld_valid_tool_call_count'] == 0
-    assert output.extra_fields['tool_rewards'] == [-5.0]
-    assert sum(output.extra_fields['tool_rewards']) == pytest.approx(-5.0)
-    assert loop.server_manager.generate.await_count == 1
+    assert output.extra_fields['tool_rewards'] == [-2.0] * 50
+    assert sum(output.extra_fields['tool_rewards']) == pytest.approx(-100.0)
+    assert loop.server_manager.generate.await_count == 50
     for call in loop.server_manager.generate.await_args_list:
         assert call.kwargs['sampling_params']['max_new_tokens'] == 256
         assert call.kwargs['prompt_ids'] == [900, 901, 902]
     assert loop._release_native_tool_instances.await_count >= 1
     row = output.as_dict()
     assert row['responses'].tolist() == output.response_ids
-    assert row['rm_scores'][-1] == -5.0
+    assert row['rm_scores'][-1] == -100.0
     assert row['response_mask'].sum() == 256
 
 
 @pytest.mark.parametrize('text', ['x' * 256, '<tool_call>' + 'x' * 245])
-def test_per_turn_exhaustion_without_action_terminates_trajectory(text):
+def test_per_turn_exhaustion_without_action_allows_next_decision(text):
     loop = make_loop(max_steps=2)
     data = make_data(loop)
     set_server(loop, text)
     params = {'max_tokens': 1, 'max_new_tokens': 1, 'temperature': 0.7}
     assert asyncio.run(loop._handle_generating_state(data, params)) == AgentState.PROCESSING_TOOLS
-    assert asyncio.run(loop._handle_processing_tools_state(data)) == AgentState.TERMINATED
+    assert asyncio.run(loop._handle_processing_tools_state(data)) == AgentState.GENERATING
     sent = loop.server_manager.generate.await_args.kwargs['sampling_params']
     assert sent == {'max_new_tokens': 256, 'temperature': 0.7}
     assert params['max_new_tokens'] == 1  # caller's shared parameters unchanged
     assert 'penalty_records' not in data.extra_fields
     assert loop.server_manager.generate.await_count == 1
-    assert data.extra_fields['alfworld_terminal_reason'] == 'no_tool_call'
+    assert data.extra_fields['alfworld_terminal_reason'] == 'running'
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
     assert data.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
-    assert data.tool_rewards == [-5.0]
+    assert data.tool_rewards == [-2.0]
 
 
 @pytest.mark.parametrize('done_at', [1, 3, None])
@@ -212,7 +214,7 @@ def test_invalid_calls_consume_exactly_one_decision_without_synthetic_reward(nam
         state = asyncio.run(loop._handle_processing_tools_state(data))
         assert state == (AgentState.GENERATING if index == 0 else AgentState.TERMINATED)
     assert data.extra_fields['alfworld_decision_steps'] == 2
-    assert data.tool_rewards == [-0.1, -0.1]
+    assert data.tool_rewards == [-2.0, -2.0]
     assert data.extra_fields.get('alfworld_no_tool_call_penalty_count', 0) == 0
     assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 2
     assert data.extra_fields.get('alfworld_valid_tool_call_count', 0) == 0
@@ -233,13 +235,13 @@ def test_penalty_categories_are_mutually_exclusive_and_accumulate_across_steps()
     loop = make_loop(max_steps=2)
     data = make_data(loop)
 
-    # Invalid actions can continue; the following missing action terminates.
+    # Invalid and missing actions share the same two-step budget.
     data.tool_calls = [FunctionCall(name='unknown_tool', arguments='{"action":"look"}')]
     assert asyncio.run(loop._handle_processing_tools_state(data)) == AgentState.GENERATING
     data.tool_calls = []
     assert asyncio.run(loop._handle_processing_tools_state(data)) == AgentState.TERMINATED
 
-    assert data.tool_rewards == [-0.1, -5.0]
+    assert data.tool_rewards == [-2.0, -2.0]
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
     assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 1
     assert data.extra_fields.get('alfworld_valid_tool_call_count', 0) == 0
@@ -252,7 +254,7 @@ def test_incomplete_xml_envelope_is_no_tool_call_not_invalid_tool_call():
 
     assert asyncio.run(loop._handle_generating_state(data, {})) == AgentState.PROCESSING_TOOLS
     assert asyncio.run(loop._handle_processing_tools_state(data)) == AgentState.TERMINATED
-    assert data.tool_rewards == [-5.0]
+    assert data.tool_rewards == [-2.0]
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
     assert data.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == 0
 
@@ -337,7 +339,7 @@ def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
         jobs = []
         for index in range(2):
             loop = make_loop(max_steps=2)
-            # One trajectory exits early; the other continues through invalid calls.
+            # Both missing and invalid calls continue through the decision budget.
             set_server(loop, "no call" if index == 0 else CALL.replace("alfworld_action", "unknown_tool"))
             loop.process_vision_info = AsyncMock(return_value={})
             loop._release_native_tool_instances = AsyncMock()
@@ -355,8 +357,8 @@ def test_invalid_decisions_participate_in_tool_phase_without_deadlock():
         return await asyncio.wait_for(asyncio.gather(*jobs), timeout=3)
 
     outputs = asyncio.run(run())
-    assert [out[-1].extra_fields["alfworld_decision_steps"] for out in outputs] == [1, 2]
-    assert [out[-1].extra_fields["alfworld_terminal_reason"] for out in outputs] == ["no_tool_call", "decision_limit"]
+    assert [out[-1].extra_fields["alfworld_decision_steps"] for out in outputs] == [2, 2]
+    assert [out[-1].extra_fields["alfworld_terminal_reason"] for out in outputs] == ["decision_limit", "decision_limit"]
 
 
 def test_generated_tokens_preserved_and_feedback_precedes_next_generation():
@@ -403,9 +405,9 @@ def test_generated_tokens_preserved_and_feedback_precedes_next_generation():
     (["look", "inventory", "look"], [1, 1, 1], 1),
     (["look", "look", "look"], [1, 1, 1], 2),
     (["look", "look", "inventory", "inventory", "look"], [1, 1, 1, 1, 1], 3),
-    (["look", "bad", "look", None], [1, -.1, 1, -5], 1),
+    (["look", "bad", "look", None], [1, -2, 1, -2], 1),
     (["look", "look", "bad", "look", "look", None],
-     [1, 1, -.1, 1, 1, -5], 3),
+     [1, 1, -2, 1, 1, -2], 3),
     (["go to desk 1", "go to desk 2", "go to desk 1"], [1, 1, 1], 1),
     (["look"] * 16, [1] * 16, 15),
 ])
@@ -487,11 +489,11 @@ def test_repeat_penalty_is_fixed_for_every_repeated_occurrence(prior):
     assert data.tool_rewards == pytest.approx([-0.1])
     assert data.extra_fields["alfworld_repeated_action_penalty_count"] == 1
 
-def test_repeated_action_penalty_remains_independent_of_terminal_no_call_penalty():
+def test_repeated_action_penalty_remains_independent_of_no_call_penalty():
     loop = make_loop()
     data = make_data(loop)
     penalties = [loop._record_alfworld_penalty(data, "repeated_action", append_reward=False,
                                               prior_occurrences=i) for i in range(1, 16)]
     assert sum(penalties) == pytest.approx(-1.5)
-    assert loop.ALFWORLD_NO_TOOL_CALL_PENALTY == -5.0
+    assert loop.ALFWORLD_NO_TOOL_CALL_PENALTY == -2.0
     assert sum(penalties) > loop.ALFWORLD_NO_TOOL_CALL_PENALTY

@@ -36,7 +36,7 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
     """Report terminal reasons, penalty counts, and valid action counts.
 
     The agent loop records one counter per trajectory for each category. The
-    repeated-action counter counts only consecutive valid repeats. The
+    repeated-action counter counts valid repeats across the whole trajectory. The
     trainer aggregates those counters over the rollout batch for SwanLab.
     Legacy tool-call input fields are retained for stored trajectory compatibility,
     but public metrics use action names only, without duplicate aliases. No
@@ -71,6 +71,13 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
         name: int(np.count_nonzero(categories == name))
         for name in category_names
     }
+    # Continuing after no-action decisions permits several categories per episode.
+    # Prefer cumulative counters; retain the single-category fallback for old runs.
+    if any(f"alfworld_no_action_{name}_count" in non_tensor_batch for name in category_names):
+        category_counts = {
+            name: _sum_count_field(non_tensor_batch.get(f"alfworld_no_action_{name}_count"))
+            for name in category_names
+        }
     # Older batches may lack the detail field; keep the four categories
     # exhaustive without double-counting an already classified trajectory.
     classified = sum(category_counts.values())
