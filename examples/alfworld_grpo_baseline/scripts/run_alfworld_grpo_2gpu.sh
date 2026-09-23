@@ -11,6 +11,13 @@ SEED="${SEED:-0}"
 RUN_KIND="full"
 FOREGROUND="${ALFWORLD_FOREGROUND:-0}"
 TOTAL_STEPS="${ALFWORLD_TOTAL_STEPS:-150}"
+TRAINING_BACKEND="${ALFWORLD_TRAINING_BACKEND:-trajectory}"
+backend_overrides=()
+case "${TRAINING_BACKEND}" in
+  trajectory) ;;
+  gigpo_grpo) backend_overrides+=("+training_backend=gigpo_grpo") ;;
+  *) echo "Unknown ALFWORLD_TRAINING_BACKEND: ${TRAINING_BACKEND}" >&2; exit 2 ;;
+esac
 
 case "${MODEL_PROFILE}" in
   qwen25_1_5b)
@@ -44,6 +51,7 @@ Usage:
 
 Environment:
   ALFWORLD_MODEL_PROFILE=qwen25_1_5b|qwen35_2b|qwen35_9b  Select an isolated model profile
+  ALFWORLD_TRAINING_BACKEND=trajectory|gigpo_grpo  Episode GRPO (default) or local-cost step GRPO
   SEED=0|1|2                 Output/checkpoint seed directory (default: 0)
   ALFWORLD_FOREGROUND=1      Keep launcher attached; default is background
   ALFWORLD_TOTAL_STEPS=150   Full-run step count
@@ -90,6 +98,19 @@ elif [[ "${RUN_KIND}" == "pilot" ]]; then
   LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/v1/2gpu/pilot_seed${SEED}}"
   SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
   SWANLAB_MODE="${ALFWORLD_SWANLAB_MODE:-offline}"
+fi
+
+if [[ "${TRAINING_BACKEND}" == "gigpo_grpo" ]]; then
+  backend_run_dir="seed${SEED}"
+  [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_run_dir="${RUN_KIND}_seed${SEED}"
+  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/gigpo_grpo/v1/2gpu/${backend_run_dir}}"
+  if [[ "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
+    backend_output="${ROOT}/outputs/qwen3.5_2B/GiGPO后端"
+    [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_output="${backend_output}/${backend_run_dir}"
+    OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${backend_output}}"
+  fi
+  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/gigpo_grpo/v1/2gpu/${backend_run_dir}}"
+  SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
 fi
 
 if [[ "${RUN_KIND}" != "preflight" && "${FOREGROUND}" != "1" ]]; then
@@ -144,7 +165,8 @@ if [[ "${RUN_KIND}" == "preflight" ]]; then
     --swanlab-mode "${SWANLAB_MODE}" \
     --config-dir "${CONFIG_PATH}" \
     --config-name "${CONFIG_NAME}" \
-    --model-profile "${MODEL_PROFILE}"
+    --model-profile "${MODEL_PROFILE}" \
+    --training-backend "${TRAINING_BACKEND}"
   echo "ALFWorld ${MODEL_PROFILE} v1 preflight passed: output=${OUTPUT_DIR} log=${LOG_DIR} swanlab=${SWANLAB_LOG_DIR}"
   exit 0
 fi
@@ -160,7 +182,8 @@ training_kind="full"
   --swanlab-mode "${SWANLAB_MODE}" \
   --config-dir "${CONFIG_PATH}" \
   --config-name "${CONFIG_NAME}" \
-  --model-profile "${MODEL_PROFILE}" >/dev/null
+  --model-profile "${MODEL_PROFILE}" \
+  --training-backend "${TRAINING_BACKEND}" >/dev/null
 
 if [[ ! -s "${DATA_DIR}/train.parquet" || ! -s "${DATA_DIR}/test.parquet" ]]; then
   echo "Missing ${DATA_DIR}/train.parquet or test.parquet" >&2
@@ -186,8 +209,18 @@ PYNAME
 )"
 fi
 
+if [[ "${TRAINING_BACKEND:-trajectory}" == "gigpo_grpo" ]]; then
+  backend_name_suffix="seed${SEED}"
+  [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_name_suffix="${RUN_KIND}_seed${SEED}"
+  EXPERIMENT_NAME="alfworld_${MODEL_PROFILE}_gigpo_grpo_v1_${backend_name_suffix}"
+fi
+
 for override in "$@"; do
   case "${override}" in
+    *training_backend=*|variables.TRAINING_BACKEND=*|algorithm.adv_estimator=*|actor_rollout_ref.rollout.agent.default_agent_loop=*|actor_rollout_ref.rollout.agent.agent_loop_config_path=*|actor_rollout_ref.rollout.agent.agent_loop_manager_class=*|reward.custom_reward_function.*=*)
+      echo "Use ALFWORLD_TRAINING_BACKEND=trajectory|gigpo_grpo to select a complete backend; rejected: ${override}" >&2
+      exit 2
+      ;;
     trainer.experiment_name=*|trainer.default_local_dir=*|trainer.project_name=*|ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=*|ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=*)
       echo "Use ALFWORLD_OUTPUT_DIR/LOG_DIR/SWANLAB_LOG_DIR or the versioned YAML for naming paths; rejected: ${override}" >&2
       exit 2
@@ -196,12 +229,13 @@ for override in "$@"; do
 done
 
 overrides=(
-  "trainer.default_local_dir=${OUTPUT_DIR}"
+  # Hydra needs its own quoted string values for paths containing Chinese.
+  "trainer.default_local_dir=\"${OUTPUT_DIR}\""
   "trainer.experiment_name=${EXPERIMENT_NAME}"
   "trainer.total_training_steps=${TOTAL_STEPS}"
   "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE}"
-  "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=${SWANLAB_LOG_DIR}"
-  "ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=${LOG_DIR}"
+  "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=\"${SWANLAB_LOG_DIR}\""
+  "ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=\"${LOG_DIR}\""
   "variables.SEED=${SEED}"
 )
 # Native veRL's ``resume_mode=auto`` resolves the latest checkpoint in
@@ -226,10 +260,11 @@ echo "===== ALFWorld ${MODEL_PROFILE} v1 ${RUN_KIND} start $(date) ====="
 echo "Model: ${MODEL_PATH}"
 echo "GPUs: ${CUDA_VISIBLE_DEVICES}"
 echo "Config: ${CONFIG_PATH}/${CONFIG_NAME}.yaml"
+echo "Training backend: ${TRAINING_BACKEND}"
 echo "Output: ${OUTPUT_DIR}"
 echo "Log: ${LOG_DIR}"
 echo "SwanLab: project=ALFWorldRL experiment=${EXPERIMENT_NAME} mode=${SWANLAB_MODE} log_dir=${SWANLAB_LOG_DIR}"
 exec "${PYTHON_BIN}" -u -m alfworld_baseline.main_ppo \
   --config-path "${CONFIG_PATH}" \
   --config-name "${CONFIG_NAME}" \
-  "${overrides[@]}" "$@"
+  "${backend_overrides[@]}" "${overrides[@]}" "$@"

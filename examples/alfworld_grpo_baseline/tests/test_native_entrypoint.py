@@ -16,9 +16,10 @@ from alfworld_baseline import main_ppo as entry
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def config_for(profile):
+def config_for(profile, backend='trajectory'):
     with initialize_config_dir(config_dir=str(ROOT / 'config/alfworld' / profile / 'v1'), version_base=None):
-        return compose(config_name='alfworld_config_2gpu')
+        overrides = ['+training_backend=gigpo_grpo'] if backend == 'gigpo_grpo' else []
+        return compose(config_name='alfworld_config_2gpu', overrides=overrides)
 
 
 def test_imports_use_native_checkout():
@@ -142,7 +143,8 @@ def test_metrics_read_v1_extra_fields_and_exclude_padding(monkeypatch, native_te
 
 
 @pytest.mark.parametrize('fail', [False, True])
-def test_runner_lifecycle_closes_queue_on_success_and_failure(monkeypatch, fail):
+@pytest.mark.parametrize('backend', ['trajectory', 'gigpo_grpo'])
+def test_runner_lifecycle_closes_queue_on_success_and_failure(monkeypatch, fail, backend):
     from contextlib import nullcontext
     from alfworld_baseline import tracking
     monkeypatch.setattr(tracking, "swanlab_resume", lambda config: nullcontext())
@@ -171,14 +173,20 @@ def test_runner_lifecycle_closes_queue_on_success_and_failure(monkeypatch, fail)
         return 'manager'
     fake_v1.get_trainer_cls = lambda mode: Trainer
     fake_v1.AgentLoopManagerTQ = SimpleNamespace(create=create)
+    cfg = config_for('qwen35_2b', backend)
+    if backend == 'gigpo_grpo':
+        def load_manager(fqn, name):
+            assert fqn == 'alfworld_baseline.step_workers.StepGRPOAgentLoopManager'
+            return SimpleNamespace(create=create)
+        monkeypatch.setattr(entry, 'load_class_from_fqn', load_manager)
     monkeypatch.setitem(sys.modules, 'verl.trainer.ppo.v1', fake_v1)
     monkeypatch.setitem(sys.modules, 'transfer_queue', SimpleNamespace(
         init=lambda config: calls.append('queue_init'), close=lambda: calls.append('queue_close')))
     if fail:
         with pytest.raises(RuntimeError, match='training failed'):
-            entry.ALFWorldTaskRunner().run(config_for('qwen35_2b'))
+            entry.ALFWorldTaskRunner().run(cfg)
     else:
-        entry.ALFWorldTaskRunner().run(config_for('qwen35_2b'))
+        entry.ALFWorldTaskRunner().run(cfg)
     assert calls == ['queue_init', 'init', 'manager', 'fit', ('finish', int(fail)), 'queue_close']
 
 

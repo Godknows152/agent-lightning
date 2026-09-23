@@ -58,6 +58,10 @@ class ALFWorldTaskRunner:
         from alfworld_baseline.workers import ALFWorldWorkerMixin
 
         base_trainer = get_trainer_cls(config.trainer.v1.trainer_mode)
+        if OmegaConf.select(config, "variables.TRAINING_BACKEND", default="trajectory") == "gigpo_grpo":
+            # Register only the new estimator, without replacing native GRPO.
+            # This import must run inside the Ray driver as well as CPU tests.
+            from alfworld_baseline import step_advantage  # noqa: F401
         trainer_cls = type(
             "ALFWorldTrainer",
             (ALFWorldWorkerMixin, ALFWorldMetricsMixin, ALFWorldValidationLoggingMixin, base_trainer),

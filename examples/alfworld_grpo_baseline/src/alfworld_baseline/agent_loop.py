@@ -70,8 +70,6 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         ))
 
     async def run(self, sampling_params: dict[str, Any], priority: int = 0, **kwargs) -> list[AgentLoopOutput]:
-        from .reward import compute_score
-
         if kwargs.get("data_source", "alfworld") != "alfworld":
             raise ValueError("ALFWorld loop requires data_source=alfworld")
         data = AgentData(
@@ -95,24 +93,30 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                     state = await self._process_environment_decision(data)
                 else:
                     raise RuntimeError(f"Unexpected ALFWorld state: {state}")
-            extra = dict(data.extra_fields, tool_rewards=list(data.tool_rewards))
-            score = compute_score("alfworld", extra_info=extra)
-            # Native V1 normalizes final rows once per session, then broadcasts
-            # the resulting advantage to all steps. Every row keeps its actual
-            # inference prompt and original generated IDs/log probabilities.
-            for index, output in enumerate(data.step_outputs):
-                output.reward_score = score
-                output.extra_fields.update(extra)
-                output.extra_fields.update(
-                    alfworld_step_index=index,
-                    alfworld_is_final_step=index == len(data.step_outputs) - 1,
-                    reward_extra_info={"score": score},
-                )
-                if index == len(data.step_outputs) - 1:
-                    output.metrics = type(output.metrics)(**data.metrics)
-            return data.step_outputs
+            return self._finalize_step_outputs(data)
         finally:
             await self._release_native_tool_instances(data)
+
+    def _finalize_step_outputs(self, data: AgentData) -> list[AgentLoopOutput]:
+        """Keep the original episode reward and final-row GRPO contract."""
+        from .reward import compute_score
+
+        extra = dict(data.extra_fields, tool_rewards=list(data.tool_rewards))
+        score = compute_score("alfworld", extra_info=extra)
+        # Native V1 normalizes final rows once per session, then broadcasts
+        # the resulting advantage to all steps. Every row keeps its actual
+        # inference prompt and original generated IDs/log probabilities.
+        for index, output in enumerate(data.step_outputs):
+            output.reward_score = score
+            output.extra_fields.update(extra)
+            output.extra_fields.update(
+                alfworld_step_index=index,
+                alfworld_is_final_step=index == len(data.step_outputs) - 1,
+                reward_extra_info={"score": score},
+            )
+            if index == len(data.step_outputs) - 1:
+                output.metrics = type(output.metrics)(**data.metrics)
+        return data.step_outputs
 
     def _selected_prompt_profile(self):
         """Return the configured profile, including for lightweight test doubles."""

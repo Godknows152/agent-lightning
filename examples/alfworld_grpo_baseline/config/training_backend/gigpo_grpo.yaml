@@ -1,0 +1,36 @@
+# @package _global_
+# Opt-in GiGPO-repository GRPO semantics, not the GiGPO state-group algorithm.
+variables:
+  TRAINING_BACKEND: gigpo_grpo
+  GIGPO_OUTPUT_DIRS:
+    qwen35_2b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/GiGPO后端
+    qwen35_9b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_9b/gigpo_grpo/v1/2gpu/seed${variables.SEED}
+    qwen25_1_5b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen25_1_5b/gigpo_grpo/v1/2gpu/seed${variables.SEED}
+
+algorithm:
+  adv_estimator: alfworld_step_grpo
+  norm_adv_by_std_in_grpo: true
+  use_kl_in_reward: false
+
+actor_rollout_ref:
+  rollout:
+    agent:
+      default_agent_loop: alfworld_step_grpo_agent
+      agent_loop_manager_class: alfworld_baseline.step_workers.StepGRPOAgentLoopManager
+      agent_loop_config_path: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config/agent_loops_step_grpo.yaml
+
+reward:
+  custom_reward_function:
+    path: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/src/alfworld_baseline/step_reward.py
+    name: compute_score
+
+trainer:
+  experiment_name: alfworld_${variables.MODEL_PROFILE}_gigpo_grpo_v1_seed${variables.SEED}
+  default_local_dir: ${variables.GIGPO_OUTPUT_DIRS.${variables.MODEL_PROFILE}}
+
+ray_kwargs:
+  ray_init:
+    runtime_env:
+      env_vars:
+        SWANLAB_LOG_DIR: ${trainer.default_local_dir}/swanlab
+        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/${variables.MODEL_PROFILE}/gigpo_grpo/v1/2gpu/seed${variables.SEED}

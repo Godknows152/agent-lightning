@@ -1,0 +1,2 @@
+- name: alfworld_step_grpo_agent
+  _target_: alfworld_baseline.step_agent_loop.ALFWorldStepGRPOAgentLoop

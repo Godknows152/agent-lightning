@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -32,22 +33,31 @@ def main() -> int:
     parser.add_argument("--config-dir", type=Path, default=ROOT / "config" / "alfworld" / "qwen35_2b" / "v1")
     parser.add_argument("--config-name", default="alfworld_config_2gpu")
     parser.add_argument("--model-profile", default="qwen35_2b")
+    parser.add_argument("--training-backend", choices=("trajectory", "gigpo_grpo"), default="trajectory")
     args = parser.parse_args()
     directory_name = f"seed{args.seed}" if args.kind == "full" else f"{args.kind}_seed{args.seed}"
-    prefix = f"alfworld_{args.model_profile}_v1"
+    backend_suffix = "_gigpo_grpo" if args.training_backend == "gigpo_grpo" else ""
+    prefix = f"alfworld_{args.model_profile}{backend_suffix}_v1"
     experiment_name = f"{prefix}_seed{args.seed}" if args.kind == "full" else f"{prefix}_{args.kind}_seed{args.seed}"
-    output = (args.output_dir or ROOT / "outputs" / "alfworld" / "v1" / "2gpu" / directory_name).resolve()
-    log_dir = (args.log_dir or ROOT / "log" / "alfworld" / "v1" / "2gpu" / directory_name).resolve()
+    layout = Path(args.model_profile) / "gigpo_grpo" if backend_suffix else Path()
+    output = (args.output_dir or ROOT / "outputs" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
+    if args.training_backend == "gigpo_grpo" and args.model_profile == "qwen35_2b" and args.output_dir is None:
+        output = ROOT / "outputs" / "qwen3.5_2B" / "GiGPO后端"
+        if args.kind != "full":
+            output /= directory_name
+    log_dir = (args.log_dir or ROOT / "log" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
     swanlab_dir = (args.swanlab_log_dir or output / "swanlab").resolve()
     swanlab_mode = args.swanlab_mode or ("cloud" if args.kind == "full" else "offline")
     overrides = [
-        f"trainer.default_local_dir={output}",
+        f"trainer.default_local_dir={json.dumps(str(output), ensure_ascii=False)}",
         f"trainer.experiment_name={experiment_name}",
-        f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR={swanlab_dir}",
+        f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR={json.dumps(str(swanlab_dir), ensure_ascii=False)}",
         f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE={swanlab_mode}",
-        f"ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR={log_dir}",
+        f"ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR={json.dumps(str(log_dir), ensure_ascii=False)}",
         f"variables.SEED={args.seed}",
     ]
+    if args.training_backend == "gigpo_grpo":
+        overrides.append("+training_backend=gigpo_grpo")
     if args.kind in {"smoke", "pilot"}:
         overrides += [
             "variables.NUM_ROLLOUTS=2",
@@ -67,13 +77,19 @@ def main() -> int:
     assert budget is not None
     # Match the worker's recursive schema validation before allocating GPUs.
     omega_conf_to_dataclass(cfg.actor_rollout_ref.rollout)
-    print(f"native_trainer={get_trainer_cls(cfg.trainer.v1.trainer_mode).__name__} manager={AgentLoopManagerTQ.__name__}")
+    from verl.utils.import_utils import load_class_from_fqn
+    manager_fqn = cfg.actor_rollout_ref.rollout.agent.get("agent_loop_manager_class")
+    manager_cls = load_class_from_fqn(manager_fqn, "AgentLoopManager") if manager_fqn else AgentLoopManagerTQ
+    print(f"native_trainer={get_trainer_cls(cfg.trainer.v1.trainer_mode).__name__} manager={manager_cls.__name__}")
     assert cfg.trainer.logger == ["console", "swanlab"]
     assert cfg.trainer.enable_penalty_logging is False
     assert cfg.actor_rollout_ref.rollout.name == "sglang"
-    assert cfg.actor_rollout_ref.rollout.agent.default_agent_loop == "alfworld_tool_agent"
     assert str(cfg.variables.MODEL_PROFILE) == args.model_profile
-    assert cfg.reward.custom_reward_function.path.endswith("alfworld_baseline/reward.py")
+    if args.training_backend == "gigpo_grpo":
+        from alfworld_baseline.step_advantage import ADV_ESTIMATOR, compute_step_grpo_advantage
+        from verl.trainer.ppo.core_algos import get_adv_estimator_fn
+
+        assert get_adv_estimator_fn(ADV_ESTIMATOR) is compute_step_grpo_advantage
     assert Path(cfg.data.train_files).is_file()
     assert Path(cfg.data.val_files).is_file()
     assert int(cfg.trainer.n_gpus_per_node) == 2

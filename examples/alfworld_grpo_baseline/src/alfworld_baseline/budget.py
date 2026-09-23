@@ -49,11 +49,32 @@ def configure_environment_driven_rollout(config: DictConfig) -> ALFWorldDecision
 
 
 def validate_native_step_config(config: DictConfig) -> None:
-    """Reject configurations that violate the episode-to-step GRPO contract."""
+    """Reject mismatched reward/loop/advantage backends before starting workers."""
     if not config.trainer.use_v1 or config.trainer.v1.trainer_mode != "sync":
         raise ValueError("ALFWorld step samples currently require native V1 sync training")
-    if config.algorithm.adv_estimator != "grpo" or config.algorithm.use_kl_in_reward:
-        raise ValueError("ALFWorld requires trajectory-level GRPO and use_kl_in_reward=false")
+    backend = OmegaConf.select(config, "variables.TRAINING_BACKEND", default="trajectory")
+    contracts = {
+        "trajectory": ("grpo", "alfworld_tool_agent", "reward.py"),
+        "gigpo_grpo": ("alfworld_step_grpo", "alfworld_step_grpo_agent", "step_reward.py"),
+    }
+    if backend not in contracts:
+        raise ValueError(f"Unknown ALFWorld training backend: {backend!r}")
+    estimator, loop, reward_file = contracts[backend]
+    if config.algorithm.adv_estimator != estimator or config.algorithm.use_kl_in_reward:
+        raise ValueError(f"ALFWorld {backend} requires adv_estimator={estimator} and use_kl_in_reward=false")
+    if config.actor_rollout_ref.rollout.agent.default_agent_loop != loop:
+        raise ValueError(f"ALFWorld {backend} requires agent loop {loop}")
+    if not config.reward.custom_reward_function.path.endswith(f"alfworld_baseline/{reward_file}"):
+        raise ValueError(f"ALFWorld {backend} requires reward function {reward_file}")
+    manager = config.actor_rollout_ref.rollout.agent.get("agent_loop_manager_class")
+    step_manager = "alfworld_baseline.step_workers.StepGRPOAgentLoopManager"
+    if (backend == "gigpo_grpo" and manager != step_manager) or (backend == "trajectory" and manager == step_manager):
+        raise ValueError(f"ALFWorld {backend} has a mismatched agent loop manager")
+    loop_configs = OmegaConf.load(config.actor_rollout_ref.rollout.agent.agent_loop_config_path)
+    target = ("step_agent_loop.ALFWorldStepGRPOAgentLoop" if backend == "gigpo_grpo"
+              else "agent_loop.ALFWorldToolAgentLoop")
+    if not any(entry.name == loop and entry.get("_target_") == f"alfworld_baseline.{target}" for entry in loop_configs):
+        raise ValueError(f"ALFWorld {backend} requires loop config for {target}")
     if OmegaConf.select(config, "distillation.enabled", default=False):
         raise ValueError("Native teacher scoring does not yet support every ALFWorld step")
     if config.reward.reward_model.enable:
