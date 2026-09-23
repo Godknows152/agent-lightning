@@ -342,6 +342,7 @@ def test_config_selects_a_complete_backend_and_isolates_outputs(profile):
     assert current.algorithm.adv_estimator == ADV_ESTIMATOR
     assert legacy.algorithm.adv_estimator == "grpo"
     if profile == "qwen35_2b":
+        assert current.trainer.experiment_name == "qwen3.5_2B_GiGPO后端"
         assert current.trainer.default_local_dir == str(ROOT / "outputs/qwen3.5_2B/GiGPO后端")
     else:
         assert "/gigpo_grpo/" in current.trainer.default_local_dir

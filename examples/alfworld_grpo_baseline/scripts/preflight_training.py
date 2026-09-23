@@ -39,6 +39,10 @@ def main() -> int:
     backend_suffix = "_gigpo_grpo" if args.training_backend == "gigpo_grpo" else ""
     prefix = f"alfworld_{args.model_profile}{backend_suffix}_v1"
     experiment_name = f"{prefix}_seed{args.seed}" if args.kind == "full" else f"{prefix}_{args.kind}_seed{args.seed}"
+    if args.training_backend == "gigpo_grpo" and args.model_profile == "qwen35_2b":
+        experiment_name = "qwen3.5_2B_GiGPO后端"
+        if args.kind != "full":
+            experiment_name += f"_{args.kind}_seed{args.seed}"
     layout = Path(args.model_profile) / "gigpo_grpo" if backend_suffix else Path()
     output = (args.output_dir or ROOT / "outputs" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
     if args.training_backend == "gigpo_grpo" and args.model_profile == "qwen35_2b" and args.output_dir is None:
@@ -50,7 +54,7 @@ def main() -> int:
     swanlab_mode = args.swanlab_mode or ("cloud" if args.kind == "full" else "offline")
     overrides = [
         f"trainer.default_local_dir={json.dumps(str(output), ensure_ascii=False)}",
-        f"trainer.experiment_name={experiment_name}",
+        f"trainer.experiment_name={json.dumps(experiment_name, ensure_ascii=False)}",
         f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR={json.dumps(str(swanlab_dir), ensure_ascii=False)}",
         f"ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE={swanlab_mode}",
         f"ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR={json.dumps(str(log_dir), ensure_ascii=False)}",

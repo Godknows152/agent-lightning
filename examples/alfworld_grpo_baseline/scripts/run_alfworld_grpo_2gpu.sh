@@ -213,6 +213,10 @@ if [[ "${TRAINING_BACKEND:-trajectory}" == "gigpo_grpo" ]]; then
   backend_name_suffix="seed${SEED}"
   [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_name_suffix="${RUN_KIND}_seed${SEED}"
   EXPERIMENT_NAME="alfworld_${MODEL_PROFILE}_gigpo_grpo_v1_${backend_name_suffix}"
+  if [[ "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
+    EXPERIMENT_NAME="qwen3.5_2B_GiGPO后端"
+    [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && EXPERIMENT_NAME="${EXPERIMENT_NAME}_${backend_name_suffix}"
+  fi
 fi
 
 for override in "$@"; do
@@ -229,9 +233,9 @@ for override in "$@"; do
 done
 
 overrides=(
-  # Hydra needs its own quoted string values for paths containing Chinese.
+  # Hydra needs its own quoted string values for Chinese paths and experiment names.
   "trainer.default_local_dir=\"${OUTPUT_DIR}\""
-  "trainer.experiment_name=${EXPERIMENT_NAME}"
+  "trainer.experiment_name=\"${EXPERIMENT_NAME}\""
   "trainer.total_training_steps=${TOTAL_STEPS}"
   "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE}"
   "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=\"${SWANLAB_LOG_DIR}\""

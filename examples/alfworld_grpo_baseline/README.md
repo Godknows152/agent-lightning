@@ -49,7 +49,8 @@ bash examples/alfworld_grpo_baseline/scripts/alfworld/qwen35_2b_v1.sh
 新入口支持 `--smoke`、`--pilot` 及 `ALFWORLD_MODEL_PROFILE`。也可以在共用启动脚本前设置
 `ALFWORLD_TRAINING_BACKEND=gigpo_grpo`；直接调用 Hydra 入口时添加
 `+training_backend=gigpo_grpo`。应整套切换，不能仅替换奖励或优势计算器。
-新配置位于 `config/training_backend/gigpo_grpo.yaml`，默认实验名包含 `gigpo_grpo`，
+新配置位于 `config/training_backend/gigpo_grpo.yaml`，Qwen3.5-2B 正式实验名为
+`qwen3.5_2B_GiGPO后端`，smoke/pilot 实验名追加对应的 `_smoke_seedN` / `_pilot_seedN` 后缀。
 Qwen3.5-2B 正式训练的 checkpoint/rollout/验证数据及本地 SwanLab 目录位于
 `outputs/qwen3.5_2B/GiGPO后端/`；smoke/pilot 分别使用其 `smoke_seedN/`、`pilot_seedN/` 子目录。
 其他模型仍使用 `outputs/alfworld/<profile>/gigpo_grpo/v1/2gpu/seedN/`。

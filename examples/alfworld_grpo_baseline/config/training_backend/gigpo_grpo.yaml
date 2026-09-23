@@ -2,6 +2,10 @@
 # Opt-in GiGPO-repository GRPO semantics, not the GiGPO state-group algorithm.
 variables:
   TRAINING_BACKEND: gigpo_grpo
+  GIGPO_EXPERIMENT_NAMES:
+    qwen35_2b: qwen3.5_2B_GiGPO后端
+    qwen35_9b: alfworld_qwen35_9b_gigpo_grpo_v1_seed${variables.SEED}
+    qwen25_1_5b: alfworld_qwen25_1_5b_gigpo_grpo_v1_seed${variables.SEED}
   GIGPO_OUTPUT_DIRS:
     qwen35_2b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/GiGPO后端
     qwen35_9b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_9b/gigpo_grpo/v1/2gpu/seed${variables.SEED}
@@ -25,7 +29,7 @@ reward:
     name: compute_score
 
 trainer:
-  experiment_name: alfworld_${variables.MODEL_PROFILE}_gigpo_grpo_v1_seed${variables.SEED}
+  experiment_name: ${variables.GIGPO_EXPERIMENT_NAMES.${variables.MODEL_PROFILE}}
   default_local_dir: ${variables.GIGPO_OUTPUT_DIRS.${variables.MODEL_PROFILE}}
 
 ray_kwargs:
