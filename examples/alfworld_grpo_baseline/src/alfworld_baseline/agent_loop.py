@@ -513,6 +513,14 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         generation_params.pop("max_tokens", None)
         generation_params.pop("max_generated_response_length", None)
         generation_params["max_new_tokens"] = budget.max_new_tokens_per_turn
+        # SGLang may skip tokenizer initialization and use a model-config EOS
+        # different from the tokenizer EOS used by SFT (Qwen3.5: <|im_end|>).
+        # Send it on every decision, including greedy validation requests.
+        if self.tokenizer.eos_token_id is not None:
+            stop_token_ids = set(generation_params.get("stop_token_ids") or [])
+            stop_token_ids.add(self.tokenizer.eos_token_id)
+            generation_params["stop_token_ids"] = sorted(stop_token_ids)
+        generation_params["ignore_eos"] = False
         with simple_timer("generate_sequences", agent_data.metrics):
             output = await self.server_manager.generate(
                 request_id=agent_data.request_id,

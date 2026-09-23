@@ -1,6 +1,17 @@
 # ALFWorld baseline（GiGPO 对齐提示词）
 
-本目录隔离 ALFWorld 文本环境与原生 veRL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。三个 profile 共用 `alfworld_gigpo_qwen3_xml_v1` 提示词协议，公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 Actor FSDP offload、启用梯度检查点和独立 PPO batch 设置。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
+本目录隔离 ALFWorld 文本环境与原生 veRL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。三个 profile 共用 `alfworld_gigpo_qwen3_xml_v1` 提示词协议，公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 Actor FSDP offload、关闭梯度检查点和独立 PPO batch 设置。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
+
+## SGLang LoRA 同步兼容
+
+`workers.py` 在 ALFWorld 专用 Ray worker 内选择 `sglang_rollout.py` 的适配器。
+LoRA 动态加载遵循当前 SGLang 的 `serialized_tensors` 协议，发送一个完整张量字典，
+由 SGLang 内部进行 TP 切分；所有训练 rank 都参与 FSDP 张量收集，只有推理 TP leader 发送请求。
+基座权重同步仍使用原生路径；共享 veRL 和图像恢复后端文件无需修改。
+当前 2B 配置关闭 `use_fused_kernels`，避免现有 Liger 缺少
+`LigerFusedLinearScaledCrossEntropyFunction` 导致参考策略和 Actor 前向失败；使用标准输出层计算损失。
+ALFWorld 指标汇总直接迭代 TensorDict 返回的 `extra_fields`，兼容 `LinkedList`，
+并只统计非 padding 轨迹的最后一个环境步。
 
 ## 当前重复动作惩罚（2026-09-18）
 
@@ -75,6 +86,24 @@ PYTHONPATH=examples/alfworld_grpo_baseline/src:/home/LXJ/Python_Projects/verl \
 ```
 
 `alfworld-verl` 是 ALFWorld 运行环境；训练代码通过 `ALFWORLD_VERL_ROOT`（默认 `/home/LXJ/Python_Projects/verl`）加载原生 veRL。`preflight.py` 检查正式 veRL runtime 所需的 `alfworld`、`gymnasium`、`stable_baselines3`、`transformers`、`pandas`、`pyarrow` 和 `omegaconf`，要求 Qwen2.5 tokenizer 存在原生 chat template，并要求隔离目录下已存在 `data/train.parquet` 与 `data/test.parquet`；`preflight_alfworld.py` 只检查独立 ALFWorld 数据环境。图像修复继续使用自己的共享后端。
+
+Qwen3.5 的线性注意力训练需要 FLA 和 causal-conv1d 快速内核；预检会在内核不可用时直接报错，
+避免无意间使用缓慢的 PyTorch 后备实现。A800 / Python 3.12 / PyTorch 2.9.1+cu128 环境使用
+`requirements-qwen35-kernels.txt` 固定版本。causal-conv1d 使用上游发布的
+`cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64` wheel；安装依赖时保留现有 PyTorch、Triton 和
+`.pydeps` 中的 Transformers 版本。Qwen3.5-2B 已关闭梯度检查点；无检查点时 actor 微批 16
+在熵反向计算中超出 80GB 显存，因此 actor 微批设为 8、reference 有效微批保留 16。
+梯度累积维持全局 PPO minibatch 为 128，采样规模仍为 16 个任务 × 8 条轨迹。
+
+GPU 内核回归测试覆盖 FLA 与 PyTorch 参考实现的前向和反向数值，以及原生 veRL 中不同长度样本
+拼接后的输出、输入梯度和参数梯度与独立执行的一致性。它使用真实模型配置中的线性注意力维度，
+独立于禁止 CUDA 初始化的 CPU 测试集运行：
+
+```bash
+PYTHONPATH=examples/alfworld_grpo_baseline/src:/home/LXJ/Python_Projects/verl:examples/image_restoration_multi_agent/old_verl_grpo/.pydeps \
+  CUDA_VISIBLE_DEVICES=0 /home/LXJ/anaconda3/envs/alfworld-verl/bin/python \
+  examples/alfworld_grpo_baseline/scripts/test_qwen35_fast_kernels.py
+```
 
 先生成 veRL 数据（该步骤会为每条任务 reset 一次，以构造首轮 observation 和动态 admissible actions；脚本按 64 个游戏分块加载，避免逐条重复初始化 TextWorld）：
 

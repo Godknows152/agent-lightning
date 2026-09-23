@@ -31,7 +31,7 @@ def launch_name(config_dir: Path, kind: str = "full") -> str:
 
 
 def test_full_launch_respects_versioned_name():
-    assert launch_name(CONFIG_DIR) == "alfworld_qwen35_2b_prompt_no_repeat_0916"
+    assert launch_name(CONFIG_DIR) == "qwen3.5_2B_0920"
 
 
 @pytest.mark.parametrize("kind", ["smoke", "pilot"])

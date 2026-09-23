@@ -1,0 +1,5 @@
+# Validated with Python 3.12, torch 2.9.1+cu128, Triton 3.5.1 and A800 (SM80).
+# Use the upstream causal-conv1d cu12/torch2.9/cxx11abiTRUE/cp312 wheel on this host.
+flash-linear-attention==0.5.2
+fla-core==0.5.2
+causal-conv1d==1.7.0

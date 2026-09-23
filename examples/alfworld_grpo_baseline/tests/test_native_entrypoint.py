@@ -28,6 +28,28 @@ def test_imports_use_native_checkout():
     assert_native_verl()
 
 
+def test_ray_compiler_environment_is_resolved_before_dispatch(monkeypatch):
+    monkeypatch.setenv('ALFWORLD_CC', '/test/compiler/gcc')
+    monkeypatch.setenv('ALFWORLD_CXX', '/test/compiler/g++')
+    monkeypatch.setattr(entry, 'auto_set_device', lambda config: None)
+    monkeypatch.setattr(entry, 'validate_config', lambda *args, **kwargs: None)
+    monkeypatch.setattr(entry, 'install_ray_agent_port_guard', lambda: None)
+    monkeypatch.setattr(entry.ray, 'remote', lambda cls: cls)
+    monkeypatch.setattr('alfworld_baseline.resume.validate_native_resume', lambda config: None)
+    received = []
+
+    def run(config, **kwargs):
+        # Match native run_ppo's conversion, which does not resolve values.
+        received.append(OmegaConf.to_container(config.ray_kwargs.ray_init)['runtime_env']['env_vars'])
+
+    monkeypatch.setattr(entry._base_main, 'run_ppo', run)
+    entry.main.__wrapped__(config_for('qwen35_2b'))
+    assert received[0]['CC'] == '/test/compiler/gcc'
+    assert received[0]['CXX'] == '/test/compiler/g++'
+    assert received[0]['CUDAHOSTCXX'] == '/test/compiler/g++'
+    assert received[0]['NVCC_CCBIN'] == '/test/compiler/g++'
+
+
 def test_cached_foreign_submodule_is_rejected(monkeypatch, tmp_path):
     foreign = ModuleType('verl.foreign_backend_probe')
     foreign.__file__ = str(tmp_path / 'foreign.py')
@@ -86,15 +108,23 @@ def test_rejects_unsupported_rollout_fields_before_ray_dispatch(monkeypatch, key
         entry.main.__wrapped__(cfg)
 
 
-def test_metrics_read_v1_extra_fields_and_exclude_padding(monkeypatch):
+@pytest.mark.parametrize('native_tensordict', [False, True])
+def test_metrics_read_v1_extra_fields_and_exclude_padding(monkeypatch, native_tensordict):
     calls = []
     rows = np.array([
         {'alfworld_terminal_reason': 'success', 'alfworld_valid_tool_call_count': 3},
         {'alfworld_terminal_reason': 'no_tool_call', 'alfworld_no_tool_call_penalty_count': 1},
     ], dtype=object)
+    data = {'extra_fields': rows}
+    if native_tensordict:
+        from tensordict import TensorDict
+        from verl.utils.tensordict_utils import assign_non_tensor_stack
+        data = TensorDict({}, batch_size=[len(rows)])
+        assign_non_tensor_stack(data, 'extra_fields', rows.tolist())
+
     def get(**kwargs):
         calls.append(kwargs)
-        return {'extra_fields': rows}
+        return data
     monkeypatch.setitem(sys.modules, 'transfer_queue', SimpleNamespace(kv_batch_get=get))
     class Parent:
         def _compute_metrics(self, batch, metrics, *args):

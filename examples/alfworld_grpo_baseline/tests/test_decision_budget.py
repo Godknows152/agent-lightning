@@ -143,7 +143,7 @@ def test_per_turn_exhaustion_without_action_allows_next_decision(text):
     assert asyncio.run(loop._handle_generating_state(data, params)) == AgentState.PROCESSING_TOOLS
     assert asyncio.run(loop._handle_processing_tools_state(data)) == AgentState.GENERATING
     sent = loop.server_manager.generate.await_args.kwargs['sampling_params']
-    assert sent == {'max_new_tokens': 256, 'temperature': 0.7}
+    assert sent == {'max_new_tokens': 256, 'temperature': 0.7, 'ignore_eos': False}
     assert params['max_new_tokens'] == 1  # caller's shared parameters unchanged
     assert 'penalty_records' not in data.extra_fields
     assert loop.server_manager.generate.await_count == 1

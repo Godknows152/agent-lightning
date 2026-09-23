@@ -18,7 +18,7 @@ data:
   apply_chat_template_kwargs:
     enable_thinking: true
     avoid_repeated_actions: true
-  train_batch_size: 4
+  train_batch_size: 16
 
 actor_rollout_ref:
   rollout:
@@ -28,6 +28,8 @@ actor_rollout_ref:
     # recomputation can be bypassed for this experiment.
     enforce_eager: false
     calculate_log_probs: true
+    # LoRA reference scoring reuses the actor engine's inference micro-batch.
+    log_prob_micro_batch_size_per_gpu: 16
     agent:
       num_workers: 8
   ref:
@@ -42,9 +44,10 @@ actor_rollout_ref:
     entropy_coeff: 0.005
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
-    ppo_mini_batch_size: 4
-    # Keep each backward micro-batch small for the standard FSDP training path.
-    ppo_micro_batch_size_per_gpu: 4
+    ppo_mini_batch_size: 16
+    # Without activation checkpointing, 16 rows OOM in entropy backward.
+    # Accumulate eight micro-batches per GPU; the global mini-batch stays 128.
+    ppo_micro_batch_size_per_gpu: 8
     fsdp_config:
       # LoRA leaves only adapter parameters trainable, so CPU offload is no
       # longer needed for the optimizer and costs a host-device transfer.
@@ -52,8 +55,8 @@ actor_rollout_ref:
       optimizer_offload: false
       entropy_checkpointing: false
   model:
-    # Initialize RL from the completed thinking-enabled XML-format SFT adapter.
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_xml_thinking_teacher_v1_20260914_093608_175508/adapter
+    # Initialize RL from step 100 of the GiGPO expert SFT run stopped on user request.
+    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_gigpo_expert_v1_20260921_105449_688178/adapter/checkpoint-100
     # Train adapters instead of the full 2B parameter set.
     lora_rank: 16
     lora_alpha: 32
@@ -69,13 +72,12 @@ actor_rollout_ref:
       - up_proj
       - down_proj
     # Use available 2B memory to avoid activation recomputation.
-    enable_gradient_checkpointing: true
+    enable_gradient_checkpointing: false
     # Keep CPU activation transfers disabled.
     enable_activation_offload: false
-    # Compute PPO log-probs and entropy with the memory-efficient fused head.
-    use_fused_kernels: true
-    fused_kernel_options:
-      impl_backend: torch
+    # The installed Liger lacks the scaled cross-entropy op imported by veRL's
+    # fused head. Use the standard head for both reference and actor forwards.
+    use_fused_kernels: false
 
 trainer:
   experiment_name: qwen3.5_2B_0920
@@ -88,3 +90,10 @@ algorithm:
   rollout_correction:
     # Use rollout_log_probs as old_log_probs and skip a second actor pass.
     bypass_mode: true
+
+ray_kwargs:
+  ray_init:
+    runtime_env:
+      env_vars:
+        # Allow unequal free GPU memory at SGLang startup; log a warning only.
+        SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK: "false"

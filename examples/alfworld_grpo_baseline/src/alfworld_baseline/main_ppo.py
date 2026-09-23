@@ -30,7 +30,9 @@ class ALFWorldMetricsMixin:
         if not keys:
             return
         data = tq.kv_batch_get(keys=keys, partition_id=batch.partition_id, select_fields=["extra_fields"])
-        rows = [row for row in data["extra_fields"].tolist() if row.get("alfworld_is_final_step", True)]
+        # TensorDict indexing unwraps NonTensorStack to a LinkedList; numpy
+        # arrays used by older queues are iterable as well.
+        rows = [row for row in data["extra_fields"] if row.get("alfworld_is_final_step", True)]
         fields = {field for row in rows for field in row if field.startswith("alfworld_")}
         if fields:
             columns = {field: [row.get(field) for row in rows] for field in fields}
@@ -43,8 +45,8 @@ class ALFWorldMetricsMixin:
 class ALFWorldTaskRunner:
     """Compose native V1 trainer/manager classes without inheriting a Ray actor.
 
-    Follow the V1 TaskRunner lifecycle explicitly; only the metric method is
-    extended. No global trainer or worker functions are replaced.
+    Follow the V1 TaskRunner lifecycle with ALFWorld metrics and worker selection.
+    Shared backend files are unchanged.
     """
 
     def run(self, config):
@@ -52,9 +54,14 @@ class ALFWorldTaskRunner:
         configure_verl_logging()
         import transfer_queue as tq
         from verl.trainer.ppo.v1 import AgentLoopManagerTQ, get_trainer_cls
+        from alfworld_baseline.workers import ALFWorldWorkerMixin
 
         base_trainer = get_trainer_cls(config.trainer.v1.trainer_mode)
-        trainer_cls = type("ALFWorldTrainer", (ALFWorldMetricsMixin, base_trainer), {})
+        trainer_cls = type(
+            "ALFWorldTrainer",
+            (ALFWorldWorkerMixin, ALFWorldMetricsMixin, base_trainer),
+            {},
+        )
         config.transfer_queue.enable = True
         OmegaConf.resolve(config)
         tq.init(config.transfer_queue)
@@ -98,6 +105,9 @@ def main(config):
     validate_native_resume(config)
     auto_set_device(config)
     validate_config(config, use_reference_policy=need_reference_policy(config), use_critic=need_critic(config))
+    # Native run_ppo converts Ray kwargs without resolve=True. Resolve here,
+    # before workers inherit literal ${oc.env:...} compiler paths.
+    OmegaConf.resolve(config.ray_kwargs.ray_init)
     install_ray_agent_port_guard()
     _base_main.run_ppo(config, task_runner_class=ray.remote(ALFWorldTaskRunner))
 

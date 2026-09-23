@@ -40,11 +40,22 @@ def main() -> int:
             text=True,
         )
     print(f"cxx20_compiler={cxx} nvcc={nvcc}")
-    from transformers import AutoTokenizer
+    from transformers import AutoConfig, AutoTokenizer
     from alfworld_baseline.xml_actions import parse_xml_decision
     from alfworld_baseline.prompts_gigpo import QWEN3_ALFWORLD_CHAT_TEMPLATE
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
     model = Path(os.environ.get("ALFWORLD_MODEL", "/home/LXJ/Python_Projects/Models/Qwen3.5-2B"))
+    model_config = AutoConfig.from_pretrained(model, local_files_only=True, trust_remote_code=True)
+    if model_config.model_type == "qwen3_5":
+        from transformers.models.qwen3_5 import modeling_qwen3_5
+
+        if not modeling_qwen3_5.is_fast_path_available:
+            raise RuntimeError(
+                "Qwen3.5 fast kernels are unavailable. Install the compatible flash-linear-attention, "
+                "fla-core and causal-conv1d versions in requirements-qwen35-kernels.txt; "
+                "run scripts/test_qwen35_fast_kernels.py before training."
+            )
+        print("qwen35_fast_kernels=enabled (FLA gated delta rule + causal-conv1d)")
     tokenizer = AutoTokenizer.from_pretrained(model, local_files_only=True, trust_remote_code=True)
     if not tokenizer.chat_template:
         raise RuntimeError(f"Qwen tokenizer has no native chat_template: {model}")
@@ -74,7 +85,11 @@ def main() -> int:
         if not rendered.endswith(expected_prefix):
             raise RuntimeError(f"Qwen3.5 generation prefix mismatch: enable_thinking={thinking}")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
-    print(f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} rendered_tokens={len(tokenizer(rendered, add_special_tokens=False)["input_ids"])}")
+    rendered_tokens = len(tokenizer(rendered, add_special_tokens=False)["input_ids"])
+    print(
+        f"native_template_sha256={hashlib.sha256(tokenizer.chat_template.encode()).hexdigest()} "
+        f"rendered_tokens={rendered_tokens}"
+    )
     decision = parse_xml_decision("</think><tool_call><function=alfworld_action><parameter=action>look</parameter></function></tool_call>")
     if decision.status != "valid" or registry.validate_action(decision.action) != "look":
         raise AssertionError("XML tool-call component contract failed")
