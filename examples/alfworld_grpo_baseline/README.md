@@ -10,8 +10,8 @@
 | 行为 | 原版 `trajectory` | 新版 `gigpo_grpo` |
 | --- | --- | --- |
 | 环境成功奖励 | 10，失败为 0 | 10，失败为 0 |
-| 无动作 / 非法动作 | 各次 −2，累计到轨迹总分 | 对应步骤各 −0.2 |
-| 重复动作 | 失败轨迹累计递增扣分，成功豁免 | 对应步骤固定 −0.2，成功也保留 |
+| 无动作 / 非法动作 | 各次 −0.2，累计到轨迹总分 | 对应步骤各 −0.2 |
+| 重复动作 | 不扣分（0），保留重复次数统计 | 不扣分（0），保留重复次数统计 |
 | 分组归一化 | 同一初始任务下每条轨迹一个总分 | 同一初始任务下所有决策步骤各一个分数 |
 | 优势应用 | 同一轨迹所有步骤共享优势 | 每步单独得到优势，该步生成 token 共享它 |
 
@@ -30,7 +30,9 @@ A_it = (q_it − mean(q in G_x)) / (sample_std(q in G_x) + 1e-6)
 因此局部扣分仍会间接改变组内其他步骤的优势；长轨迹也会贡献更多步骤。这里既不按步序号
 对齐，也不按相同观察分组。多样本常数组优势为零；单样本组沿用基线的 mean=0、std=1。
 
-三类惩罚互斥；重复仍指同一轨迹内此前有效执行过的**完整命令**，不要求连续。
+无动作与非法动作各扣 −0.2；重复动作惩罚已取消，首次与重复的有效动作均不扣分。
+重复仍指同一轨迹内此前有效执行过的**完整命令**，不要求连续；兼容字段
+`alfworld_penalty/repeated_action_count` 继续记录重复次数，其数值不再代表扣分次数。
 保留本仓库的完整输出、工具格式和 admissible action 检查，不改用 GiGPO 较宽松的格式判定。
 验证阶段采用纯环境得分 0/10，完整轨迹展示继续保留；训练分数包含本步惩罚。
 原有熵、KL、PPO loss、模型配置及数据集不变。
@@ -39,7 +41,7 @@ A_it = (q_it − mean(q in G_x)) / (sample_std(q in G_x) + 1e-6)
 # 新后端：默认 Qwen3.5-2B，仅预检
 bash examples/alfworld_grpo_baseline/scripts/alfworld/alfworld_step_grpo.sh --preflight
 
-# 新后端：正式训练（后台）
+# 新后端：自动恢复最新 checkpoint；目录为空时新建训练（后台）
 bash examples/alfworld_grpo_baseline/scripts/alfworld/alfworld_step_grpo.sh
 
 # 原版后端：原入口与默认行为保留
@@ -52,9 +54,18 @@ bash examples/alfworld_grpo_baseline/scripts/alfworld/qwen35_2b_v1.sh
 新配置位于 `config/training_backend/gigpo_grpo.yaml`，Qwen3.5-2B 正式实验名为
 `qwen3.5_2B_GiGPO后端`，smoke/pilot 实验名追加对应的 `_smoke_seedN` / `_pilot_seedN` 后缀。
 Qwen3.5-2B 正式训练的 checkpoint/rollout/验证数据及本地 SwanLab 目录位于
-`outputs/qwen3.5_2B/GiGPO后端/`；smoke/pilot 分别使用其 `smoke_seedN/`、`pilot_seedN/` 子目录。
+`log/alfworld/qwen35_2b/gigpo_grpo/`；smoke/pilot 分别使用其 `smoke_seedN/`、`pilot_seedN/` 子目录。
 其他模型仍使用 `outputs/alfworld/<profile>/gigpo_grpo/v1/2gpu/seedN/`。
 主日志位于 `log/alfworld/<profile>/gigpo_grpo/`；不复用原版实验的自动恢复目录。
+
+当前 `alfworld_step_grpo.sh` 的 2B 正式训练与预检默认叠加
+`config/resume_run/qwen35_2b_gigpo.yaml`：使用 `resume_mode: auto`、`resume_from_path: null`，
+自动恢复上述输出目录中最新发布的 checkpoint，总目标仍为 150 步。
+恢复时复用 `.swanlab_experiment.json` 中的实验 ID，并以 `resume="must"` 续写；
+目录为空时从初始模型开始并创建新实验。预检会检查 checkpoint 分片和实验身份。
+Ray 固定使用物理网卡地址 `10.246.1.30`，避免 Mihomo TUN 被关闭时失联；地址变化时可通过
+`ALFWORLD_RAY_NODE_IP` 更新。smoke/pilot 和其他模型不加载此续训配置。
+以后要从头新建实验，可通过 `ALFWORLD_OUTPUT_DIR` 指定新的空目录。
 
 新后端使用独立的 AgentLoop、队列 worker 和优势注册名：适配现有 parquet 的旧 `agent_name`，
 避开原生 V1 的“末步奖励覆盖整条轨迹”和“轨迹优势广播”路径。共享 veRL/GiGPO 源码未修改。
@@ -86,16 +97,18 @@ SwanLab 的 `val/generations` 每条记录展示一条完整轨迹：`input` 是
 原生 `num_turns` 仍表示单步样本的轮数，完整轨迹长度见展示文本的 `decision steps`。
 已启动的训练进程需要在重启/续训后才会加载新的展示逻辑，旧验证表不会自动补全。
 
-## 原版后端的重复动作惩罚（2026-09-18）
+## 原版后端的惩罚对齐（2026-09-25）
 
-本节取代下文历史版本中的“连续重复、每次固定 −0.1”规则。
+原版后端的无动作、非法动作均为每次 −0.2，重复动作惩罚和递增系数均为 0，
+与 GiGPO 风格后端的三类惩罚值一致。原版仍按轨迹累计：
+`轨迹分数 = 10 × 是否成功 − 0.2 × (无动作次数 + 非法动作次数)`。
+例如一条失败轨迹含两次非法动作和一次无动作，则整条轨迹分数为 −0.6，
+再按原版轨迹级 GRPO 计算优势；不会切换成逐步奖励或逐步优势。
+以下计数规则仅用于统计，取代下文历史版本中的重复动作扣分规则。
 同一轨迹中，完整命令在此前有效执行过后再次有效执行，就计为一次重复，不要求连续。
 所有命令共享该轨迹的重复计数；切换命令或非法调用不重置计数，新轨迹从零开始。
-第 k 次重复惩罚为 `−0.1 − 0.05 × (k − 1)`，轨迹结束后累加所有重复惩罚：
-`−0.1 × n − 0.025 × n × (n − 1)`。例如三次重复共扣 `−0.45`，十五次共扣 `−6.75`，不设上限。
-`A → A → B → B → A` 共三次重复，依次扣 `−0.1、−0.15、−0.2`。
-保留成功轨迹豁免重复惩罚的规则；当前无动作 `−2`、非法动作 `−2` 独立累计。
-`alfworld_penalty/repeated_action_count` 仍统计次数，实际重复扣分只在最终奖励中计算一次。
+`A → A → B → B → A` 共三次重复，但不扣分。
+`alfworld_penalty/repeated_action_count` 仍统计次数，不再表示扣分次数。
 
 ## 当前 GiGPO 提示词（`alfworld_gigpo_qwen3_xml_v1`）
 

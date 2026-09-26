@@ -111,7 +111,7 @@ def mixed_episode(*, success=True, legacy=False, texts=None):
 
 
 @pytest.mark.parametrize("success", [True, False])
-def test_penalties_are_local_flat_and_retained_after_success(success):
+def test_only_missing_and_invalid_actions_are_penalized(success):
     rows = mixed_episode(success=success)
     expected_kinds = [
         "none",
@@ -130,21 +130,21 @@ def test_penalties_are_local_flat_and_retained_after_success(success):
             outcome,
             outcome - 0.2,
             outcome - 0.2,
-            outcome - 0.2,
             outcome,
-            outcome - 0.2,
+            outcome,
+            outcome,
         ]
     )
     assert [r.extra_fields["alfworld_step_penalty"] for r in rows] == [
         0,
         -0.2,
         -0.2,
-        -0.2,
         0,
-        -0.2,
+        0,
+        0,
     ]
     assert all(
-        r.extra_fields["alfworld_episode_penalty_sum"] == pytest.approx(-0.8)
+        r.extra_fields["alfworld_episode_penalty_sum"] == pytest.approx(-0.4)
         for r in rows
     )
     assert all(r.extra_fields["alfworld_episode_reward"] == outcome for r in rows)
@@ -160,12 +160,12 @@ def test_penalties_are_local_flat_and_retained_after_success(success):
     )
 
 
-@pytest.mark.parametrize("success,expected", [(True, 6.0), (False, -4.25)])
-def test_legacy_backend_keeps_original_penalties_and_success_exemption(
+@pytest.mark.parametrize("success,expected", [(True, 9.6), (False, -0.4)])
+def test_legacy_backend_accumulates_aligned_penalties_per_trajectory(
     success, expected
 ):
     rows = mixed_episode(success=success, legacy=True)
-    assert [r.reward_score for r in rows] == [expected] * 6
+    assert [r.reward_score for r in rows] == pytest.approx([expected] * 6)
     assert all("alfworld_step_penalty_kind" not in r.extra_fields for r in rows)
 
 
@@ -174,6 +174,16 @@ def test_many_missing_actions_do_not_accumulate_into_step_score():
     assert [r.reward_score for r in rows] == [-0.2] * 50
     assert rows[-1].extra_fields["alfworld_no_tool_call_penalty_count"] == 50
     assert rows[-1].extra_fields["alfworld_episode_penalty_sum"] == pytest.approx(-10)
+
+
+def test_failed_repeated_valid_actions_have_no_penalty_or_advantage():
+    rows = mixed_episode(success=False, texts=[xml("look")] * 50)
+    assert [r.reward_score for r in rows] == [0.0] * 50
+    assert rows[-1].extra_fields["alfworld_repeated_action_penalty_count"] == 49
+    assert rows[-1].extra_fields["alfworld_episode_penalty_sum"] == 0.0
+    scores = torch.tensor([[r.reward_score] for r in rows])
+    advantages, _ = compute_step_grpo_advantage(scores, torch.ones_like(scores), ["task"] * 50)
+    assert torch.count_nonzero(advantages) == 0
 
 
 def test_step_reward_rejects_episode_only_metadata():
@@ -271,7 +281,7 @@ def test_native_queue_dispatch_preserves_local_scores_through_cpu_ppo(monkeypatc
         )
     assert len(rows) == 12
     assert [float(r["rm_scores"].sum()) for r in rows] == pytest.approx(
-        [10, 9.8, 9.8, 9.8, 10, 9.8, 0, -0.2, -0.2, -0.2, 0, -0.2]
+        [10, 9.8, 9.8, 10, 10, 10, 0, -0.2, -0.2, 0, 0, 0]
     )
     padding, tag = construct_minimal_padding_template(rows[0], tags[0], eos_token_id=0)
     # Even padding accidentally sharing a task uid must not affect its statistics.
@@ -343,7 +353,7 @@ def test_config_selects_a_complete_backend_and_isolates_outputs(profile):
     assert legacy.algorithm.adv_estimator == "grpo"
     if profile == "qwen35_2b":
         assert current.trainer.experiment_name == "qwen3.5_2B_GiGPO后端"
-        assert current.trainer.default_local_dir == str(ROOT / "outputs/qwen3.5_2B/GiGPO后端")
+        assert current.trainer.default_local_dir == str(ROOT / "log/alfworld/qwen35_2b/gigpo_grpo")
     else:
         assert "/gigpo_grpo/" in current.trainer.default_local_dir
     assert current.trainer.rollout_data_dir == f"{current.trainer.default_local_dir}/rollouts"
@@ -426,7 +436,7 @@ def test_validation_queue_uses_outcomes_and_keeps_full_trajectories(
     )
     outcome = 10.0 if success else 0.0
     assert [float(r["rm_scores"].sum()) for r in serialized] == [outcome] * 6
-    assert serialized[-1]["extra_fields"]["alfworld_step_penalty"] == -0.2
+    assert serialized[-1]["extra_fields"]["alfworld_step_penalty"] == 0.0
     assert serialized[-1]["extra_fields"]["reward_extra_info"]["score"] == outcome
     captured = {}
 

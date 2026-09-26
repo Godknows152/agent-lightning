@@ -153,10 +153,10 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
     }
 
 
-def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():
+def test_alfworld_reward_ignores_repeats_for_success_and_failure():
     from alfworld_baseline.reward import compute_score
 
-    # Successful trajectories receive +10 and are exempt from repeated-action cost.
+    # Successful trajectories retain the terminal reward regardless of repeats.
     assert compute_score(
         "alfworld",
         extra_info={
@@ -165,7 +165,7 @@ def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():
             "alfworld_repeated_action_penalty_count": 4,
         },
     ) == 10.0
-    # Failed trajectories pay -0.1, -0.15, -0.2, once at episode end.
+    # Failed trajectories also receive no repeated-action penalty.
     assert compute_score(
         "alfworld",
         extra_info={
@@ -173,21 +173,21 @@ def test_alfworld_reward_applies_aggregate_repeat_penalty_with_success_gate():
             "alfworld_terminal_reason": "decision_limit",
             "alfworld_repeated_action_penalty_count": 3,
         },
-    ) == pytest.approx(-0.45)
+    ) == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize("repeat_count, penalty", [(0, 0.0), (1, -0.1), (2, -0.25), (3, -0.45), (15, -6.75)])
-def test_alfworld_reward_sums_escalating_repeats_with_other_penalties(repeat_count, penalty):
+@pytest.mark.parametrize("repeat_count", [0, 1, 2, 3, 15])
+def test_alfworld_reward_accumulates_action_penalties_without_repeat_cost(repeat_count):
     from alfworld_baseline.reward import compute_score
 
     assert compute_score(
         "alfworld",
         extra_info={
-            "tool_rewards": [-0.1, 0.0, -5.0],
+            "tool_rewards": [-0.2, 0.0, -0.2],
             "alfworld_terminal_reason": "no_tool_call",
             "alfworld_repeated_action_penalty_count": [repeat_count],
         },
-    ) == pytest.approx(-5.1 + penalty)
+    ) == pytest.approx(-0.4)
 
 
 def test_invalid_action_is_reported_to_agent_loop_without_tool_level_reward(monkeypatch):

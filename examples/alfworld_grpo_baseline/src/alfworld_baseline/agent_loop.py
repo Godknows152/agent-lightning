@@ -314,9 +314,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             videos=None,
         )
 
-    ALFWORLD_NO_TOOL_CALL_PENALTY = -2.0
-    ALFWORLD_INVALID_TOOL_CALL_PENALTY = -2.0
-    ALFWORLD_REPEATED_ACTION_PENALTY = -0.1
+    ALFWORLD_NO_TOOL_CALL_PENALTY = -0.2
+    ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.2
+    ALFWORLD_REPEATED_ACTION_PENALTY = 0.0
 
     def _record_alfworld_penalty(
         self,
@@ -331,11 +331,9 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         Legacy internal counter names are retained. In v7 no_tool_call means
         absent/incomplete post-thinking XML; invalid_tool_call means a complete
         but schema-invalid decision or an action rejected by the environment.
-        Each missing action costs -2 and consumes one decision without ending the trajectory.
-        Repeated valid actions are counted across the whole trajectory. The
-        aggregate repeated-action penalty is applied by the final reward
-        function, where successful trajectories can be exempted. Protocol
-        failures receive their own immediate penalties.
+        Each missing or invalid action costs -0.2 and consumes one decision
+        without ending the trajectory. Repeated valid actions are counted
+        across the whole trajectory for telemetry but receive no penalty.
         """
         if kind == "no_tool_call":
             count_key = "alfworld_no_tool_call_penalty_count"
@@ -667,8 +665,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             agent_data.action_history.append(action)
             if not metrics.get("error"):
                 # Count every occurrence after the first one, regardless of
-                # whether it is consecutive. The final reward function applies
-                # escalating costs (-0.1, -0.15, ...) for unsuccessful trajectories only.
+                # whether it is consecutive. This is telemetry only: repeated
+                # valid actions no longer incur a reward penalty.
                 prior_occurrences = agent_data.successful_action_history.count(action)
                 if prior_occurrences > 0:
                     extra_fields = agent_data.extra_fields
@@ -682,7 +680,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     async def _finish_environment_decision(self, agent_data: AgentData) -> AgentState:
         """Share the tool's Max Steps budget across valid and failed decisions.
 
-        Missing actions and parsed invalid actions both cost -2. Both leave
+        Missing actions and parsed invalid actions both cost -0.2. Both leave
         TextWorld unchanged, consume one decision step, and allow another attempt.
         Environment completion takes precedence on the last allowed step,
         so a last-step success is not labelled truncated.

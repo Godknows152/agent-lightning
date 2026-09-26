@@ -34,7 +34,10 @@ def main() -> int:
     parser.add_argument("--config-name", default="alfworld_config_2gpu")
     parser.add_argument("--model-profile", default="qwen35_2b")
     parser.add_argument("--training-backend", choices=("trajectory", "gigpo_grpo"), default="trajectory")
+    parser.add_argument("--resume-config", choices=("qwen35_2b_gigpo",), default=None)
     args = parser.parse_args()
+    if args.resume_config and (args.kind != "full" or args.model_profile != "qwen35_2b" or args.training_backend != "gigpo_grpo"):
+        parser.error("The resume config requires a full Qwen3.5-2B GiGPO run")
     directory_name = f"seed{args.seed}" if args.kind == "full" else f"{args.kind}_seed{args.seed}"
     backend_suffix = "_gigpo_grpo" if args.training_backend == "gigpo_grpo" else ""
     prefix = f"alfworld_{args.model_profile}{backend_suffix}_v1"
@@ -46,7 +49,7 @@ def main() -> int:
     layout = Path(args.model_profile) / "gigpo_grpo" if backend_suffix else Path()
     output = (args.output_dir or ROOT / "outputs" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
     if args.training_backend == "gigpo_grpo" and args.model_profile == "qwen35_2b" and args.output_dir is None:
-        output = ROOT / "outputs" / "qwen3.5_2B" / "GiGPO后端"
+        output = ROOT / "log" / "alfworld" / "qwen35_2b" / "gigpo_grpo"
         if args.kind != "full":
             output /= directory_name
     log_dir = (args.log_dir or ROOT / "log" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
@@ -62,6 +65,8 @@ def main() -> int:
     ]
     if args.training_backend == "gigpo_grpo":
         overrides.append("+training_backend=gigpo_grpo")
+    if args.resume_config:
+        overrides.append(f"+resume_run={args.resume_config}")
     if args.kind in {"smoke", "pilot"}:
         overrides += [
             "variables.NUM_ROLLOUTS=2",
@@ -77,6 +82,22 @@ def main() -> int:
     with initialize_config_dir(config_dir=str(args.config_dir.resolve()), version_base=None):
         cfg = compose(config_name=args.config_name, overrides=overrides)
     validate_native_step_config(cfg)
+    if args.resume_config:
+        from alfworld_baseline.resume import validate_native_resume
+
+        validate_native_resume(cfg)
+        output_root = Path(cfg.trainer.default_local_dir)
+        identity_path = output_root / ".swanlab_experiment.json"
+        if identity_path.exists():
+            identity = json.loads(identity_path.read_text())
+            checkpoint = cfg.trainer.resume_from_path
+            if cfg.trainer.resume_mode == "auto":
+                step = int((output_root / "latest_checkpointed_iteration.txt").read_text().strip())
+                checkpoint = output_root / f"global_step_{step}"
+            print(f"resume_checkpoint={checkpoint} swanlab_run_id={identity['run_id']} resume=must")
+        else:
+            print(f"resume_mode={cfg.trainer.resume_mode} checkpoint=none start=new_run")
+        print(f"ray_node_ip={cfg.ray_kwargs.ray_init._node_ip_address}")
     budget = configure_environment_driven_rollout(cfg)
     assert budget is not None
     # Match the worker's recursive schema validation before allocating GPUs.

@@ -6,16 +6,16 @@ from verl.experimental.agent_loop.agent_loop import AgentLoopOutput, register
 from verl.experimental.agent_loop.tool_agent_loop import AgentData, AgentState
 
 from .agent_loop import ALFWorldToolAgentLoop
-from .step_reward import PENALTY_COUNTERS, STEP_PENALTY, compute_score
+from .step_reward import PENALTY_COUNTERS, STEP_PENALTIES, compute_score
 
 
 @register("alfworld_step_grpo_agent")
 class ALFWorldStepGRPOAgentLoop(ALFWorldToolAgentLoop):
     """Reuse environment/protocol handling, retaining the cost of each decision."""
 
-    ALFWORLD_NO_TOOL_CALL_PENALTY = STEP_PENALTY
-    ALFWORLD_INVALID_TOOL_CALL_PENALTY = STEP_PENALTY
-    ALFWORLD_REPEATED_ACTION_PENALTY = STEP_PENALTY
+    ALFWORLD_NO_TOOL_CALL_PENALTY = STEP_PENALTIES["no_action"]
+    ALFWORLD_INVALID_TOOL_CALL_PENALTY = STEP_PENALTIES["invalid_action"]
+    ALFWORLD_REPEATED_ACTION_PENALTY = STEP_PENALTIES["repeated_action"]
 
     async def _process_environment_decision(self, agent_data: AgentData) -> AgentState:
         before = {
@@ -39,7 +39,7 @@ class ALFWorldStepGRPOAgentLoop(ALFWorldToolAgentLoop):
         # fields. Later decisions/finalization must not overwrite this metadata.
         agent_data.step_outputs[-1].extra_fields.update(
             alfworld_step_penalty_kind=kind,
-            alfworld_step_penalty=0.0 if kind == "none" else STEP_PENALTY,
+            alfworld_step_penalty=STEP_PENALTIES[kind],
         )
         return state
 

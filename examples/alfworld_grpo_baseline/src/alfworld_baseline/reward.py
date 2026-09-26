@@ -4,8 +4,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-REPEATED_ACTION_PENALTY = -0.1
-REPEATED_ACTION_PENALTY_INCREMENT = 0.05
+REPEATED_ACTION_PENALTY = 0.0
+REPEATED_ACTION_PENALTY_INCREMENT = 0.0
 
 
 def _first(value: Any) -> Any:
@@ -27,13 +27,11 @@ def compute_score(
     """Return the episode reward emitted by ALFWorldTool.
 
     ALFWorld emits sparse environment rewards (10 on a solved task and 0 otherwise).
-    Each decision without a parseable action appends a ``-2`` penalty and continues
+    Each decision without a parseable action appends a ``-0.2`` penalty and continues
     within the decision budget, retaining previous rewards. Complete but invalid XML
-    decisions receive ``-2`` and may continue. Repeated valid actions are counted
-    across the whole trajectory. The k-th repeated action costs
-    ``0.1 + 0.05 * (k - 1)``, summed over all repeats regardless of action identity.
-    This aggregate repeated-action penalty is gated off when the trajectory receives
-    the terminal success reward.
+    decisions receive ``-0.2`` and may continue. Both penalties accumulate into
+    one episode score. Repeated valid actions are counted for telemetry only:
+    both their base penalty and increment are zero, matching the step backend.
     """
     if data_source != "alfworld":
         raise ValueError(f"ALFWorld reward received unexpected data_source={data_source!r}")

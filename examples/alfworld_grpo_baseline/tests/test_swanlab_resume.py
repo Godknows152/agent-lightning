@@ -44,13 +44,26 @@ def test_unspecified_name_keeps_existing_default(tmp_path):
     assert launch_name(tmp_path) == "alfworld_qwen35_2b_v1_seed0"
 
 
-def test_native_tracking_uses_composed_run_identity(tmp_path, monkeypatch):
+@pytest.mark.parametrize("resume_overlay", [False, True])
+def test_native_tracking_uses_composed_run_identity(tmp_path, monkeypatch, resume_overlay):
     with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base=None):
-        cfg = compose(config_name="alfworld_config_2gpu")
-    assert cfg.trainer.resume_mode == "auto"
-    cfg.trainer.resume_mode = "resume_path"
-    cfg.trainer.resume_from_path = str(tmp_path / "global_step_20")
-    assert cfg.trainer.experiment_name == launch_name(CONFIG_DIR)
+        overrides = ["+training_backend=gigpo_grpo", "+resume_run=qwen35_2b_gigpo"] if resume_overlay else []
+        cfg = compose(config_name="alfworld_config_2gpu", overrides=overrides)
+    if resume_overlay:
+        assert cfg.trainer.resume_mode == "auto"
+        assert cfg.trainer.resume_from_path is None
+        assert cfg.trainer.default_local_dir == str(ROOT / "log/alfworld/qwen35_2b/gigpo_grpo")
+        assert cfg.trainer.experiment_name == "qwen3.5_2B_GiGPO后端"
+        assert cfg.trainer.total_training_steps == 150
+        assert cfg.ray_kwargs.ray_init._node_ip_address == os.environ.get("ALFWORLD_RAY_NODE_IP", "10.246.1.30")
+    else:
+        assert cfg.trainer.resume_mode == "auto"
+        assert cfg.trainer.experiment_name == launch_name(CONFIG_DIR)
+    if resume_overlay:
+        (tmp_path / "latest_checkpointed_iteration.txt").write_text("20")
+    else:
+        cfg.trainer.resume_mode = "resume_path"
+        cfg.trainer.resume_from_path = str(tmp_path / "global_step_20")
     # Use a temporary marker and fake SDK: no cloud writes or artifact changes.
     cfg.trainer.default_local_dir = str(tmp_path)
     marker = {"experiment_name": cfg.trainer.experiment_name, "run_id": "test-original-run"}
@@ -75,6 +88,19 @@ def test_native_tracking_uses_composed_run_identity(tmp_path, monkeypatch):
     tracking.log({"test_metric": 1.0}, step=21)
     assert log_calls == [{"data": {"test_metric": 1.0}, "step": 21}]
     assert json.loads(marker_path.read_text()) == marker
+
+
+@pytest.mark.parametrize("kind,expected", [("full", True), ("preflight", True), ("smoke", False), ("pilot", False)])
+def test_resume_overlay_selection_matches_preflight(kind, expected):
+    script = (ROOT / "scripts/run_alfworld_grpo_2gpu.sh").read_text()
+    block = "resume_preflight_args=()" + script.split("resume_preflight_args=()", 1)[1].split('\nOUTPUT_DIR=', 1)[0]
+    env = dict(os.environ, ALFWORLD_RESUME_CONFIG="qwen35_2b_gigpo", MODEL_PROFILE="qwen35_2b",
+               TRAINING_BACKEND="gigpo_grpo", RUN_KIND=kind)
+    result = subprocess.check_output(
+        ["bash", "-eu", "-c", 'backend_overrides=()\n' + block +
+         '\nprintf "%s\\n" "${backend_overrides[@]}" "${resume_preflight_args[@]}"'], env=env, text=True)
+    assert ("+resume_run=qwen35_2b_gigpo" in result) == expected
+    assert ("--resume-config\nqwen35_2b_gigpo" in result) == expected
 
 
 def test_new_run_identity_is_saved_before_training_and_patch_is_restored(tmp_path, monkeypatch):

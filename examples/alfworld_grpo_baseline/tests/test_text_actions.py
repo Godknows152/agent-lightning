@@ -104,7 +104,7 @@ def test_text_decisions_history_penalties_and_unmodified_replay():
         assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 1
         assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
         assert data.extra_fields['alfworld_valid_tool_call_count'] == 6
-        assert sum(data.tool_rewards) == pytest.approx(-4.0)
+        assert sum(data.tool_rewards) == pytest.approx(-0.4)
         assert len(data.alfworld_decision_history) == 8
         assert data.alfworld_decision_history[4].endswith('[rejected]')
         assert data.alfworld_decision_history[5].endswith('[no action]')

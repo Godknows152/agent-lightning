@@ -67,7 +67,7 @@ def run_episode(success=True):
     assert len(outputs) == 3
     assert [out.prompt_ids for out in outputs] == [[11 + i, 42] for i in range(len(outputs))]
     assert [call.kwargs['prompt_ids'] for call in loop.server_manager.generate.await_args_list] == [out.prompt_ids for out in outputs]
-    assert all(out.reward_score == (10 if success else -6) for out in outputs)
+    assert all(out.reward_score == pytest.approx(10 if success else -0.6) for out in outputs)
     assert sum(out.extra_fields['alfworld_is_final_step'] for out in outputs) == 1
     assert all('alfworld_turn_contexts' not in out.extra_fields for out in outputs)
     if success:
@@ -123,7 +123,7 @@ def test_native_queue_rows_rewards_advantages_padding_and_cpu_optimizer(monkeypa
     batch = DataProto(batch=TensorDict({'response_mask': masks, 'token_level_rewards': rewards}, batch_size=[7]),
                       non_tensor_batch={'uid': np.array([r['uid'] for r in rows], dtype=object)})
     result = compute_advantage_for_multi_trajectories(batch, keys, AdvantageEstimator.GRPO)
-    expected = 1 / np.sqrt(2)  # sample std over [10, -6], irrespective of step count
+    expected = 1 / np.sqrt(2)  # sample std over [10, -0.6], irrespective of step count
     for index, key in enumerate(keys):
         advantage = result.batch['advantages'][index]
         if key.startswith('pad'):
@@ -174,14 +174,14 @@ def test_no_calls_preserve_environment_and_penalties_before_later_success():
     loop.server_manager.generate = AsyncMock(side_effect=generate)
     outputs = asyncio.run(loop.run({}, raw_prompt=[]))
     assert len(outputs) == 3
-    assert all(out.reward_score == 6.0 for out in outputs)
+    assert all(out.reward_score == pytest.approx(9.6) for out in outputs)
     assert released == ['instance']
     tool.execute.assert_awaited_once()
     assert tool.execute.await_args.args[0] == 'instance'
     assert all('room 0' in prompt for prompt in prompts)
     assert "Action 1: 'None'" in prompts[1]
     final = outputs[-1].extra_fields
-    assert final['tool_rewards'] == [-2.0, -2.0, 10.0]
+    assert final['tool_rewards'] == [-0.2, -0.2, 10.0]
     assert final['alfworld_terminal_reason'] == 'success'
     assert final['alfworld_no_tool_call_penalty_count'] == 2
     assert final['alfworld_no_action_overlong_thinking_count'] == 1
@@ -253,7 +253,7 @@ def test_real_constructor_and_native_qwen35_processor_without_model_weights():
         return await loop.run({}, raw_prompt=[{'role': 'user', 'content': 'stale'}])
     output = asyncio.run(run())[-1]
     assert released == ['instance']
-    assert output.reward_score == -6
+    assert output.reward_score == pytest.approx(-0.6)
     assert output.prompt_ids == server.generate.await_args.kwargs['prompt_ids']
     assert output.response_ids == ids
     worker = SimpleNamespace(processor=processor, tokenizer=tokenizer,

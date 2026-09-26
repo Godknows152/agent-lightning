@@ -52,7 +52,7 @@ def test_xml_classification_and_penalty(output, status, reason):
 
     state = asyncio.run(run())
     assert state == AgentState.GENERATING
-    assert data.tool_rewards == ([0.0] if status == 'valid' else [-2.0])
+    assert data.tool_rewards == ([0.0] if status == 'valid' else [-0.2])
     assert execute.await_count == int(status == 'valid')
     assert data.extra_fields.get('alfworld_no_tool_call_penalty_count', 0) == int(status == 'no_action')
     assert data.extra_fields.get('alfworld_invalid_tool_call_penalty_count', 0) == int(status == 'invalid_action')
@@ -92,7 +92,7 @@ def test_xml_repeat_compares_command_and_schema_failure_resets_streak():
             assert await loop._process_environment_decision(data) == AgentState.GENERATING
 
     asyncio.run(run())
-    assert data.tool_rewards == [0, 0, 0, 0, -2, 0, -2, 0]
+    assert data.tool_rewards == [0, 0, 0, 0, -0.2, 0, -0.2, 0]
     assert data.extra_fields['alfworld_repeated_action_penalty_count'] == 4
     assert data.extra_fields['alfworld_invalid_tool_call_penalty_count'] == 2
     assert data.extra_fields['alfworld_valid_tool_call_count'] == 6
@@ -115,6 +115,6 @@ def test_thinking_truncation_requires_exhausted_budget_and_unclosed_thinking(out
         return await loop._process_environment_decision(data)
 
     assert asyncio.run(run()) == AgentState.GENERATING
-    assert data.tool_rewards == [-2.0]
+    assert data.tool_rewards == [-0.2]
     assert data.extra_fields['alfworld_no_tool_call_penalty_count'] == 1
     assert (data.extra_fields.get('alfworld_no_action_category') == 'overlong_thinking') == bool(expected)

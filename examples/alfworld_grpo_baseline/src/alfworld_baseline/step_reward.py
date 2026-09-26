@@ -6,6 +6,12 @@ from collections.abc import Mapping
 from typing import Any
 
 STEP_PENALTY = -0.2
+STEP_PENALTIES = {
+    "none": 0.0,
+    "no_action": STEP_PENALTY,
+    "invalid_action": STEP_PENALTY,
+    "repeated_action": 0.0,
+}
 PENALTY_COUNTERS = {
     "no_action": "alfworld_no_tool_call_penalty_count",
     "invalid_action": "alfworld_invalid_tool_call_penalty_count",
@@ -22,9 +28,8 @@ def compute_score(
 ) -> float:
     """Score one decision; never sum penalties from other decisions.
 
-    All three categories cost -0.2, are mutually exclusive, and remain in
-    successful episodes. Repeats keep the existing exact-command, whole-episode
-    definition, but have neither escalating costs nor a success exemption.
+    Missing and invalid actions cost -0.2, including in successful episodes.
+    Repeated valid actions remain identifiable in telemetry but cost zero.
     """
     if data_source != "alfworld":
         raise ValueError(
@@ -45,4 +50,4 @@ def compute_score(
     if kind not in {"none", *PENALTY_COUNTERS}:
         raise ValueError(f"Unknown ALFWorld step penalty kind: {kind!r}")
     outcome = 10.0 if reason == "success" else 0.0
-    return outcome + (0.0 if kind == "none" else STEP_PENALTY)
+    return outcome + STEP_PENALTIES[kind]

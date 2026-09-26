@@ -1,0 +1,11 @@
+# @package _global_
+# Resume the latest checkpoint and its SwanLab identity when present.
+# An empty output directory starts a new run.
+trainer:
+  resume_mode: auto
+  resume_from_path: null
+
+ray_kwargs:
+  ray_init:
+    # ens121f0: do not auto-select the removable Mihomo TUN address (28.0.0.1).
+    _node_ip_address: ${oc.env:ALFWORLD_RAY_NODE_IP,10.246.1.30}

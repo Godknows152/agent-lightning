@@ -59,6 +59,8 @@ Environment:
   ALFWORLD_SWANLAB_LOG_DIR=/path/to/swanlab
   ALFWORLD_LOG_DIR=/path/to/log
   ALFWORLD_OUTPUT_DIR=/path/to/output
+  ALFWORLD_RESUME_CONFIG=qwen35_2b_gigpo  Full-run resume overlay (step launcher default)
+  ALFWORLD_RAY_NODE_IP=10.246.1.30  Physical node IP for the resume overlay
   CUDA_VISIBLE_DEVICES=0,1   Physical GPUs (default: 0,1)
   ALFWORLD_SKIP_SWANLAB_VERIFY=1  Skip cloud credential verification
 EOF
@@ -68,6 +70,16 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then usage; exit 0; fi
 if [[ "${1:-}" == "--preflight" ]]; then RUN_KIND="preflight"; shift; fi
 if [[ "${1:-}" == "--smoke" ]]; then RUN_KIND="smoke"; shift; fi
 if [[ "${1:-}" == "--pilot" ]]; then RUN_KIND="pilot"; shift; fi
+
+resume_preflight_args=()
+if [[ -n "${ALFWORLD_RESUME_CONFIG:-}" && ( "${RUN_KIND}" == "full" || "${RUN_KIND}" == "preflight" ) ]]; then
+  if [[ "${ALFWORLD_RESUME_CONFIG}" != "qwen35_2b_gigpo" || "${MODEL_PROFILE}" != "qwen35_2b" || "${TRAINING_BACKEND}" != "gigpo_grpo" ]]; then
+    echo "The qwen35_2b_gigpo resume config requires the Qwen3.5-2B GiGPO backend." >&2
+    exit 2
+  fi
+  backend_overrides+=("+resume_run=${ALFWORLD_RESUME_CONFIG}")
+  resume_preflight_args+=(--resume-config "${ALFWORLD_RESUME_CONFIG}")
+fi
 
 OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/v1/2gpu/seed${SEED}}"
 # Use the 2B experiment's configured output for full runs and preflight.
@@ -105,7 +117,7 @@ if [[ "${TRAINING_BACKEND}" == "gigpo_grpo" ]]; then
   [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_run_dir="${RUN_KIND}_seed${SEED}"
   OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/gigpo_grpo/v1/2gpu/${backend_run_dir}}"
   if [[ "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
-    backend_output="${ROOT}/outputs/qwen3.5_2B/GiGPO后端"
+    backend_output="${ROOT}/log/alfworld/qwen35_2b/gigpo_grpo"
     [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_output="${backend_output}/${backend_run_dir}"
     OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${backend_output}}"
   fi
@@ -166,7 +178,7 @@ if [[ "${RUN_KIND}" == "preflight" ]]; then
     --config-dir "${CONFIG_PATH}" \
     --config-name "${CONFIG_NAME}" \
     --model-profile "${MODEL_PROFILE}" \
-    --training-backend "${TRAINING_BACKEND}"
+    --training-backend "${TRAINING_BACKEND}" "${resume_preflight_args[@]}"
   echo "ALFWorld ${MODEL_PROFILE} v1 preflight passed: output=${OUTPUT_DIR} log=${LOG_DIR} swanlab=${SWANLAB_LOG_DIR}"
   exit 0
 fi
@@ -183,7 +195,7 @@ training_kind="full"
   --config-dir "${CONFIG_PATH}" \
   --config-name "${CONFIG_NAME}" \
   --model-profile "${MODEL_PROFILE}" \
-  --training-backend "${TRAINING_BACKEND}" >/dev/null
+  --training-backend "${TRAINING_BACKEND}" "${resume_preflight_args[@]}" >/dev/null
 
 if [[ ! -s "${DATA_DIR}/train.parquet" || ! -s "${DATA_DIR}/test.parquet" ]]; then
   echo "Missing ${DATA_DIR}/train.parquet or test.parquet" >&2
