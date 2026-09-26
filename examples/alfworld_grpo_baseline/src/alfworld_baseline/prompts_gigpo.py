@@ -81,21 +81,14 @@ def build_user_prompt(
     still counts the whole trajectory, as in GiGPO's SimpleMemory.
     """
     decision_instruction = (
-        "First reason about the next step inside <think> </think> tags. "
-        "Keep thinking to 1-2 short sentences, then close </think> and emit exactly one Qwen3 XML tool call."
+        "Think briefly about the next step in 1-2 short sentences."
         if enable_thinking else
-        "Emit exactly one Qwen3 XML tool call directly, without reasoning or explanations."
+        "Choose the next action directly, without reasoning or explanations."
     )
     decision_instruction += (
         "\nUse this exact format, replacing EXACT_COMMAND with one current admissible action verbatim:\n"
         + QWEN3_XML_CALL_FORMAT
-        + "\nDo not emit JSON, additional calls, or text outside the required blocks."
     )
-    if avoid_repeated_actions:
-        decision_instruction += (
-            "\nCheck the recent observation/action history before responding. "
-            "Choose an admissible command not already used in that history when possible; do not invent commands."
-        )
     actions = _format_actions(admissible_actions)
     full_history = tuple(str(item) for item in history)
     recent_history = full_history[-HISTORY_LENGTH:]

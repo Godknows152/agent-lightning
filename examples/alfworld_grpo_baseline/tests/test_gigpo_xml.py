@@ -54,7 +54,7 @@ def test_prompt_and_chat_template_agree_on_xml(thinking):
     assert '<function=alfworld_action>' in prompt and '<parameter=action>' in prompt
     assert '<action>' not in rendered and '"arguments"' not in rendered
     assert rendered.endswith('<think>\n' if thinking else '<think>\n\n</think>\n\n')
-    assert ('First reason' in prompt) is thinking
+    assert ('Think briefly' in prompt) is thinking
     output = ('Reasoning.</think>' if thinking else '') + CALL
     assert parse_xml_decision(output, enable_thinking=thinking).action == 'look'
     messages, tools = build_messages(mission='find apple', observation='room',
