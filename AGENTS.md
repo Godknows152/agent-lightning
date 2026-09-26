@@ -415,6 +415,9 @@ tail -f examples/image_restoration_multi_agent/old_verl_grpo/log/fog/v3/fog_v3_*
 - `scripts/alfworld/qwen35_2b_v1.sh` runs native veRL V1 trajectory GRPO in the background;
   Actor and the frozen KL reference both initialize from the same full SFT checkpoint.
 - Full-parameter outputs use separate `full_sft`/`full_sft_grpo` directories; do not resume old LoRA checkpoints.
+- The tuned 2B trajectory GRPO profile targets two A800 80GB GPUs: dynamic Actor/ref token budgets
+  24576/65536, gradient checkpointing, resident Actor/optimizer state, and deferred FSDP gradient sync.
+  Its fresh output is `outputs/qwen3.5_2B/full_sft_grpo_tuned`; see the ALFWorld throughput report.
 - The former 9B SFT checkpoint is absent locally. Restore it before export or set `ALFWORLD_SFT_MODEL`.
   The legacy Qwen2.5 profile retains its upstream Instruct model unless a local SFT model is supplied.
 

@@ -1,0 +1,1028 @@
+{
+  "date": "2026-09-26",
+  "hardware": "2 x NVIDIA A800 80GB (79.25 GiB per device)",
+  "backend_commit": "3efe38c759c14622fd1b2c9e3679f2d02f86bdac",
+  "baseline_commit": "ad01474f898833f36ea95e2bfe52a7ca6b63e01f",
+  "capture": {
+    "source_pid": 2973979,
+    "source_step": 2,
+    "valid_rows": 6235,
+    "fields": [
+      "input_ids",
+      "position_ids",
+      "responses",
+      "response_mask",
+      "loss_mask",
+      "old_log_probs",
+      "advantages",
+      "ref_log_prob"
+    ],
+    "representative_row_count": 256,
+    "longest_row_count": 128,
+    "fixture_sha256": {
+      "representative.pt": "016d1e12f6e869dff455dd946d94b3f7465ff72d7c06a9581d9620fa95c52bff",
+      "longest.pt": "2feaf5b017cdf096a092f11a45a457b1cbb33c9c5df7bd89f7928412a680b708"
+    }
+  },
+  "baseline_full_step": {
+    "step": 1.0,
+    "global_seqlen/min": 2565145.0,
+    "global_seqlen/max": 2956238.0,
+    "global_seqlen/minmax_diff": 391093.0,
+    "global_seqlen/balanced_min": 2760691.0,
+    "global_seqlen/balanced_max": 2760692.0,
+    "global_seqlen/mean": 2760691.5,
+    "actor/pg_clipfrac": 0.003630603582251399,
+    "actor/ppo_kl": 0.0008510867567527735,
+    "actor/pg_clipfrac_lower": 2.5492443344365728e-05,
+    "actor/pg_loss": 0.059611420835265626,
+    "actor/entropy_loss": 0.04746770717863502,
+    "actor/kl_loss": 0.0013763443289244023,
+    "actor/kl_coef": 0.0010000000000000002,
+    "actor/loss": 0.05937545472870068,
+    "actor/grad_norm": 4.485331632653061,
+    "actor/perf/max_memory_allocated_gb": 14.441794872283936,
+    "actor/perf/max_memory_reserved_gb": 21.95703125,
+    "actor/perf/cpu_memory_used_gb": 108.4685907947774,
+    "actor/lr": 1e-06,
+    "perf/mfu/actor": 0.09096385138655871,
+    "training/global_step": 1.0,
+    "training/epoch": 0.0,
+    "critic/score/mean": 0.05808534845709801,
+    "critic/score/max": 10.0,
+    "critic/score/min": -1.7999999523162842,
+    "critic/rewards/mean": 0.05808534845709801,
+    "critic/rewards/max": 10.0,
+    "critic/rewards/min": -1.7999999523162842,
+    "critic/advantages/mean": -0.05431794747710228,
+    "critic/advantages/max": 2.472649574279785,
+    "critic/advantages/min": -2.0506038665771484,
+    "critic/returns/mean": -0.05431794747710228,
+    "critic/returns/max": 2.472649574279785,
+    "critic/returns/min": -2.0506038665771484,
+    "response_length/mean": 43.56791687011719,
+    "response_length/max": 74.0,
+    "response_length/min": 18.0,
+    "response_length/clip_ratio": 0.00016170763410627842,
+    "response_length_non_aborted/mean": 43.56791687011719,
+    "response_length_non_aborted/max": 74.0,
+    "response_length_non_aborted/min": 18.0,
+    "response_length_non_aborted/clip_ratio": 0.00016170763410627842,
+    "response/aborted_ratio": 0.0,
+    "prompt_length/mean": 847.4603881835938,
+    "prompt_length/max": 1466.0,
+    "prompt_length/min": 633.0,
+    "prompt_length/clip_ratio": 0.00032341526821255684,
+    "num_turns/min": 1.0,
+    "num_turns/max": 1.0,
+    "num_turns/mean": 1.0,
+    "timing_s/gen": 200.79330633487552,
+    "timing_s/old_log_prob": 1.1037237187847495,
+    "timing_s/ref": 538.0507604237646,
+    "timing_s/adv": 2.4823465682566166,
+    "timing_s/update_actor": 1420.128959913738,
+    "timing_s/update_weights": 1.2036537323147058,
+    "timing_s/step": 2181.4986062170938,
+    "timing_per_token_ms/adv": 0.0004495878239666795,
+    "timing_per_token_ms/update_actor": 0.2572052980048184,
+    "timing_per_token_ms/gen": 0.745025476917078,
+    "timing_per_token_ms/ref": 0.09744854874653046,
+    "perf/total_num_tokens": 5521383.0,
+    "perf/time_per_step": 2181.4986062170938,
+    "perf/throughput": 1265.5022983430993,
+    "training/num_turns/mean": 1.0,
+    "training/num_turns/max": 1.0,
+    "training/num_turns/min": 1.0,
+    "training/off_policy/trajectory_spans/mean": 1.0,
+    "training/off_policy/trajectory_spans/max": 1.0,
+    "training/off_policy/trajectory_spans/min": 1.0,
+    "training/off_policy/trajectory_staleness/mean": 0.0,
+    "training/off_policy/trajectory_staleness/max": 0.0,
+    "training/off_policy/trajectory_staleness/min": 0.0,
+    "training/off_policy/trajectory_staleness_worst/mean": 0.0,
+    "training/off_policy/trajectory_staleness_worst/max": 0.0,
+    "training/off_policy/trajectory_staleness_worst/min": 0.0,
+    "alfworld_termination/success_count": 11.0,
+    "alfworld_termination/environment_timeout_count": 13.0,
+    "alfworld_termination/decision_limit_count": 104.0,
+    "alfworld_termination/no_tool_call_count": 0.0,
+    "alfworld_termination/env_failure_count": 0.0,
+    "alfworld_termination/total_trajectories": 128.0,
+    "alfworld_penalty/no_action_count": 3.0,
+    "alfworld_penalty/invalid_action_count": 303.0,
+    "alfworld_penalty/repeated_action_count": 3153.0,
+    "alfworld_penalty/no_action/thinking_unclosed_count": 1.0,
+    "alfworld_penalty/no_action/tool_call_format_count": 2.0,
+    "alfworld_penalty/no_action/overlong_thinking_count": 0.0,
+    "alfworld_penalty/no_action/other_count": 0.0,
+    "alfworld/valid_action_count/min": 15.0,
+    "alfworld/valid_action_count/max": 50.0,
+    "alfworld/valid_action_count/mean": 45.921875
+  },
+  "trials": [
+    {
+      "name": "baseline",
+      "complete": true,
+      "overrides_from_ad01474f": [],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 16.60709141101688,
+          "peak_allocated_gib": 6.388528823852539,
+          "peak_reserved_gib": 15.82421875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 10.530869212001562,
+          "peak_allocated_gib": 6.508674144744873,
+          "peak_reserved_gib": 18.30078125,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 10.747180195525289,
+          "peak_allocated_gib": 6.944762706756592,
+          "peak_reserved_gib": 58.005859375,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 32.194052359089255,
+          "peak_allocated_gib": 14.326175689697266,
+          "peak_reserved_gib": 67.265625,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.5625,
+          "loss": 0.0009577982127666473
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 28.942371547222137,
+          "peak_allocated_gib": 17.653367042541504,
+          "peak_reserved_gib": 60.322265625,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 5.65625,
+          "loss": 0.008201210759580135
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 31.18583216238767,
+          "peak_allocated_gib": 18.147122383117676,
+          "peak_reserved_gib": 78.412109375,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.90625,
+          "loss": 0.08650645613670349
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 10.71996447071433,
+          "peak_allocated_gib": 6.397440433502197,
+          "peak_reserved_gib": 15.826171875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 10.580560189671814,
+          "peak_allocated_gib": 6.517585754394531,
+          "peak_reserved_gib": 18.302734375,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 10.76936493255198,
+          "peak_allocated_gib": 6.95367431640625,
+          "peak_reserved_gib": 58.0078125,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    },
+    {
+      "name": "micro8",
+      "complete": true,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=8",
+        "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=32"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 28.223748322576284,
+          "peak_allocated_gib": 19.97411060333252,
+          "peak_reserved_gib": 21.822265625,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 2.165668100118637,
+          "peak_allocated_gib": 20.1242995262146,
+          "peak_reserved_gib": 21.98046875,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 22.90919663477689,
+          "peak_allocated_gib": 25.081197261810303,
+          "peak_reserved_gib": 26.921875,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 27.589887710288167,
+          "peak_allocated_gib": 23.689505100250244,
+          "peak_reserved_gib": 35.63671875,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.15625,
+          "loss": 0.0011468306183815002
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 12.873811917379498,
+          "peak_allocated_gib": 28.216630935668945,
+          "peak_reserved_gib": 33.95703125,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 5.84375,
+          "loss": 0.007123962044715881
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 14.407274045050144,
+          "peak_allocated_gib": 31.518052577972412,
+          "peak_reserved_gib": 37.279296875,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.921875,
+          "loss": 0.08649379014968872
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 2.389214163646102,
+          "peak_allocated_gib": 19.983384132385254,
+          "peak_reserved_gib": 22.275390625,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 2.1893632831051946,
+          "peak_allocated_gib": 20.133211135864258,
+          "peak_reserved_gib": 22.431640625,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 2.8064567977562547,
+          "peak_allocated_gib": 25.09010887145996,
+          "peak_reserved_gib": 27.548828125,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    },
+    {
+      "name": "fast16",
+      "complete": false,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=16",
+        "actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=32",
+        "actor_rollout_ref.model.enable_gradient_checkpointing=false",
+        "actor_rollout_ref.actor.fsdp_config.entropy_checkpointing=false",
+        "actor_rollout_ref.actor.fsdp_config.use_no_sync_for_gradient_accumulation=true"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 8.191117904148996,
+          "peak_allocated_gib": 19.97411060333252,
+          "peak_reserved_gib": 21.919921875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 2.165810462087393,
+          "peak_allocated_gib": 20.1242995262146,
+          "peak_reserved_gib": 22.078125,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 2.7809680197387934,
+          "peak_allocated_gib": 25.081197261810303,
+          "peak_reserved_gib": 27.01953125,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ],
+      "failure": "CUDA OOM in first actor forward: 71.97 GiB allocated, requested another 7.33 GiB."
+    },
+    {
+      "name": "dynamic8k",
+      "complete": true,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.use_dynamic_bsz=true",
+        "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768",
+        "actor_rollout_ref.actor.fsdp_config.use_no_sync_for_gradient_accumulation=true",
+        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu=8192",
+        "actor_rollout_ref.model.enable_gradient_checkpointing=false",
+        "actor_rollout_ref.actor.fsdp_config.entropy_checkpointing=true"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 18.727709562517703,
+          "peak_allocated_gib": 18.3476619720459,
+          "peak_reserved_gib": 20.5546875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 2.1923600398004055,
+          "peak_allocated_gib": 18.453073978424072,
+          "peak_reserved_gib": 20.556640625,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 3.1467943005263805,
+          "peak_allocated_gib": 17.797361373901367,
+          "peak_reserved_gib": 20.556640625,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 11.878642654977739,
+          "peak_allocated_gib": 44.33962297439575,
+          "peak_reserved_gib": 53.40234375,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.15625,
+          "loss": 0.0011468157172203064
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 9.424968062900007,
+          "peak_allocated_gib": 49.43355941772461,
+          "peak_reserved_gib": 56.802734375,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 6.625,
+          "loss": 0.0076900264248251915
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 13.12601871136576,
+          "peak_allocated_gib": 50.09557008743286,
+          "peak_reserved_gib": 57.44921875,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.796875,
+          "loss": 0.08654887229204178
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 2.4008004711940885,
+          "peak_allocated_gib": 18.355955600738525,
+          "peak_reserved_gib": 20.60546875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 2.2037338837981224,
+          "peak_allocated_gib": 18.461117267608643,
+          "peak_reserved_gib": 20.72265625,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 3.1683505913242698,
+          "peak_allocated_gib": 17.805296421051025,
+          "peak_reserved_gib": 20.72265625,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    },
+    {
+      "name": "dynamic16k",
+      "complete": true,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.use_dynamic_bsz=true",
+        "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768",
+        "actor_rollout_ref.actor.fsdp_config.use_no_sync_for_gradient_accumulation=true",
+        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu=16384",
+        "actor_rollout_ref.actor.fsdp_config.reshard_after_forward=false",
+        "actor_rollout_ref.actor.fsdp_config.param_offload=false",
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 10.32608469761908,
+          "peak_allocated_gib": 20.408909797668457,
+          "peak_reserved_gib": 23.0546875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 2.16136662568897,
+          "peak_allocated_gib": 20.51432180404663,
+          "peak_reserved_gib": 23.154296875,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 3.1134759038686752,
+          "peak_allocated_gib": 19.858609199523926,
+          "peak_reserved_gib": 23.154296875,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 9.277337431907654,
+          "peak_allocated_gib": 37.36173677444458,
+          "peak_reserved_gib": 46.4609375,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.15625,
+          "loss": 0.0011468194425106049
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 7.447097680531442,
+          "peak_allocated_gib": 41.81349515914917,
+          "peak_reserved_gib": 50.77734375,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 6.21875,
+          "loss": 0.007717073895037174
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 10.41355040948838,
+          "peak_allocated_gib": 40.61014175415039,
+          "peak_reserved_gib": 50.77734375,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.8125,
+          "loss": 0.08659301698207855
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 2.172728664241731,
+          "peak_allocated_gib": 24.54098081588745,
+          "peak_reserved_gib": 50.77734375,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 2.183049009181559,
+          "peak_allocated_gib": 24.645938873291016,
+          "peak_reserved_gib": 50.77734375,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 3.13283003680408,
+          "peak_allocated_gib": 23.9900164604187,
+          "peak_reserved_gib": 50.77734375,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    },
+    {
+      "name": "dynamic24576",
+      "complete": true,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.use_dynamic_bsz=true",
+        "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768",
+        "actor_rollout_ref.actor.fsdp_config.use_no_sync_for_gradient_accumulation=true",
+        "actor_rollout_ref.actor.fsdp_config.reshard_after_forward=false",
+        "actor_rollout_ref.actor.fsdp_config.param_offload=false",
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
+        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu=24576"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 8.396271738223732,
+          "peak_allocated_gib": 20.408909797668457,
+          "peak_reserved_gib": 23.0546875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 2.1686764741316438,
+          "peak_allocated_gib": 20.51432180404663,
+          "peak_reserved_gib": 23.154296875,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 3.121126351878047,
+          "peak_allocated_gib": 19.858609199523926,
+          "peak_reserved_gib": 23.154296875,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 21.437834084033966,
+          "peak_allocated_gib": 45.41947793960571,
+          "peak_reserved_gib": 54.40625,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.15625,
+          "loss": 0.0011468231678009033
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 7.1570992190390825,
+          "peak_allocated_gib": 49.622639179229736,
+          "peak_reserved_gib": 58.6640625,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 5.5625,
+          "loss": 0.007560286670923233
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 9.922983043827116,
+          "peak_allocated_gib": 50.918901443481445,
+          "peak_reserved_gib": 59.953125,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.71875,
+          "loss": 0.08678052574396133
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 2.1894701765850186,
+          "peak_allocated_gib": 24.54130792617798,
+          "peak_reserved_gib": 59.953125,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 2.1858104169368744,
+          "peak_allocated_gib": 24.646059036254883,
+          "peak_reserved_gib": 59.953125,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 3.1496368627995253,
+          "peak_allocated_gib": 23.9900164604187,
+          "peak_reserved_gib": 59.953125,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    },
+    {
+      "name": "dynamic32768",
+      "complete": true,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.use_dynamic_bsz=true",
+        "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=32768",
+        "actor_rollout_ref.actor.fsdp_config.use_no_sync_for_gradient_accumulation=true",
+        "actor_rollout_ref.actor.fsdp_config.reshard_after_forward=false",
+        "actor_rollout_ref.actor.fsdp_config.param_offload=false",
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
+        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu=32768"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 8.42955781891942,
+          "peak_allocated_gib": 20.408909797668457,
+          "peak_reserved_gib": 23.0546875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 2.1778375981375575,
+          "peak_allocated_gib": 20.51432180404663,
+          "peak_reserved_gib": 23.154296875,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 3.13369323220104,
+          "peak_allocated_gib": 19.858609199523926,
+          "peak_reserved_gib": 23.154296875,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 21.597271589562297,
+          "peak_allocated_gib": 60.38558340072632,
+          "peak_reserved_gib": 68.666015625,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.15625,
+          "loss": 0.0011468268930912018
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 6.984551889821887,
+          "peak_allocated_gib": 64.73291492462158,
+          "peak_reserved_gib": 72.845703125,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 6.25,
+          "loss": 0.007676429580897093
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 22.012158843688667,
+          "peak_allocated_gib": 62.74131679534912,
+          "peak_reserved_gib": 73.841796875,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.78125,
+          "loss": 0.08653421700000763
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 2.1995387990027666,
+          "peak_allocated_gib": 24.54163694381714,
+          "peak_reserved_gib": 73.841796875,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 2.1999736353754997,
+          "peak_allocated_gib": 24.646163940429688,
+          "peak_reserved_gib": 73.841796875,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 3.159326988272369,
+          "peak_allocated_gib": 23.9900164604187,
+          "peak_reserved_gib": 73.841796875,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    },
+    {
+      "name": "dynamic24k_entropy",
+      "complete": true,
+      "overrides_from_ad01474f": [
+        "actor_rollout_ref.actor.use_dynamic_bsz=true",
+        "actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_use_dynamic_bsz=true",
+        "actor_rollout_ref.ref.log_prob_max_token_len_per_gpu=65536",
+        "actor_rollout_ref.actor.fsdp_config.use_no_sync_for_gradient_accumulation=true",
+        "actor_rollout_ref.actor.fsdp_config.reshard_after_forward=false",
+        "actor_rollout_ref.actor.fsdp_config.param_offload=false",
+        "actor_rollout_ref.actor.fsdp_config.optimizer_offload=false",
+        "actor_rollout_ref.actor.ppo_max_token_len_per_gpu=24576",
+        "actor_rollout_ref.actor.fsdp_config.entropy_checkpointing=false"
+      ],
+      "reserved_rollout_gib": 3.0,
+      "results": [
+        {
+          "phase": "reference",
+          "batch": "warmup",
+          "seconds": 18.555415101349354,
+          "peak_allocated_gib": 34.74429941177368,
+          "peak_reserved_gib": 38.150390625,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference",
+          "batch": "representative",
+          "seconds": 1.8656194685027003,
+          "peak_allocated_gib": 34.919676303863525,
+          "peak_reserved_gib": 38.328125,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference",
+          "batch": "longest",
+          "seconds": 2.8137370962649584,
+          "peak_allocated_gib": 26.281939029693604,
+          "peak_reserved_gib": 38.328125,
+          "global_rows": 128,
+          "global_tokens": 173037
+        },
+        {
+          "phase": "actor",
+          "batch": "warmup",
+          "seconds": 8.053341717459261,
+          "peak_allocated_gib": 45.41983127593994,
+          "peak_reserved_gib": 54.484375,
+          "global_rows": 128,
+          "global_tokens": 122522,
+          "grad_norm": 4.15625,
+          "loss": 0.0011468231678009033
+        },
+        {
+          "phase": "actor",
+          "batch": "representative",
+          "seconds": 7.079767012037337,
+          "peak_allocated_gib": 49.62256145477295,
+          "peak_reserved_gib": 58.68359375,
+          "global_rows": 128,
+          "global_tokens": 123084,
+          "grad_norm": 6.3125,
+          "loss": 0.0077468352392315865
+        },
+        {
+          "phase": "actor",
+          "batch": "longest",
+          "seconds": 9.876660875976086,
+          "peak_allocated_gib": 50.91882038116455,
+          "peak_reserved_gib": 59.97265625,
+          "global_rows": 128,
+          "global_tokens": 173037,
+          "grad_norm": 2.890625,
+          "loss": 0.08667530864477158
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "warmup",
+          "seconds": 1.878752470947802,
+          "peak_allocated_gib": 38.8766975402832,
+          "peak_reserved_gib": 59.97265625,
+          "global_rows": 128,
+          "global_tokens": 122522
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "representative",
+          "seconds": 1.8889731876552105,
+          "peak_allocated_gib": 39.051743507385254,
+          "peak_reserved_gib": 59.97265625,
+          "global_rows": 128,
+          "global_tokens": 123084
+        },
+        {
+          "phase": "reference_after_update",
+          "batch": "longest",
+          "seconds": 2.8382389852777123,
+          "peak_allocated_gib": 30.41334629058838,
+          "peak_reserved_gib": 59.97265625,
+          "global_rows": 128,
+          "global_tokens": 173037
+        }
+      ]
+    }
+  ],
+  "selected_trial": "dynamic24k_entropy",
+  "notes": [
+    "All measurements use native full-parameter actor/ref workers and the same captured real step tensors, 128 rows per global mini-batch.",
+    "Warmup is retained separately; longest-batch first encounters may include compilation.",
+    "Baseline used the default CUDA allocator; subsequent trials enable expandable segments to match native post-weight-sync training. Compare peak allocated memory, not allocator reservations.",
+    "Microbenchmark speed is not end-to-end training speed. End-to-end validation is recorded separately."
+  ],
+  "validation": {
+    "cpu_tests": {
+      "passed": 249,
+      "failed": 0,
+      "duration_seconds": 59.79
+    },
+    "final_run": {
+      "pid": 3205597,
+      "swanlab_url": "https://swanlab.cn/@Godknows/ALFWorldRL/runs/qojf5pzo",
+      "experiment_name": "qwen3.5_2B_full_sft_grpo_tuned",
+      "log": "examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/full_sft/v1/2gpu/seed0/alfworld_v1_seed0_20260926_124934.log",
+      "status": "first_global_step_completed",
+      "first_step_metrics": {
+        "step": 1.0,
+        "global_seqlen/min": 2559648.0,
+        "global_seqlen/max": 2934874.0,
+        "global_seqlen/minmax_diff": 375226.0,
+        "global_seqlen/balanced_min": 2747245.0,
+        "global_seqlen/balanced_max": 2747277.0,
+        "global_seqlen/mean": 2747261.0,
+        "actor/pg_clipfrac": 0.003913054392208998,
+        "actor/ppo_kl": 0.0009982302672942845,
+        "actor/pg_clipfrac_lower": 2.150152228633258e-05,
+        "actor/pg_loss": 0.06595168804021656,
+        "actor/entropy_loss": 0.04853930359003039,
+        "actor/kl_loss": 0.0013232546164971962,
+        "actor/kl_coef": 0.0010000000000000002,
+        "actor/loss": 0.06571031574692045,
+        "actor/grad_norm": 4.357302295918367,
+        "actor/perf/max_memory_allocated_gb": 51.82555055618286,
+        "actor/perf/max_memory_reserved_gb": 60.966796875,
+        "actor/perf/cpu_memory_used_gb": 102.83259053132971,
+        "actor/lr": 1e-06,
+        "perf/mfu/actor": 0.3798779535655292,
+        "training/global_step": 1.0,
+        "training/epoch": 0.0,
+        "critic/score/mean": -0.21700473129749298,
+        "critic/score/max": 10.0,
+        "critic/score/min": -2.0,
+        "critic/rewards/mean": -0.21700473129749298,
+        "critic/rewards/max": 10.0,
+        "critic/rewards/min": -2.0,
+        "critic/advantages/mean": -0.07552993297576904,
+        "critic/advantages/max": 2.4670965671539307,
+        "critic/advantages/min": -1.9742624759674072,
+        "critic/returns/mean": -0.07552993297576904,
+        "critic/returns/max": 2.4670965671539307,
+        "critic/returns/min": -1.9742624759674072,
+        "response_length/mean": 43.6091194152832,
+        "response_length/max": 56.0,
+        "response_length/min": 36.0,
+        "response_length/clip_ratio": 0.0006490345695056021,
+        "response_length_non_aborted/mean": 43.6091194152832,
+        "response_length_non_aborted/max": 56.0,
+        "response_length_non_aborted/min": 36.0,
+        "response_length_non_aborted/clip_ratio": 0.0006490345695056021,
+        "response/aborted_ratio": 0.0,
+        "prompt_length/mean": 845.6607055664062,
+        "prompt_length/max": 1509.0,
+        "prompt_length/min": 633.0,
+        "prompt_length/clip_ratio": 0.00016225864237640053,
+        "num_turns/min": 1.0,
+        "num_turns/max": 1.0,
+        "num_turns/mean": 1.0,
+        "timing_s/gen": 196.77495042793453,
+        "timing_s/old_log_prob": 1.073647796176374,
+        "timing_s/ref": 102.12270579300821,
+        "timing_s/adv": 2.449036594480276,
+        "timing_s/update_actor": 353.0490857884288,
+        "timing_s/update_weights": 1.4013970457017422,
+        "timing_s/step": 674.6067383456975,
+        "timing_per_token_ms/gen": 0.7318536345470503,
+        "timing_per_token_ms/ref": 0.018586276621152524,
+        "timing_per_token_ms/update_actor": 0.06425474059225329,
+        "timing_per_token_ms/adv": 0.00044572332124255326,
+        "perf/total_num_tokens": 5494522.0,
+        "perf/time_per_step": 674.6067383456975,
+        "perf/throughput": 4072.3889102219214,
+        "training/num_turns/mean": 1.0,
+        "training/num_turns/max": 1.0,
+        "training/num_turns/min": 1.0,
+        "training/off_policy/trajectory_spans/mean": 1.0,
+        "training/off_policy/trajectory_spans/max": 1.0,
+        "training/off_policy/trajectory_spans/min": 1.0,
+        "training/off_policy/trajectory_staleness/mean": 0.0,
+        "training/off_policy/trajectory_staleness/max": 0.0,
+        "training/off_policy/trajectory_staleness/min": 0.0,
+        "training/off_policy/trajectory_staleness_worst/mean": 0.0,
+        "training/off_policy/trajectory_staleness_worst/max": 0.0,
+        "training/off_policy/trajectory_staleness_worst/min": 0.0,
+        "alfworld_termination/success_count": 9.0,
+        "alfworld_termination/environment_timeout_count": 13.0,
+        "alfworld_termination/decision_limit_count": 106.0,
+        "alfworld_termination/no_tool_call_count": 0.0,
+        "alfworld_termination/env_failure_count": 0.0,
+        "alfworld_termination/total_trajectories": 128.0,
+        "alfworld_penalty/no_action_count": 3.0,
+        "alfworld_penalty/invalid_action_count": 350.0,
+        "alfworld_penalty/repeated_action_count": 3114.0,
+        "alfworld_penalty/no_action/thinking_unclosed_count": 0.0,
+        "alfworld_penalty/no_action/tool_call_format_count": 3.0,
+        "alfworld_penalty/no_action/overlong_thinking_count": 0.0,
+        "alfworld_penalty/no_action/other_count": 0.0,
+        "alfworld/valid_action_count/min": 8.0,
+        "alfworld/valid_action_count/max": 50.0,
+        "alfworld/valid_action_count/mean": 45.390625
+      },
+      "valid_step_rows": 6163,
+      "padded_step_rows": 6272,
+      "trajectories": 128,
+      "nvml_peak_used_gib": {
+        "0": 65.290771484375,
+        "1": 64.0634765625
+      },
+      "end_to_end_speedup": 3.233733792174486,
+      "actor_update_speedup": 4.022468877783122,
+      "reference_speedup": 5.268669256710999,
+      "next_rollout_weights_and_kv_cache_restored": true,
+      "next_rollout_started": "2026-09-26 13:03:53 Asia/Shanghai (16 running, 0 failure)"
+    }
+  },
+  "cleanup": {
+    "verified": true,
+    "deleted_root": "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/throughput_tuning_20260926",
+    "deleted_file_count": 25,
+    "deleted_bytes": 19479282,
+    "benchmark_script_removed": true,
+    "removed_bytecode": [],
+    "benchmark_workers_remaining": 0,
+    "debug_cloud_runs_created": 0,
+    "retained": [
+      "formal tuned training outputs and active process",
+      "pre-tuning baseline experiment records",
+      "datasets and SFT adapter/merged model",
+      "parameter and metric reports"
+    ]
+  }
+}

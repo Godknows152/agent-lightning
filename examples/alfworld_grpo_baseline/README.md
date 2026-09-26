@@ -451,9 +451,13 @@ bash examples/alfworld_grpo_baseline/scripts/alfworld/qwen35_2b_v1.sh
 ```
 
 默认后台使用原生 veRL V1 trajectory GRPO，保持 16 个任务 × 8 条轨迹、学习率、KL
-和熵系数；开启梯度/熵检查点，以每 GPU 2 行 micro-batch 累积全参数梯度，并在阶段间
-卸载模型/优化器。新输出位于 `outputs/qwen3.5_2B/full_sft_grpo`，SwanLab 实验为
-`qwen3.5_2B_full_sft_grpo`，避免自动读取旧 LoRA checkpoint。GiGPO 后端输出也增加
+和熵系数。2 × A800 80GB 上使用动态 token 分批：Actor 每卡 24576 token，参考模型
+每卡 65536 token；全局 PPO mini-batch 仍为 128 条交互步骤。保留模型梯度检查点，关闭
+熵重计算及 Actor 参数/优化器卸载，使用 FSDP `reshard_after_forward=false` 和梯度累积
+末尾同步。静态 micro-batch 字段仅作为关闭动态分批时的回退值。
+调优比较见 [吞吐测试记录](docs/THROUGHPUT_TUNING_20260926.md)。
+新输出位于 `outputs/qwen3.5_2B/full_sft_grpo_tuned`，SwanLab 实验为
+`qwen3.5_2B_full_sft_grpo_tuned`，避免读取调优前或旧 LoRA checkpoint。GiGPO 后端输出也增加
 `full_sft` 子目录，两种后端仍各自独立。
 
 9B 原 SFT checkpoint-300 当前不在磁盘，使用前需恢复并导出，或提供完整 SFT 模型；

@@ -9,7 +9,7 @@ defaults:
   - /model_profiles@_global_: qwen35_2b
   - _self_
 
-# Match the 2B profile's sampling scale and selected memory-saving settings.
+# Keep the sampling scale; tune execution for two A800 80GB GPUs.
 variables:
   NUM_ROLLOUTS: 8
   PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v1
@@ -30,11 +30,15 @@ actor_rollout_ref:
     calculate_log_probs: true
     # Keep rollout and reference inference micro-batches independently sized.
     log_prob_micro_batch_size_per_gpu: 16
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 24576
     agent:
       num_workers: 8
   ref:
     # A separate frozen reference loads the same full SFT checkpoint as the actor.
     log_prob_micro_batch_size_per_gpu: 4
+    log_prob_use_dynamic_bsz: true
+    log_prob_max_token_len_per_gpu: 65536
 
   actor:
     calculate_entropy: true
@@ -44,16 +48,21 @@ actor_rollout_ref:
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     ppo_mini_batch_size: 16
-    # Keep the global PPO mini-batch at 128 step rows while accumulating gradients.
+    # Keep the global PPO mini-batch at 128 step rows. Dynamic micro-batches
+    # respect the packed token budget instead of fixing the number of rows.
     ppo_micro_batch_size_per_gpu: 2
+    use_dynamic_bsz: true
+    ppo_max_token_len_per_gpu: 24576
     fsdp_config:
-      # Offload full model/optimizer state between rollout and training phases.
-      param_offload: true
-      optimizer_offload: true
-      entropy_checkpointing: true
+      # Retain state on GPU and synchronize accumulated gradients once.
+      param_offload: false
+      optimizer_offload: false
+      reshard_after_forward: false
+      use_no_sync_for_gradient_accumulation: true
+      entropy_checkpointing: false
   model:
     # The profile points to a standalone model with the SFT adapter merged.
-    # Full-parameter backward requires activation checkpointing.
+    # Keep activation checkpointing: disabling it at larger batches caused OOM.
     enable_gradient_checkpointing: true
     # Keep CPU activation transfers disabled.
     enable_activation_offload: false
@@ -62,9 +71,9 @@ actor_rollout_ref:
     use_fused_kernels: false
 
 trainer:
-  experiment_name: qwen3.5_2B_full_sft_grpo
+  experiment_name: qwen3.5_2B_full_sft_grpo_tuned
   resume_mode: auto
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/full_sft_grpo
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/full_sft_grpo_tuned
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.
