@@ -1,6 +1,6 @@
 # Agent Lightning - Project Documentation
 
-**Last Updated**: 2026-07-29  
+**Last Updated**: 2026-09-26
 **Project Status**: Active development on image restoration multi-agent reinforcement learning
 
 ---
@@ -406,6 +406,17 @@ tail -f examples/image_restoration_multi_agent/old_verl_grpo/log/fog/v3/fog_v3_*
 ---
 
 ## Important Notes
+
+### ALFWorld Full-Parameter RL (2026-09-26)
+
+- All training profiles in `examples/alfworld_grpo_baseline/config/` disable LoRA.
+- Qwen3.5-2B uses the merged full model from ALFWorld SFT `checkpoint-100`.
+  `scripts/export_sft_model.py` exports the model and records its source adapter hash.
+- `scripts/alfworld/qwen35_2b_v1.sh` runs native veRL V1 trajectory GRPO in the background;
+  Actor and the frozen KL reference both initialize from the same full SFT checkpoint.
+- Full-parameter outputs use separate `full_sft`/`full_sft_grpo` directories; do not resume old LoRA checkpoints.
+- The former 9B SFT checkpoint is absent locally. Restore it before export or set `ALFWORLD_SFT_MODEL`.
+  The legacy Qwen2.5 profile retains its upstream Instruct model unless a local SFT model is supplied.
 
 ### Recent Changes (2026-07-29)
 

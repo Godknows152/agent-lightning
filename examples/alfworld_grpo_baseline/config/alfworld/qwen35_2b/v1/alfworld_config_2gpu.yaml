@@ -28,51 +28,33 @@ actor_rollout_ref:
     # recomputation can be bypassed for this experiment.
     enforce_eager: false
     calculate_log_probs: true
-    # LoRA reference scoring reuses the actor engine's inference micro-batch.
+    # Keep rollout and reference inference micro-batches independently sized.
     log_prob_micro_batch_size_per_gpu: 16
     agent:
       num_workers: 8
   ref:
-    # Native veRL LoRA reference disables adapters and uses the frozen base model.
+    # A separate frozen reference loads the same full SFT checkpoint as the actor.
     log_prob_micro_batch_size_per_gpu: 4
 
   actor:
     calculate_entropy: true
-    # Enable KL against the frozen base policy. With LoRA, VERL computes
-    # reference log-probs by disabling adapters on the shared actor engine.
+    # Regularize against the frozen SFT policy.
     use_kl_loss: true
     entropy_coeff: 0.005
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     ppo_mini_batch_size: 16
-    # Without activation checkpointing, 16 rows OOM in entropy backward.
-    # Accumulate eight micro-batches per GPU; the global mini-batch stays 128.
-    ppo_micro_batch_size_per_gpu: 8
+    # Preserve the global 128-trajectory mini-batch with smaller backward batches.
+    ppo_micro_batch_size_per_gpu: 2
     fsdp_config:
-      # LoRA leaves only adapter parameters trainable, so CPU offload is no
-      # longer needed for the optimizer and costs a host-device transfer.
-      param_offload: false
-      optimizer_offload: false
-      entropy_checkpointing: false
+      # Offload full model/optimizer state between rollout and training phases.
+      param_offload: true
+      optimizer_offload: true
+      entropy_checkpointing: true
   model:
-    # Initialize RL from step 100 of the GiGPO expert SFT run stopped on user request.
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_gigpo_expert_v1_20260921_105449_688178/adapter/checkpoint-100
-    # Train adapters instead of the full 2B parameter set.
-    lora_rank: 16
-    lora_alpha: 32
-    # Keep PEFT's adapter set within SGLang's LoRA memory-pool support.
-    # ``all-linear`` also selects Qwen3.5 Mamba projections, which SGLang's
-    # current dynamic LoRA path cannot load from tensors.
-    target_modules:
-      - q_proj
-      - k_proj
-      - v_proj
-      - o_proj
-      - gate_proj
-      - up_proj
-      - down_proj
-    # Use available 2B memory to avoid activation recomputation.
-    enable_gradient_checkpointing: false
+    # The profile points to a standalone model with the SFT adapter merged.
+    # Full-parameter backward requires activation checkpointing.
+    enable_gradient_checkpointing: true
     # Keep CPU activation transfers disabled.
     enable_activation_offload: false
     # The installed Liger lacks the scaled cross-entropy op imported by veRL's
@@ -80,9 +62,9 @@ actor_rollout_ref:
     use_fused_kernels: false
 
 trainer:
-  experiment_name: qwen3.5_2B_0920
+  experiment_name: qwen3.5_2B_full_sft_grpo
   resume_mode: auto
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/full_sft_grpo
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.

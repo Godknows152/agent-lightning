@@ -12,11 +12,11 @@ defaults:
 trainer:
   project_name: ALFWorldRL
   experiment_name: alfworld_v1_seed0
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen25_1_5b/full_sft/v1/2gpu/seed0
 
 ray_kwargs:
   ray_init:
     runtime_env:
       env_vars:
-        SWANLAB_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0/swanlab
-        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/v1/2gpu/seed0
+        SWANLAB_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen25_1_5b/full_sft/v1/2gpu/seed0/swanlab
+        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/qwen25_1_5b/full_sft/v1/2gpu/seed0

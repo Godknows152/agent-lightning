@@ -25,8 +25,7 @@ actor_rollout_ref:
       num_workers: 4
   actor:
     calculate_entropy: true
-    # Enable KL against the frozen base policy. With LoRA, VERL computes
-    # reference log-probs by disabling adapters on the shared actor engine.
+    # Regularize against the frozen SFT policy.
     use_kl_loss: true
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
@@ -34,29 +33,13 @@ actor_rollout_ref:
     # Keep each backward micro-batch small for the standard FSDP training path.
     ppo_micro_batch_size_per_gpu: 2
     fsdp_config:
-      # LoRA leaves only adapter parameters trainable, so CPU offload is no
-      # longer needed for the optimizer and costs a host-device transfer.
-      param_offload: false
-      optimizer_offload: false
-      entropy_checkpointing: false
+      # Offload full model/optimizer state between rollout and training phases.
+      param_offload: true
+      optimizer_offload: true
+      entropy_checkpointing: true
   model:
-    # Initialize RL from the completed thinking-enabled XML-format SFT adapter.
-    lora_adapter_path: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_9b_xml_thinking_teacher_v1_20260912_144045_930722/adapter/checkpoint-300
-    # Train adapters instead of the full 9B parameter set.
-    lora_rank: 16
-    lora_alpha: 32
-    # Keep PEFT's adapter set within SGLang's LoRA memory-pool support.
-    # ``all-linear`` also selects Qwen3.5 Mamba projections, which SGLang's
-    # current dynamic LoRA path cannot load from tensors.
-    target_modules:
-      - q_proj
-      - k_proj
-      - v_proj
-      - o_proj
-      - gate_proj
-      - up_proj
-      - down_proj
-    # Retain checkpointing after actor OOM.
+    # The profile points to a standalone model with the SFT adapter merged.
+    # Full-parameter backward requires activation checkpointing.
     enable_gradient_checkpointing: true
     # Keep CPU activation transfers disabled.
     enable_activation_offload: false
@@ -67,7 +50,7 @@ actor_rollout_ref:
 
 trainer:
   resume_mode: auto
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_9b/full_sft/v1/2gpu/seed0
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.

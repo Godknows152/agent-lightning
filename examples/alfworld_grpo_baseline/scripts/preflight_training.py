@@ -43,13 +43,13 @@ def main() -> int:
     prefix = f"alfworld_{args.model_profile}{backend_suffix}_v1"
     experiment_name = f"{prefix}_seed{args.seed}" if args.kind == "full" else f"{prefix}_{args.kind}_seed{args.seed}"
     if args.training_backend == "gigpo_grpo" and args.model_profile == "qwen35_2b":
-        experiment_name = "qwen3.5_2B_GiGPO后端"
+        experiment_name = "qwen3.5_2B_GiGPO后端_full_sft"
         if args.kind != "full":
             experiment_name += f"_{args.kind}_seed{args.seed}"
-    layout = Path(args.model_profile) / "gigpo_grpo" if backend_suffix else Path()
+    layout = Path(args.model_profile) / "gigpo_grpo" / "full_sft" if backend_suffix else Path(args.model_profile) / "full_sft"
     output = (args.output_dir or ROOT / "outputs" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
     if args.training_backend == "gigpo_grpo" and args.model_profile == "qwen35_2b" and args.output_dir is None:
-        output = ROOT / "log" / "alfworld" / "qwen35_2b" / "gigpo_grpo"
+        output = ROOT / "log" / "alfworld" / "qwen35_2b" / "gigpo_grpo" / "full_sft"
         if args.kind != "full":
             output /= directory_name
     log_dir = (args.log_dir or ROOT / "log" / "alfworld" / layout / "v1" / "2gpu" / directory_name).resolve()
@@ -82,6 +82,8 @@ def main() -> int:
     with initialize_config_dir(config_dir=str(args.config_dir.resolve()), version_base=None):
         cfg = compose(config_name=args.config_name, overrides=overrides)
     validate_native_step_config(cfg)
+    from alfworld_baseline.full_finetuning import validate_full_finetuning
+    validate_full_finetuning(cfg)
     if args.resume_config:
         from alfworld_baseline.resume import validate_native_resume
 

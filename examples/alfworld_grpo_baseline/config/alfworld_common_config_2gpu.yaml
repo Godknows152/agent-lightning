@@ -75,7 +75,13 @@ actor_rollout_ref:
     fsdp_config:
       param_offload: true
   model:
-    path: ${variables.BASE_MODEL}
+    path: ${variables.SFT_MODEL}
+    # All ALFWorld RL backends update full parameters from a standalone SFT model.
+    lora_rank: 0
+    lora_adapter_path: null
+    lora:
+      rank: 0
+      adapter_path: null
     trust_remote_code: true
     use_remove_padding: true
     enable_gradient_checkpointing: true
@@ -89,7 +95,7 @@ trainer:
   test_freq: 10
   val_before_train: false
   resume_mode: auto
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/${variables.MODEL_PROFILE}/full_sft/v1/2gpu/seed${variables.SEED}
   rollout_data_dir: ${trainer.default_local_dir}/rollouts
   # The full-row dump hook also supplies complete trajectories to val/generations.
   validation_data_dir: ${trainer.default_local_dir}/validation
@@ -106,6 +112,7 @@ trainer:
 
 ray_kwargs:
   ray_init:
+    _node_ip_address: ${oc.env:ALFWORLD_RAY_NODE_IP,10.246.1.30}
     runtime_env:
       env_vars:
         # SGLang JIT kernels require C++20. Ubuntu 20.04's default GCC 9
@@ -115,5 +122,5 @@ ray_kwargs:
         CUDAHOSTCXX: ${oc.env:ALFWORLD_CXX,/usr/bin/g++-10}
         NVCC_CCBIN: ${oc.env:ALFWORLD_CXX,/usr/bin/g++-10}
         SWANLAB_MODE: cloud
-        SWANLAB_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/v1/2gpu/seed0/swanlab
-        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/v1/2gpu/seed0
+        SWANLAB_LOG_DIR: ${trainer.default_local_dir}/swanlab
+        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/${variables.MODEL_PROFILE}/full_sft/v1/2gpu/seed${variables.SEED}

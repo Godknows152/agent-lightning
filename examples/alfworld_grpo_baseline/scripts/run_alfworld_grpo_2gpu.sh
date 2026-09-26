@@ -21,18 +21,15 @@ esac
 
 case "${MODEL_PROFILE}" in
   qwen25_1_5b)
-    MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen2.5-1.5B-Instruct"
     DATA_DIR="${ROOT}/data/qwen25_1_5b"
     CONFIG_PATH="${ROOT}/config/alfworld/qwen25_1_5b/v1"
     ;;
   qwen35_9b)
-    MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-9B"
     # Share the newer v4 dataset; model-specific output directories remain isolated.
     DATA_DIR="${ROOT}/data/qwen35_2b"
     CONFIG_PATH="${ROOT}/config/alfworld/qwen35_9b/v1"
     ;;
   qwen35_2b)
-    MODEL_PATH="/home/LXJ/Python_Projects/Models/Qwen3.5-2B"
     # Share the newer v4 dataset; model-specific output directories remain isolated.
     DATA_DIR="${ROOT}/data/qwen35_2b"
     CONFIG_PATH="${ROOT}/config/alfworld/qwen35_2b/v1"
@@ -44,6 +41,14 @@ case "${MODEL_PROFILE}" in
     ;;
 esac
 
+# Resolve the same full SFT model used by Hydra; no base/adapter fallback.
+MODEL_PATH="$("${PYTHON_BIN}" - "${ROOT}/config/model_profiles/${MODEL_PROFILE}.yaml" <<'PYMODEL'
+import sys
+from omegaconf import OmegaConf
+print(OmegaConf.load(sys.argv[1]).variables.SFT_MODEL)
+PYMODEL
+)"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -51,6 +56,7 @@ Usage:
 
 Environment:
   ALFWORLD_MODEL_PROFILE=qwen25_1_5b|qwen35_2b|qwen35_9b  Select an isolated model profile
+  ALFWORLD_SFT_MODEL=/path/to/full/model  Override the standalone SFT checkpoint
   ALFWORLD_TRAINING_BACKEND=trajectory|gigpo_grpo  Episode GRPO (default) or local-cost step GRPO
   SEED=0|1|2                 Output/checkpoint seed directory (default: 0)
   ALFWORLD_FOREGROUND=1      Keep launcher attached; default is background
@@ -81,7 +87,7 @@ if [[ -n "${ALFWORLD_RESUME_CONFIG:-}" && ( "${RUN_KIND}" == "full" || "${RUN_KI
   resume_preflight_args+=(--resume-config "${ALFWORLD_RESUME_CONFIG}")
 fi
 
-OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/v1/2gpu/seed${SEED}}"
+OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/full_sft/v1/2gpu/seed${SEED}}"
 # Use the 2B experiment's configured output for full runs and preflight.
 # Explicit environment overrides and smoke/pilot directories retain priority.
 if [[ "${MODEL_PROFILE}" == "qwen35_2b" && ( "${RUN_KIND}" == "full" || "${RUN_KIND}" == "preflight" ) && -z "${ALFWORLD_OUTPUT_DIR:-}" ]]; then
@@ -94,20 +100,20 @@ print(config.trainer.default_local_dir)
 PYOUTPUT
 )"
 fi
-LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/v1/2gpu/seed${SEED}}"
+LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/full_sft/v1/2gpu/seed${SEED}}"
 SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
 SWANLAB_MODE="${ALFWORLD_SWANLAB_MODE:-cloud}"
 
 if [[ "${RUN_KIND}" == "smoke" ]]; then
   TOTAL_STEPS=1
-  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/v1/2gpu/smoke_seed${SEED}}"
-  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/v1/2gpu/smoke_seed${SEED}}"
+  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/full_sft/v1/2gpu/smoke_seed${SEED}}"
+  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/full_sft/v1/2gpu/smoke_seed${SEED}}"
   SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
   SWANLAB_MODE="${ALFWORLD_SWANLAB_MODE:-offline}"
 elif [[ "${RUN_KIND}" == "pilot" ]]; then
   TOTAL_STEPS="${ALFWORLD_TOTAL_STEPS:-5}"
-  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/v1/2gpu/pilot_seed${SEED}}"
-  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/v1/2gpu/pilot_seed${SEED}}"
+  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/full_sft/v1/2gpu/pilot_seed${SEED}}"
+  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/full_sft/v1/2gpu/pilot_seed${SEED}}"
   SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
   SWANLAB_MODE="${ALFWORLD_SWANLAB_MODE:-offline}"
 fi
@@ -115,13 +121,13 @@ fi
 if [[ "${TRAINING_BACKEND}" == "gigpo_grpo" ]]; then
   backend_run_dir="seed${SEED}"
   [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_run_dir="${RUN_KIND}_seed${SEED}"
-  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/gigpo_grpo/v1/2gpu/${backend_run_dir}}"
+  OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${ROOT}/outputs/alfworld/${MODEL_PROFILE}/gigpo_grpo/full_sft/v1/2gpu/${backend_run_dir}}"
   if [[ "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
-    backend_output="${ROOT}/log/alfworld/qwen35_2b/gigpo_grpo"
+    backend_output="${ROOT}/log/alfworld/qwen35_2b/gigpo_grpo/full_sft"
     [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_output="${backend_output}/${backend_run_dir}"
     OUTPUT_DIR="${ALFWORLD_OUTPUT_DIR:-${backend_output}}"
   fi
-  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/gigpo_grpo/v1/2gpu/${backend_run_dir}}"
+  LOG_DIR="${ALFWORLD_LOG_DIR:-${ROOT}/log/alfworld/${MODEL_PROFILE}/gigpo_grpo/full_sft/v1/2gpu/${backend_run_dir}}"
   SWANLAB_LOG_DIR="${ALFWORLD_SWANLAB_LOG_DIR:-${OUTPUT_DIR}/swanlab}"
 fi
 
@@ -132,7 +138,7 @@ if [[ "${RUN_KIND}" != "preflight" && "${FOREGROUND}" != "1" ]]; then
   child_args=()
   [[ "${RUN_KIND}" == "smoke" ]] && child_args+=(--smoke)
   [[ "${RUN_KIND}" == "pilot" ]] && child_args+=(--pilot)
-  nohup env ALFWORLD_FOREGROUND=1 bash "${BASH_SOURCE[0]}" \
+  nohup setsid env ALFWORLD_FOREGROUND=1 bash "${BASH_SOURCE[0]}" \
     "${child_args[@]}" "$@" >"${main_log}" 2>&1 </dev/null &
   echo "Started ALFWorld v1 ${RUN_KIND} in background (PID $!)."
   echo "Log: ${main_log}"
@@ -226,7 +232,7 @@ if [[ "${TRAINING_BACKEND:-trajectory}" == "gigpo_grpo" ]]; then
   [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && backend_name_suffix="${RUN_KIND}_seed${SEED}"
   EXPERIMENT_NAME="alfworld_${MODEL_PROFILE}_gigpo_grpo_v1_${backend_name_suffix}"
   if [[ "${MODEL_PROFILE}" == "qwen35_2b" ]]; then
-    EXPERIMENT_NAME="qwen3.5_2B_GiGPO后端"
+    EXPERIMENT_NAME="qwen3.5_2B_GiGPO后端_full_sft"
     [[ "${RUN_KIND}" == "smoke" || "${RUN_KIND}" == "pilot" ]] && EXPERIMENT_NAME="${EXPERIMENT_NAME}_${backend_name_suffix}"
   fi
 fi

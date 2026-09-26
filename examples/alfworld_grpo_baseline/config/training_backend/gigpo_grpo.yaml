@@ -3,13 +3,13 @@
 variables:
   TRAINING_BACKEND: gigpo_grpo
   GIGPO_EXPERIMENT_NAMES:
-    qwen35_2b: qwen3.5_2B_GiGPO后端
+    qwen35_2b: qwen3.5_2B_GiGPO后端_full_sft
     qwen35_9b: alfworld_qwen35_9b_gigpo_grpo_v1_seed${variables.SEED}
     qwen25_1_5b: alfworld_qwen25_1_5b_gigpo_grpo_v1_seed${variables.SEED}
   GIGPO_OUTPUT_DIRS:
-    qwen35_2b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/gigpo_grpo
-    qwen35_9b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_9b/gigpo_grpo/v1/2gpu/seed${variables.SEED}
-    qwen25_1_5b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen25_1_5b/gigpo_grpo/v1/2gpu/seed${variables.SEED}
+    qwen35_2b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/gigpo_grpo/full_sft
+    qwen35_9b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen35_9b/gigpo_grpo/full_sft/v1/2gpu/seed${variables.SEED}
+    qwen25_1_5b: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/alfworld/qwen25_1_5b/gigpo_grpo/full_sft/v1/2gpu/seed${variables.SEED}
 
 algorithm:
   adv_estimator: alfworld_step_grpo
@@ -37,4 +37,4 @@ ray_kwargs:
     runtime_env:
       env_vars:
         SWANLAB_LOG_DIR: ${trainer.default_local_dir}/swanlab
-        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/${variables.MODEL_PROFILE}/gigpo_grpo/v1/2gpu/seed${variables.SEED}
+        VERL_LOG_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/${variables.MODEL_PROFILE}/gigpo_grpo/full_sft/v1/2gpu/seed${variables.SEED}

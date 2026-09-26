@@ -101,7 +101,7 @@ def test_initial_schema_and_refresh_are_per_trajectory():
     asyncio.run(run())
 
 
-def test_qwen35_9b_lora_targets_are_supported_by_sglang_dynamic_loading():
+def test_qwen35_9b_uses_full_sft_model():
     from pathlib import Path
 
     from hydra import compose, initialize_config_dir
@@ -110,15 +110,10 @@ def test_qwen35_9b_lora_targets_are_supported_by_sglang_dynamic_loading():
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         config = compose(config_name="alfworld_config_2gpu")
 
-    assert config.actor_rollout_ref.model.target_modules == [
-        "q_proj",
-        "k_proj",
-        "v_proj",
-        "o_proj",
-        "gate_proj",
-        "up_proj",
-        "down_proj",
-    ]
+    assert config.actor_rollout_ref.model.lora_rank == 0
+    assert config.actor_rollout_ref.model.lora_adapter_path is None
+    assert config.actor_rollout_ref.model.lora.rank == 0
+    assert config.actor_rollout_ref.model.path == config.variables.SFT_MODEL
     assert "skip_load_balancer_for_single_server" not in config.actor_rollout_ref.rollout.agent
     assert "normalize_non_tensor_batch_keys" not in config.actor_rollout_ref.rollout.agent
     assert config.actor_rollout_ref.model.enable_activation_offload is False

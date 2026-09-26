@@ -2,6 +2,9 @@
 variables:
   MODEL_PROFILE: qwen35_9b
   BASE_MODEL: /home/LXJ/Python_Projects/Models/Qwen3.5-9B
+  SFT_ADAPTER: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_9b_xml_thinking_teacher_v1_20260912_144045_930722/adapter/checkpoint-300
+  # Restore the original SFT checkpoint before export, or set ALFWORLD_SFT_MODEL.
+  SFT_MODEL: ${oc.env:ALFWORLD_SFT_MODEL,/home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_9b_xml_thinking_teacher_v1_20260912_144045_930722/merged-checkpoint-300}
   # Both Qwen3.5 profiles share the newer v4 dataset and identical task order.
   DATA_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/data/qwen35_2b
   PROMPT_PROFILE: gigpo

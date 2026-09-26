@@ -278,8 +278,8 @@ GRPO 优势、广播至步骤，再交给原生 FSDP。已移除定制 turn-cont
 
 已完成后端隔离、入口、单步预算、奖励/指标去重、异常资源释放、checkpoint 完整性检查与
 SwanLab 原 run ID 续接。损失使用原生 `token-mean`，长轨迹保留更多训练 token。
-Qwen3.5-2B 的 SFT adapter 仍初始化 Actor，但 KL 参考遵循原生 LoRA 语义，使用关闭
-adapter 后的基础模型。详情、CPU 复现命令和未运行的 GPU 验证范围见
+Qwen3.5-2B 使用合并后的 SFT 完整模型初始化 Actor，并做全参数更新；KL 参考是
+独立冻结的同一 SFT 模型。所有 RL profile 和两种后端均关闭 LoRA。详情、CPU 复现命令和未运行的 GPU 验证范围见
 [迁移状态](docs/NATIVE_VERL_MIGRATION.md)。
 
 
@@ -430,3 +430,32 @@ Agent 尊重配置，不再强制开启 thinking；初始及后续状态提示�
 SwanLab。`invalid_action_count` 和 `repeated_action_count` 仍属于
 `alfworld_penalty`，因为它们不是终止原因。环境工具层使用 `won` 区分成功与 TextWorld
 因步数上限返回的 `done=True`；后者记录为 `environment_timeout`，避免把超时误记成成功。
+
+
+### 全参数 RL（2026-09-26）
+
+所有 ALFWorld RL 配置统一使用 `lora_rank: 0`、`lora_adapter_path: null`，新版
+`model.lora` 字段也关闭 adapter。模型路径由 profile 的 `SFT_MODEL` 决定，可用
+`ALFWORLD_SFT_MODEL` 指定已有完整模型。运行入口拒绝 adapter 目录或重新启用 LoRA。
+
+Qwen3.5-2B 的基底来自 `qwen35_2b_gigpo_expert_v1_latest/adapter/checkpoint-100`，
+其真实目录为 `qwen35_2b_gigpo_expert_v1_20260921_105449_688178`。首次启动前在 CPU
+合并 adapter，导出到该目录的 `merged-checkpoint-100`，附带源路径、adapter SHA256 和
+参数量清单。完整模型不纳入 Git；保留原 SFT adapter。
+
+```bash
+PYTHONPATH=examples/image_restoration_multi_agent/old_verl_grpo/.pydeps \
+  /home/LXJ/anaconda3/envs/alfworld-verl/bin/python \
+  examples/alfworld_grpo_baseline/scripts/export_sft_model.py --model-profile qwen35_2b
+bash examples/alfworld_grpo_baseline/scripts/alfworld/qwen35_2b_v1.sh
+```
+
+默认后台使用原生 veRL V1 trajectory GRPO，保持 16 个任务 × 8 条轨迹、学习率、KL
+和熵系数；开启梯度/熵检查点，以每 GPU 2 行 micro-batch 累积全参数梯度，并在阶段间
+卸载模型/优化器。新输出位于 `outputs/qwen3.5_2B/full_sft_grpo`，SwanLab 实验为
+`qwen3.5_2B_full_sft_grpo`，避免自动读取旧 LoRA checkpoint。GiGPO 后端输出也增加
+`full_sft` 子目录，两种后端仍各自独立。
+
+9B 原 SFT checkpoint-300 当前不在磁盘，使用前需恢复并导出，或提供完整 SFT 模型；
+预检会报错而不会回退到未合并的基础模型。Qwen2.5 旧 profile 没有本地 ALFWorld SFT
+记录，保留上游 Instruct 完整模型，支持通过同一环境变量指定 ALFWorld SFT 导出。

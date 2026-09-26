@@ -2,6 +2,8 @@
 variables:
   MODEL_PROFILE: qwen35_2b
   BASE_MODEL: /home/LXJ/Python_Projects/Models/Qwen3.5-2B
+  SFT_ADAPTER: /home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_gigpo_expert_v1_20260921_105449_688178/adapter/checkpoint-100
+  SFT_MODEL: ${oc.env:ALFWORLD_SFT_MODEL,/home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_gigpo_expert_v1_20260921_105449_688178/merged-checkpoint-100}
   # Both Qwen3.5 profiles share the newer v4 dataset and identical task order.
   DATA_DIR: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/data/qwen35_2b
   PROMPT_PROFILE: gigpo

@@ -103,6 +103,8 @@ def main(config):
         raise ValueError("ALFWorld's native entrypoint requires trainer.use_v1=true")
     from alfworld_baseline.budget import configure_environment_driven_rollout, validate_native_step_config
     from alfworld_baseline.resume import validate_native_resume
+    from alfworld_baseline.full_finetuning import validate_full_finetuning
+    validate_full_finetuning(config)
     validate_native_step_config(config)
     configure_environment_driven_rollout(config)
     # Validate the effective config, including CLI overrides, before starting Ray.

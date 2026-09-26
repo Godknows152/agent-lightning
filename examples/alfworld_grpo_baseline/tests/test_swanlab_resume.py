@@ -31,7 +31,7 @@ def launch_name(config_dir: Path, kind: str = "full") -> str:
 
 
 def test_full_launch_respects_versioned_name():
-    assert launch_name(CONFIG_DIR) == "qwen3.5_2B_0920"
+    assert launch_name(CONFIG_DIR) == "qwen3.5_2B_full_sft_grpo"
 
 
 @pytest.mark.parametrize("kind", ["smoke", "pilot"])
@@ -52,8 +52,8 @@ def test_native_tracking_uses_composed_run_identity(tmp_path, monkeypatch, resum
     if resume_overlay:
         assert cfg.trainer.resume_mode == "auto"
         assert cfg.trainer.resume_from_path is None
-        assert cfg.trainer.default_local_dir == str(ROOT / "log/alfworld/qwen35_2b/gigpo_grpo")
-        assert cfg.trainer.experiment_name == "qwen3.5_2B_GiGPO后端"
+        assert cfg.trainer.default_local_dir == str(ROOT / "log/alfworld/qwen35_2b/gigpo_grpo/full_sft")
+        assert cfg.trainer.experiment_name == "qwen3.5_2B_GiGPO后端_full_sft"
         assert cfg.trainer.total_training_steps == 150
         assert cfg.ray_kwargs.ray_init._node_ip_address == os.environ.get("ALFWORLD_RAY_NODE_IP", "10.246.1.30")
     else:
