@@ -1,0 +1,226 @@
+diff --git a/agent_system/environments/env_manager.py b/agent_system/environments/env_manager.py
+index ab09dff..d4540a4 100644
+--- a/agent_system/environments/env_manager.py
++++ b/agent_system/environments/env_manager.py
+@@ -181,35 +181,8 @@ class AlfWorldEnvironmentManager(EnvironmentManagerBase):
+         """
+         This function builds the text observation for the agent.
+         """
+-        postprocess_text_obs = []
+-        if not init and self.config.env.history_length > 0:
+-            memory_contexts, valid_lens = self.memory.fetch(
+-                    self.config.env.history_length,
+-                    obs_key="text_obs",
+-                    action_key="action")
+-            
+-        for i in range(len(text_obs)):
+-            # exclude 'help' in admissible_actions[i]
+-            reformatted_admissible_actions = "\n ".join(f"'{s}'" for s in admissible_actions[i] if s != 'help')
+-
+-            if init or self.config.env.history_length <= 0:
+-                obs = ALFWORLD_TEMPLATE_NO_HIS.format(
+-                    current_observation=text_obs[i],
+-                    admissible_actions=reformatted_admissible_actions
+-                )
+-            else:
+-                obs = ALFWORLD_TEMPLATE.format(
+-                    task_description=self.tasks[i],
+-                    step_count=len(self.memory[i]),
+-                    history_length=valid_lens[i],
+-                    action_history=memory_contexts[i],
+-                    current_step=len(self.memory[i]) + 1,
+-                    current_observation=text_obs[i],
+-                    admissible_actions=reformatted_admissible_actions
+-                )
+-
+-            postprocess_text_obs.append(obs)
+-        return postprocess_text_obs
++        from alfworld_baseline.gigpo_native import build_observations
++        return build_observations(self, text_obs, admissible_actions, init=init)
+ 
+     def _process_batch(self, batch_idx, total_batch_list, total_infos, success):
+         # Find the last entry with active masks
+@@ -628,7 +601,8 @@ def make_envs(config):
+         val_envs = GymCardEnvironmentManager(_val_envs, projection_f, config)
+         return envs, val_envs
+     elif "alfworld" in config.env.env_name.lower():
+-        from agent_system.environments.env_package.alfworld import build_alfworld_envs, alfworld_projection
++        from agent_system.environments.env_package.alfworld import build_alfworld_envs
++        from alfworld_baseline.gigpo_native import project_actions as alfworld_projection
+         if config.env.env_name == 'alfworld/AlfredThorEnv':
+             alf_config_path = os.path.join(os.path.dirname(__file__), 'env_package/alfworld/configs/config_tw.yaml')
+         elif config.env.env_name == 'alfworld/AlfredTWEnv':
+diff --git a/agent_system/multi_turn_rollout/rollout_loop.py b/agent_system/multi_turn_rollout/rollout_loop.py
+index d79e678..a3a0842 100644
+--- a/agent_system/multi_turn_rollout/rollout_loop.py
++++ b/agent_system/multi_turn_rollout/rollout_loop.py
+@@ -396,6 +396,8 @@ class TrajectoryCollector:
+ 
+             # Update done states
+             is_done = np.logical_or(is_done, dones)
++            if (_step + 1) % 10 == 0 or is_done.all():
++                print(f"[GiGPO native rollout] decision={_step + 1}, active={int((~is_done).sum())}, success={int((episode_rewards > 0).sum())}", flush=True)
+                 
+             # Update observations for next step
+             obs = next_obs
+@@ -520,6 +522,8 @@ class TrajectoryCollector:
+                 actor_rollout_wg=actor_rollout_wg,
+                 envs=envs,
+             )
++        from alfworld_baseline.gigpo_native import record_trajectories
++        record_trajectories(self, (total_batch_list, total_episode_rewards, total_episode_lengths, total_success, total_traj_uid, totoal_tool_callings), is_train)
+         assert len(total_batch_list) == len(total_episode_rewards)
+         assert len(total_batch_list) == len(total_episode_lengths)
+         assert len(total_batch_list) == len(total_traj_uid)
+diff --git a/verl/models/transformers/monkey_patch.py b/verl/models/transformers/monkey_patch.py
+index 4db3482..2f30882 100644
+--- a/verl/models/transformers/monkey_patch.py
++++ b/verl/models/transformers/monkey_patch.py
+@@ -260,6 +260,9 @@ def apply_monkey_patch(
+     """
+ 
+     """Replace _flash_attention_forward to _ulysses_flash_attention_forward"""
++    if model.config.model_type == "qwen3_5":
++        assert not use_remove_padding and ulysses_sp_size == 1 and not use_fused_kernels
++        return  # Native HF Qwen3.5 padded forward preserves recurrent sequence boundaries.
+     module = sys.modules[model.__module__]
+ 
+     try:
+diff --git a/verl/trainer/main_ppo.py b/verl/trainer/main_ppo.py
+index ea5ca4d..851ae1f 100644
+--- a/verl/trainer/main_ppo.py
++++ b/verl/trainer/main_ppo.py
+@@ -54,6 +54,8 @@ def run_ppo(config) -> None:
+ @ray.remote(num_cpus=1)  # please make sure main_task is not scheduled on head
+ class TaskRunner:
+     def run(self, config):
++        from alfworld_baseline.gigpo_native import install_tracking
++        install_tracking()
+         # print initial config
+         from pprint import pprint
+ 
+@@ -75,7 +77,10 @@ class TaskRunner:
+ 
+         trust_remote_code = config.data.get("trust_remote_code", False)
+         tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
+-        processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)  # used for multimodal LLM, could be none
++        from alfworld_baseline.gigpo_native import configure_tokenizer
++        configure_tokenizer(tokenizer)
++        processor = None # Text-only ALFWorld; do not introduce multimodal position IDs.
++        # processor = hf_processor(local_path, trust_remote_code=trust_remote_code, use_fast=True)  # used for multimodal LLM, could be none
+ 
+         # vllm early verify
+         if config.actor_rollout_ref.rollout.name in ["vllm"]:
+diff --git a/verl/utils/checkpoint/fsdp_checkpoint_manager.py b/verl/utils/checkpoint/fsdp_checkpoint_manager.py
+index f598012..39df2cf 100644
+--- a/verl/utils/checkpoint/fsdp_checkpoint_manager.py
++++ b/verl/utils/checkpoint/fsdp_checkpoint_manager.py
+@@ -225,7 +225,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
+ 
+                     auto_model_cls = AutoModelForCausalLM
+                 elif "ForConditionalGeneration" in model_config.architectures[0]:
+-                    from transformers import AutoModelForVision2Seq
++                    from transformers import AutoModelForImageTextToText as AutoModelForVision2Seq
+ 
+                     auto_model_cls = AutoModelForVision2Seq
+                 else:
+diff --git a/verl/workers/fsdp_workers.py b/verl/workers/fsdp_workers.py
+index 7d9b8b4..a6b2c84 100644
+--- a/verl/workers/fsdp_workers.py
++++ b/verl/workers/fsdp_workers.py
+@@ -185,7 +185,7 @@ class ActorRolloutRefWorker(Worker):
+         from torch import optim
+         from torch.distributed.fsdp import CPUOffload, MixedPrecision
+         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+-        from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
++        from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText as AutoModelForVision2Seq
+ 
+         from verl.utils.model import get_generation_config, print_model_size, update_model_config
+         from verl.utils.torch_dtypes import PrecisionType
+@@ -230,7 +230,10 @@ class ActorRolloutRefWorker(Worker):
+ 
+         with init_context(), warnings.catch_warnings():
+             warnings.simplefilter("ignore")
+-            if type(actor_model_config) in AutoModelForVision2Seq._model_mapping.keys():
++            if actor_model_config.model_type == "qwen3_5":
++                from transformers import Qwen3_5ForConditionalGeneration
++                actor_module_class = Qwen3_5ForConditionalGeneration
++            elif type(actor_model_config) in AutoModelForVision2Seq._model_mapping.keys():
+                 actor_module_class = AutoModelForVision2Seq
+             else:
+                 actor_module_class = AutoModelForCausalLM
+diff --git a/verl/workers/rollout/sglang_rollout/sglang_rollout.py b/verl/workers/rollout/sglang_rollout/sglang_rollout.py
+index 7ab2d79..5be06c0 100644
+--- a/verl/workers/rollout/sglang_rollout/sglang_rollout.py
++++ b/verl/workers/rollout/sglang_rollout/sglang_rollout.py
+@@ -31,9 +31,10 @@ import torch
+ import torch.distributed as dist
+ from omegaconf import DictConfig
+ from sglang.srt.entrypoints.engine import Engine
+-from sglang.srt.openai_api.protocol import Tool
++from sglang.srt.entrypoints.openai.protocol import Tool
+ from sglang.srt.sampling.sampling_params import SamplingParams
+-from sglang.srt.utils import get_ip, get_open_port
++from sglang.srt.utils.network import get_open_port
++from ray.util import get_node_ip_address as get_ip
+ from tensordict import TensorDict
+ from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+ from torch.nn.utils.rnn import pad_sequence
+@@ -100,7 +101,7 @@ def _post_process_outputs(tokenizer, output):
+     pad_token_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+     batched_output_token_ids = pad_sequence(batched_output_token_ids, batch_first=True, padding_value=pad_token_id)
+     if len(batched_logprobs) > 0:
+-        batched_logprobs = pad_sequence(batched_logprobs, batch_first=True, padding_value=pad_token_id)
++        batched_logprobs = pad_sequence(batched_logprobs, batch_first=True, padding_value=0.0)
+     return batched_output_token_ids, batched_logprobs
+ 
+ 
+@@ -219,11 +220,12 @@ class SGLangRollout(BaseRollout):
+         os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(sorted(list(self.visible_devices_set)))
+ 
+     def _verify_config(self, model_hf_config):
++        model_hf_config = getattr(model_hf_config, "text_config", model_hf_config)
+         if not self.config.get("max_model_len", None):
+             self.config.max_model_len = self.config.prompt_length + self.config.response_length
+         assert self.config.max_model_len >= self.config.prompt_length + self.config.response_length, f"""max_model_len should be greater than total sequence length (prompt_length + response_length): 
+             {self.config.max_model_len} >= {self.config.prompt_length} + {self.config.response_length}"""
+-        assert model_hf_config.max_position_embeddings >= self.config.max_model_len, "model context length should be greater than total sequence length"
++        assert getattr(model_hf_config, "text_config", model_hf_config).max_position_embeddings >= self.config.max_model_len, "model context length should be greater than total sequence length"
+         # currently max_turns stand for max number of tool calls
+         if self.config.multi_turn.max_turns is None:
+             self.config.multi_turn.max_turns = self.config.max_model_len // 3
+@@ -256,6 +258,12 @@ class SGLangRollout(BaseRollout):
+             self._engine = Engine(
+                 model_path=actor_module,
+                 dtype=self.config.dtype,
++                attention_backend="triton",
++                sampling_backend="pytorch",
++                context_length=self.config.max_model_len,
++                max_running_requests=self.config.max_num_seqs,
++                disable_cuda_graph=self.config.enforce_eager,
++                chunked_prefill_size=8192 if self.config.enable_chunked_prefill else -1,
+                 mem_fraction_static=self.config.gpu_memory_utilization,
+                 enable_memory_saver=True,
+                 base_gpu_id=0,
+@@ -570,7 +578,7 @@ class SGLangRollout(BaseRollout):
+ 
+             if response.shape[1] < self.config.response_length:
+                 response = pad_sequence_to_length(response, self.config.response_length, self.pad_token_id)
+-                rollout_log_probs = pad_sequence_to_length(rollout_log_probs, self.config.response_length, self.pad_token_id)
++                rollout_log_probs = pad_sequence_to_length(rollout_log_probs, self.config.response_length, 0.0)
+ 
+             # utilize current sampling params
+             if self.sampling_params.get("n", 1) > 1 and do_sample:
+@@ -597,7 +605,11 @@ class SGLangRollout(BaseRollout):
+         # position_ids:   [0,0,0,0,0,1,2,3, | 4,5,6,7,8,9,10,11]
+         response_position_ids = position_ids[:, -1:] + delta_position_id
+         position_ids = torch.cat([position_ids, response_position_ids], dim=-1)
+-        response_attention_mask = get_response_mask(response_id=response, eos_token=eos_token_id, dtype=attention_mask.dtype)
++        # Qwen3.5 has multiple stop IDs; its generated im_end may differ from
++        # tokenizer.eos_token_id. Only sampled tokens (including their actual
++        # stop token) are valid; never learn a synthetic padding token.
++        from alfworld_baseline.gigpo_native import sampled_response_mask
++        response_attention_mask = sampled_response_mask(output, response_length, device=response.device, dtype=attention_mask.dtype)
+         attention_mask = torch.cat((attention_mask, response_attention_mask), dim=-1)
+ 
+         # all the tp ranks should contain the same data here. data in all ranks are valid

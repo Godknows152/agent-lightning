@@ -1,0 +1,104 @@
+# GiGPO 20bd331 GRPO: keep upstream reward, advantage, PPO and environment rollout.
+hydra:
+  searchpath:
+    - file://${oc.env:ALFWORLD_GIGPO_ROOT}/verl/trainer/config
+  run:
+    dir: ${trainer.default_local_dir}/hydra/${now:%Y-%m-%d_%H-%M-%S}
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  train_files: ${oc.env:ALFWORLD_GIGPO_DATA}/train.parquet
+  val_files: ${oc.env:ALFWORLD_GIGPO_DATA}/test.parquet
+  train_batch_size: 16
+  val_batch_size: 128
+  max_prompt_length: 2048
+  max_response_length: 512
+  filter_overlong_prompts: true
+  truncation: error
+  return_raw_chat: true
+  apply_chat_template_kwargs:
+    enable_thinking: true
+    avoid_repeated_actions: false
+
+actor_rollout_ref:
+  model:
+    path: ${oc.env:ALFWORLD_SFT_MODEL,/home/LXJ/Python_Projects/Agent_Lightning/LlamaFactory/alfworld_tool_sft/outputs/qwen35_2b_gigpo_expert_v1_20260921_105449_688178/merged-checkpoint-100}
+    lora_rank: 0
+    # Qwen3.5 recurrent layers need sequence boundaries; use padded HF forwards.
+    use_remove_padding: false
+    enable_gradient_checkpointing: true
+    use_fused_kernels: false
+  actor:
+    optim:
+      lr: 1.0e-6
+    ppo_mini_batch_size: 256
+    # Hardware adaptation only: accumulate into the upstream mini-batch.
+    ppo_micro_batch_size_per_gpu: 2
+    use_kl_loss: true
+    kl_loss_coef: 0.01
+    kl_loss_type: low_var_kl
+    entropy_coeff: 0.001
+    use_invalid_action_penalty: true
+    invalid_action_penalty_coef: 0.1
+    fsdp_config:
+      param_offload: false
+      optimizer_offload: false
+  rollout:
+    name: sglang
+    mode: sync
+    tensor_model_parallel_size: 2
+    gpu_memory_utilization: 0.6
+    enable_chunked_prefill: false
+    enforce_eager: false
+    free_cache_engine: false
+    log_prob_micro_batch_size_per_gpu: 2
+    val_kwargs:
+      temperature: 0.4
+      do_sample: true
+  ref:
+    log_prob_micro_batch_size_per_gpu: 2
+    fsdp_config:
+      param_offload: true
+
+algorithm:
+  adv_estimator: grpo
+  use_kl_in_reward: false
+
+env:
+  env_name: alfworld/AlfredTWEnv
+  seed: 0
+  max_steps: 50
+  history_length: 2
+  rollout:
+    n: 8
+  resources_per_worker:
+    num_cpus: 0.1
+
+trainer:
+  logger: [console, swanlab]
+  project_name: ALFWorldRL
+  experiment_name: qwen3.5_2B_GiGPO原生GRPO
+  n_gpus_per_node: 2
+  nnodes: 1
+  total_epochs: 150
+  total_training_steps: 150
+  val_before_train: true
+  test_freq: 5
+  save_freq: 10
+  resume_mode: auto
+  default_local_dir: ${oc.env:ALFWORLD_OUTPUT_DIR}
+  rollout_data_dir: ${trainer.default_local_dir}/rollouts/steps
+  validation_data_dir: ${trainer.default_local_dir}/validation
+  log_val_generations: 0
+
+ray_init:
+  _node_ip_address: ${oc.env:ALFWORLD_RAY_NODE_IP,10.246.1.30}
+  _temp_dir: ${oc.env:ALFWORLD_RAY_TEMP_DIR}
+  num_cpus: 64
+  runtime_env:
+    env_vars:
+      PYTHONPATH: ${oc.env:PYTHONPATH}
+      SWANLAB_LOG_DIR: ${oc.env:SWANLAB_LOG_DIR}
+      SWANLAB_MODE: ${oc.env:SWANLAB_MODE}
