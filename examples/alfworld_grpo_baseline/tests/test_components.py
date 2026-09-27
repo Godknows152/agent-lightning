@@ -44,7 +44,7 @@ def test_build_messages_contains_current_state_and_schema():
 def test_prompt_uses_gigpo_contract_for_all_profiles():
     from alfworld_baseline.prompts import PROMPT_VERSION, SYSTEM_PROMPT
 
-    assert PROMPT_VERSION == "alfworld_gigpo_qwen3_xml_v1"
+    assert PROMPT_VERSION == "alfworld_gigpo_qwen3_xml_v3"
     assert SYSTEM_PROMPT == ""
 
 
@@ -52,7 +52,7 @@ def test_qwen35_prompt_profile_uses_xml_calls():
     from alfworld_baseline.prompt_profiles import get_prompt_profile
 
     profile = get_prompt_profile("qwen35")
-    assert profile.PROMPT_VERSION == "alfworld_gigpo_qwen3_xml_v1"
+    assert profile.PROMPT_VERSION == "alfworld_gigpo_qwen3_xml_v3"
     assert profile.SYSTEM_PROMPT == ""
     user_prompt = profile.build_user_prompt(
         mission="put the apple in the drawer",
@@ -61,7 +61,8 @@ def test_qwen35_prompt_profile_uses_xml_calls():
     )
     assert "Your current observation" in user_prompt
     assert "Your admissible actions" in user_prompt
-    assert "<think>" in user_prompt and "<parameter=action>" in user_prompt
+    assert "Think about the next step in 1-2 simple sentences." in user_prompt
+    assert "<parameter=action>" in user_prompt
     assert "<action>" not in user_prompt
 
 def test_qwen35_dynamic_schema_enum_matches_latest_admissible_actions():
@@ -84,7 +85,8 @@ def test_qwen35_prompt_has_history_and_text_protocol():
     )
     assert "Your task is to:" in user_prompt
     assert "Prior to this step, you have already taken 2 step(s)." in user_prompt
-    assert "<think>" in user_prompt and "<parameter=action>" in user_prompt
+    assert "Think about the next step in 1-2 simple sentences." in user_prompt
+    assert "<parameter=action>" in user_prompt
     assert "<action>" not in user_prompt
 
 

@@ -45,16 +45,25 @@ def test_composed_profile_selects_xml_loop_and_template(monkeypatch, profile):
 
 
 @pytest.mark.parametrize('thinking', [True, False])
-def test_prompt_and_chat_template_agree_on_xml(thinking):
+@pytest.mark.parametrize('avoid_repeated', [True, False])
+@pytest.mark.parametrize('history', [(), ("[Observation 1: 'room', Action 1: 'look']",)])
+def test_prompt_and_chat_template_agree_on_xml(thinking, avoid_repeated, history):
     prompt = build_user_prompt(mission='find apple', observation='room', admissible_actions=['look'],
-                               enable_thinking=thinking)
+                               enable_thinking=thinking, history=history)
     rendered = Environment().from_string(QWEN3_ALFWORLD_CHAT_TEMPLATE).render(
         messages=[{'role': 'user', 'content': prompt}], add_generation_prompt=True, enable_thinking=thinking,
+        avoid_repeated_actions=avoid_repeated,
+        tools=[ALFWorldToolRegistry(['look']).static_tool_schema()],
     )
+    assert rendered.startswith('<|im_start|>user\n')
+    assert '<|im_start|>system' not in rendered and '<tools>' not in rendered
+    assert rendered.count('<tool_call>') == 1
+    assert 'Before choosing an action' not in rendered and '1-2 short sentences' not in rendered
     assert '<function=alfworld_action>' in prompt and '<parameter=action>' in prompt
     assert '<action>' not in rendered and '"arguments"' not in rendered
     assert rendered.endswith('<think>\n' if thinking else '<think>\n\n</think>\n\n')
-    assert ('Think briefly' in prompt) is thinking
+    assert ('Think about the next step' in prompt) is thinking
+    assert ('Think about the next step in 1-2 simple sentences.' in prompt) is thinking
     output = ('Reasoning.</think>' if thinking else '') + CALL
     assert parse_xml_decision(output, enable_thinking=thinking).action == 'look'
     messages, tools = build_messages(mission='find apple', observation='room',

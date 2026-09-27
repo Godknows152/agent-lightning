@@ -22,18 +22,34 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from .tool_registry import ALFWorldToolRegistry
-from .prompts_qwen35 import QWEN35_ALFWORLD_CHAT_TEMPLATE
 
-PROMPT_VERSION = "alfworld_gigpo_qwen3_xml_v1"
-NONTHINKING_PROMPT_VERSION = "alfworld_gigpo_qwen3_xml_v1_nothinking"
+PROMPT_VERSION = "alfworld_gigpo_qwen3_xml_v3"
+NONTHINKING_PROMPT_VERSION = "alfworld_gigpo_qwen3_xml_v3_nothinking"
 SYSTEM_PROMPT = ""
 HISTORY_LENGTH = 2
 
-# Preserve the existing Qwen3 XML schema, thinking boundary and call guidance.
-# The optional repeat guidance now refers to the bounded history we provide.
-QWEN3_ALFWORLD_CHAT_TEMPLATE = QWEN35_ALFWORLD_CHAT_TEMPLATE.replace(
-    "Previous actions", "the recent observation/action history"
-).replace("already used in this episode", "already used in the recent history")
+# GiGPO supplies one user message containing the state and output instructions.
+# Do not inject system instructions or serialize the tools argument; retain the
+# existing generation boundary so XML parsing and token replay stay compatible.
+QWEN3_ALFWORLD_CHAT_TEMPLATE = r"""
+{%- for message in messages %}
+{%- if message.role in ['system', 'user', 'assistant'] %}
+{{- '<|im_start|>' + message.role + '\n' + (message.content | string) + '<|im_end|>\n' }}
+{%- elif message.role == 'tool' %}
+{{- '<|im_start|>user\n<tool_response>\n' + (message.content | string) + '\n</tool_response><|im_end|>\n' }}
+{%- else %}
+{{- raise_exception('Unexpected message role: ' ~ message.role) }}
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+{{- '<|im_start|>assistant\n' }}
+{%- if enable_thinking is defined and enable_thinking %}
+{{- '<think>\n' }}
+{%- else %}
+{{- '<think>\n\n</think>\n\n' }}
+{%- endif %}
+{%- endif %}
+""".strip()
 
 QWEN3_XML_CALL_FORMAT = """<tool_call>
 <function=alfworld_action>
@@ -79,9 +95,11 @@ def build_user_prompt(
     History contains all completed observation/action pairs with absolute
     step numbers. Only the last two pairs enter the prompt; the step counter
     still counts the whole trajectory, as in GiGPO's SimpleMemory.
+    ``avoid_repeated_actions`` is accepted for existing callers but does not
+    add instructions to this minimal prompt.
     """
     decision_instruction = (
-        "Think briefly about the next step in 1-2 short sentences."
+        "Think about the next step in 1-2 simple sentences."
         if enable_thinking else
         "Choose the next action directly, without reasoning or explanations."
     )

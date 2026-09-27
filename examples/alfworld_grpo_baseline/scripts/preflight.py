@@ -42,7 +42,11 @@ def main() -> int:
     print(f"cxx20_compiler={cxx} nvcc={nvcc}")
     from transformers import AutoConfig, AutoTokenizer
     from alfworld_baseline.xml_actions import parse_xml_decision
-    from alfworld_baseline.prompts_gigpo import QWEN3_ALFWORLD_CHAT_TEMPLATE
+    from alfworld_baseline.prompts_gigpo import (
+        QWEN3_ALFWORLD_CHAT_TEMPLATE,
+        QWEN3_XML_CALL_FORMAT,
+        build_user_prompt,
+    )
     from alfworld_baseline.tool_registry import ALFWorldToolRegistry
     model = Path(os.environ.get("ALFWORLD_MODEL", "/home/LXJ/Python_Projects/Models/Qwen3.5-2B"))
     model_config = AutoConfig.from_pretrained(model, local_files_only=True, trust_remote_code=True)
@@ -65,8 +69,14 @@ def main() -> int:
         raise RuntimeError("missing prepared VERL parquet files: " + ", ".join(missing_data))
     registry = ALFWorldToolRegistry(["look", "go to cabinet 1"])
     for thinking in (False, True):
+        prompt = build_user_prompt(
+            mission="find a mug",
+            observation="You are in a room. Your task is to: find a mug.",
+            admissible_actions=registry.available_actions(),
+            enable_thinking=thinking,
+        )
         rendered = tokenizer.apply_chat_template(
-            [{"role": "user", "content": "Choose."}],
+            [{"role": "user", "content": prompt}],
             tools=[registry.static_tool_schema()],
             tokenize=False,
             add_generation_prompt=True,
@@ -75,15 +85,19 @@ def main() -> int:
         )
         if "example_function_name" in rendered or "If you choose to call a function" in rendered:
             raise RuntimeError("Qwen3.5 ALFWorld template still contains generic tool guidance")
-        if rendered.count("<tools>") != 1 or "<parameter=action>" not in rendered:
-            raise RuntimeError("Qwen3.5 v7 compact XML schema missing")
-        if "go to cabinet 1" in rendered or '"enum"' in rendered:
-            raise RuntimeError("Action enum must not be duplicated in the schema")
+        if "<tools>" in rendered or "<|im_start|>system" in rendered:
+            raise RuntimeError("GiGPO XML v3 must not inject system instructions or a tool schema")
+        if QWEN3_XML_CALL_FORMAT not in rendered or rendered.count("<tool_call>") != 1:
+            raise RuntimeError("GiGPO XML v3 user prompt must contain exactly one XML call example")
+        if rendered.count("go to cabinet 1") != 1 or '"enum"' in rendered:
+            raise RuntimeError("Admissible actions must appear only once in the user prompt")
         expected_prefix = "<|im_start|>assistant\n<think>\n"
         if not thinking:
             expected_prefix += "\n</think>\n\n"
         if not rendered.endswith(expected_prefix):
             raise RuntimeError(f"Qwen3.5 generation prefix mismatch: enable_thinking={thinking}")
+        if rendered != "<|im_start|>user\n" + prompt + "<|im_end|>\n" + expected_prefix:
+            raise RuntimeError("GiGPO XML v3 rendered prompt differs from the user-only contract")
     print(f"tokenizer={tokenizer.__class__.__name__} eos={tokenizer.eos_token_id} pad={tokenizer.pad_token_id}")
     rendered_tokens = len(tokenizer(rendered, add_special_tokens=False)["input_ids"])
     print(

@@ -10,7 +10,7 @@ defaults:
   - _self_
 
 variables:
-  PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v1
+  PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v3
   NUM_ROLLOUTS: 3
 
 data:

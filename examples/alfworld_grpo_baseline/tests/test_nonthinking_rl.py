@@ -47,7 +47,8 @@ def test_gigpo_state_prompt_and_parser():
     messages = loop._state_prompt_messages(mission='find a mug', observation='a room', actions=('look',),
                                           history=('inventory [executed]',))
     rendered = messages[0]['content']
-    assert '<think>' in rendered and '<parameter=action>' in rendered
+    assert 'Think about the next step in 1-2 simple sentences.' in rendered
+    assert '<parameter=action>' in rendered
     assert '<action>' not in rendered
     assert 'inventory [executed]' in rendered
     call = '<think>look</think><tool_call><function=alfworld_action><parameter=action>look</parameter></function></tool_call>'

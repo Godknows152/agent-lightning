@@ -1,0 +1,32 @@
+<|im_start|>user
+
+You are an expert agent operating in the ALFRED Embodied Environment.
+Your current observation is: -= Welcome to TextWorld, ALFRED! =-
+
+You are in the middle of a room. Looking quickly around you, you see a bathtubbasin 1, a drawer 2, a drawer 1, a garbagecan 1, a handtowelholder 1, a sidetable 1, a sinkbasin 1, a toilet 1, a toiletpaperhanger 1, and a towelholder 1.
+
+Your task is to: put two spraybottle in garbagecan.
+Your admissible actions of the current situation are: ['go to bathtubbasin 1'
+ 'go to drawer 1'
+ 'go to drawer 2'
+ 'go to garbagecan 1'
+ 'go to handtowelholder 1'
+ 'go to sidetable 1'
+ 'go to sinkbasin 1'
+ 'go to toilet 1'
+ 'go to toiletpaperhanger 1'
+ 'go to towelholder 1'
+ 'inventory'
+ 'look'].
+
+Now it's your turn to take an action.
+Think about the next step in 1-2 simple sentences.
+Use this exact format, replacing EXACT_COMMAND with one current admissible action verbatim:
+<tool_call>
+<function=alfworld_action>
+<parameter=action>EXACT_COMMAND</parameter>
+</function>
+</tool_call>
+<|im_end|>
+<|im_start|>assistant
+<think>

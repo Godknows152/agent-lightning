@@ -12,12 +12,12 @@ defaults:
 # Keep the sampling scale; tune execution for two A800 80GB GPUs.
 variables:
   NUM_ROLLOUTS: 8
-  PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v1
+  PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v3
 
 data:
   apply_chat_template_kwargs:
     enable_thinking: true
-    avoid_repeated_actions: true
+    avoid_repeated_actions: false
   train_batch_size: 16
 
 actor_rollout_ref:
