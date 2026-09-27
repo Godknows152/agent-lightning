@@ -1,6 +1,6 @@
 # ALFWorld baseline（GiGPO 对齐提示词）
 
-本目录隔离 ALFWorld 文本环境与原生 veRL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。三个 profile 共用 `alfworld_gigpo_qwen3_xml_v1` 提示词协议，公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 Actor FSDP offload、关闭梯度检查点和独立 PPO batch 设置。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
+本目录隔离 ALFWorld 文本环境与原生 veRL baseline。Qwen2.5-1.5B、Qwen3.5-2B 与 Qwen3.5-9B 的模型、parser、提示词、parquet、Hydra 入口、启动脚本、日志、checkpoint 和 SwanLab 实验名均按 profile 分离；当前默认 profile 为 `qwen35_2b`。三个 profile 共用 `alfworld_gigpo_qwen3_xml_v3` 提示词协议，公共的 ALFWorld 环境、奖励和 Validator 保持共用，模型专属的运行时/性能覆盖保存在各自的 Hydra 配置中。当前 Qwen3.5-2B 使用独立的8个 AgentLoop worker、环境池、关闭 Actor FSDP offload、开启梯度检查点和独立 PPO batch 设置。详情见 `MODEL_PROFILES.md`。ALFWorld 使用隔离的 `alfworld_tool_agent`；图像修复继续使用共享的 `tool_agent`，不修改其行为。
 
 ## 两套可选奖励与优势后端（2026-09-23）
 
@@ -110,7 +110,7 @@ SwanLab 的 `val/generations` 每条记录展示一条完整轨迹：`input` 是
 `A → A → B → B → A` 共三次重复，但不扣分。
 `alfworld_penalty/repeated_action_count` 仍统计次数，不再表示扣分次数。
 
-## 当前 GiGPO 提示词（`alfworld_gigpo_qwen3_xml_v1`）
+## 当前 GiGPO 提示词（`alfworld_gigpo_qwen3_xml_v3`）
 
 三个 ALFWorld 模型 profile 都使用 `src/alfworld_baseline/prompts_gigpo.py` 中的
 GiGPO 模板。首轮只放当前 observation 和 admissible actions；后续轮次放任务目标、
@@ -463,3 +463,33 @@ bash examples/alfworld_grpo_baseline/scripts/alfworld/qwen35_2b_v1.sh
 9B 原 SFT checkpoint-300 当前不在磁盘，使用前需恢复并导出，或提供完整 SFT 模型；
 预检会报错而不会回退到未合并的基础模型。Qwen2.5 旧 profile 没有本地 ALFWorld SFT
 记录，保留上游 Instruct 完整模型，支持通过同一环境变量指定 ALFWorld SFT 导出。
+
+## GiGPO 原生 GRPO 独立入口
+
+`scripts/alfworld/alfworld_gigpo_native_grpo.sh` 直接运行固定版本 GiGPO 的 GRPO
+训练链路，保留当前 Qwen3.5 提示词与 XML 工具调用。它与已有 `trajectory`、
+`gigpo_grpo` 后端独立，奖励为原版成功 10、单步格式错误 −0.1。
+配置、兼容补丁、文件布局与测试说明见 [原生后端说明](docs/gigpo_native_grpo.md)。
+
+### GiGPO 提示词 v3（2026-09-28）
+
+当前 `gigpo` 提示词版本为 `alfworld_gigpo_qwen3_xml_v3`。首步使用 GiGPO 的当前观察与
+可用动作模板；后续步加入任务、累计步数和最近两步观察/动作历史。末尾保留
+`Think about the next step in 1-2 simple sentences.` 与 XML 工具调用示例。
+聊天模板不再自动注入 system 指令、禁止重复动作指令或工具 schema；保持原有 assistant
+`<think>` 生成前缀与 XML 解析协议。奖励及优势计算方式不变。
+
+实际 Qwen3.5 tokenizer 渲染示例：[首步](docs/prompt_examples/gigpo_xml_v3_first_step.txt)、
+[后续步](docs/prompt_examples/gigpo_xml_v3_later_step.txt)。已启动的训练进程仍使用加载时的模板，
+需要重新启动或续训才能应用新提示词。
+
+### 当前 2B 训练配置（2026-09-28）
+
+`scripts/alfworld/qwen35_2b_v1.sh` 使用原版 trajectory GRPO。Actor 与 reference 均从
+ALFWorld SFT 合并后的 `merged-checkpoint-100` 初始化，学习率为 `3e-5`，
+`entropy_coeff=0.01`、`kl_loss_coef=0.001`。验证复用训练的 temperature、top-p、top-k
+及每任务轨迹数，当前分别为 `1.0`、`1.0`、`-1`、`8`，并启用 `do_sample=true`。
+
+实验名为 `0927_22点19新建`，输出为 `outputs/qwen3.5_2B/0927_22点19新建`。
+`resume_mode=auto` 在该目录没有 checkpoint 时从 SFT 模型开始，有 checkpoint 时续训。
+启动器从合并后的版本配置读取模型路径，并在加载训练权重前验证新的 user-only 提示词协议。
