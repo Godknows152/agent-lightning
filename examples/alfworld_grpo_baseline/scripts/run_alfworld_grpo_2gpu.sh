@@ -41,11 +41,14 @@ case "${MODEL_PROFILE}" in
     ;;
 esac
 
-# Resolve the same full SFT model used by Hydra; no base/adapter fallback.
-MODEL_PATH="$("${PYTHON_BIN}" - "${ROOT}/config/model_profiles/${MODEL_PROFILE}.yaml" <<'PYMODEL'
+# Resolve the versioned model override as well as the shared model profile.
+MODEL_PATH="$("${PYTHON_BIN}" - "${CONFIG_PATH}" "${CONFIG_NAME}" <<'PYMODEL'
 import sys
-from omegaconf import OmegaConf
-print(OmegaConf.load(sys.argv[1]).variables.SFT_MODEL)
+from hydra import compose, initialize_config_dir
+
+with initialize_config_dir(config_dir=sys.argv[1], version_base=None):
+    config = compose(config_name=sys.argv[2])
+print(config.actor_rollout_ref.model.path)
 PYMODEL
 )"
 

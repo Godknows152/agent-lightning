@@ -31,7 +31,8 @@ def launch_name(config_dir: Path, kind: str = "full") -> str:
 
 
 def test_full_launch_respects_versioned_name():
-    assert launch_name(CONFIG_DIR) == "qwen3.5_2B_full_sft_grpo_tuned"
+    config = OmegaConf.load(CONFIG_DIR / "alfworld_config_2gpu.yaml")
+    assert launch_name(CONFIG_DIR) == config.trainer.experiment_name
 
 
 @pytest.mark.parametrize("kind", ["smoke", "pilot"])

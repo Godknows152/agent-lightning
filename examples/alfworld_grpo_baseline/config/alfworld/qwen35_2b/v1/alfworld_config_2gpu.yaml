@@ -13,6 +13,7 @@ defaults:
 variables:
   NUM_ROLLOUTS: 8
   PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v3
+  # Inherit the merged SFT checkpoint-100 from model_profiles/qwen35_2b.yaml.
 
 data:
   apply_chat_template_kwargs:
@@ -22,6 +23,13 @@ data:
 
 actor_rollout_ref:
   rollout:
+    # Validation uses the training sampling settings, including trajectories per task.
+    val_kwargs:
+      temperature: ${actor_rollout_ref.rollout.temperature}
+      top_p: ${actor_rollout_ref.rollout.top_p}
+      top_k: ${actor_rollout_ref.rollout.top_k}
+      n: ${actor_rollout_ref.rollout.n}
+      do_sample: true
     # Chunk long prompt prefill to reduce rollout peak memory.
     enable_chunked_prefill: true
     # Preserve token log-probs produced during rollout so old-log-prob
@@ -35,16 +43,18 @@ actor_rollout_ref:
     agent:
       num_workers: 8
   ref:
-    # A separate frozen reference loads the same full SFT checkpoint as the actor.
+    # A separate frozen reference loads the same merged SFT model as the actor.
     log_prob_micro_batch_size_per_gpu: 4
     log_prob_use_dynamic_bsz: true
     log_prob_max_token_len_per_gpu: 65536
 
   actor:
+    optim:
+      lr: 3.0e-5
     calculate_entropy: true
-    # Regularize against the frozen SFT policy.
+    # Regularize against the frozen initial policy.
     use_kl_loss: true
-    entropy_coeff: 0.005
+    entropy_coeff: 0.01
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     ppo_mini_batch_size: 16
@@ -61,7 +71,7 @@ actor_rollout_ref:
       use_no_sync_for_gradient_accumulation: true
       entropy_checkpointing: false
   model:
-    # The profile points to a standalone model with the SFT adapter merged.
+    # Initialize full parameters from the merged ALFWorld SFT checkpoint-100.
     # Keep activation checkpointing: disabling it at larger batches caused OOM.
     enable_gradient_checkpointing: true
     # Keep CPU activation transfers disabled.
@@ -71,9 +81,10 @@ actor_rollout_ref:
     use_fused_kernels: false
 
 trainer:
-  experiment_name: qwen3.5_2B_full_sft_grpo_tuned
+  experiment_name: 0927_22点19新建
   resume_mode: auto
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/full_sft_grpo_tuned
+  # This experiment has its own checkpoint and tracking directory.
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/0927_22点19新建
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.
