@@ -229,3 +229,6 @@ agentlightning/dashboard/**/*.svg
 
 # Docker data
 docker/data/
+
+# Local report rendering intermediates
+/tmp/
