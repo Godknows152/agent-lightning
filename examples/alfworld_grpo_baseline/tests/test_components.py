@@ -155,10 +155,10 @@ def test_alfworld_rollout_metrics_expose_three_penalty_series():
     }
 
 
-def test_alfworld_reward_ignores_repeats_for_success_and_failure():
+def test_alfworld_reward_exempts_successful_trajectories_from_repeat_cost():
     from alfworld_baseline.reward import compute_score
 
-    # Successful trajectories retain the terminal reward regardless of repeats.
+    # Successful trajectories retain the terminal reward despite repeats.
     assert compute_score(
         "alfworld",
         extra_info={
@@ -166,8 +166,8 @@ def test_alfworld_reward_ignores_repeats_for_success_and_failure():
             "alfworld_terminal_reason": "success",
             "alfworld_repeated_action_penalty_count": 4,
         },
-    ) == 10.0
-    # Failed trajectories also receive no repeated-action penalty.
+    ) == pytest.approx(10.0)
+    # Failed trajectories pay the same flat per-repeat cost.
     assert compute_score(
         "alfworld",
         extra_info={
@@ -175,11 +175,22 @@ def test_alfworld_reward_ignores_repeats_for_success_and_failure():
             "alfworld_terminal_reason": "decision_limit",
             "alfworld_repeated_action_penalty_count": 3,
         },
-    ) == pytest.approx(0.0)
+    ) == pytest.approx(-0.3)
 
 
-@pytest.mark.parametrize("repeat_count", [0, 1, 2, 3, 15])
-def test_alfworld_reward_accumulates_action_penalties_without_repeat_cost(repeat_count):
+@pytest.mark.parametrize("reason", ["success", ["success"]])
+def test_success_repeat_exemption_keeps_missing_and_invalid_action_costs(reason):
+    from alfworld_baseline.reward import compute_score
+
+    assert compute_score("alfworld", extra_info={
+        "tool_rewards": [-0.2, -0.2, 10.0],
+        "alfworld_terminal_reason": reason,
+        "alfworld_repeated_action_penalty_count": [49],
+    }) == pytest.approx(9.6)
+
+
+@pytest.mark.parametrize("repeat_count", [0, 1, 2, 3, 15, 49])
+def test_alfworld_reward_accumulates_action_penalties_with_repeat_cost(repeat_count):
     from alfworld_baseline.reward import compute_score
 
     assert compute_score(
@@ -189,7 +200,7 @@ def test_alfworld_reward_accumulates_action_penalties_without_repeat_cost(repeat
             "alfworld_terminal_reason": "no_tool_call",
             "alfworld_repeated_action_penalty_count": [repeat_count],
         },
-    ) == pytest.approx(-0.4)
+    ) == pytest.approx(-0.4 - 0.1 * repeat_count)
 
 
 def test_invalid_action_is_reported_to_agent_loop_without_tool_level_reward(monkeypatch):

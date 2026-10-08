@@ -4,8 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-REPEATED_ACTION_PENALTY = 0.0
-REPEATED_ACTION_PENALTY_INCREMENT = 0.0
+REPEATED_ACTION_PENALTY = -0.1
 
 
 def _first(value: Any) -> Any:
@@ -30,8 +29,10 @@ def compute_score(
     Each decision without a parseable action appends a ``-0.2`` penalty and continues
     within the decision budget, retaining previous rewards. Complete but invalid XML
     decisions receive ``-0.2`` and may continue. Both penalties accumulate into
-    one episode score. Repeated valid actions are counted for telemetry only:
-    both their base penalty and increment are zero, matching the step backend.
+    one episode score. Each valid execution of a command already executed in
+    this trajectory costs -0.1, whether consecutive or not. The first execution
+    is free. Successful trajectories are exempt from repeated-action costs;
+    their missing/invalid-action penalties still apply.
     """
     if data_source != "alfworld":
         raise ValueError(f"ALFWorld reward received unexpected data_source={data_source!r}")
@@ -39,14 +40,9 @@ def compute_score(
     rewards = info.get("tool_rewards", [])
     if isinstance(rewards, Sequence) and not isinstance(rewards, (str, bytes, bytearray)):
         base_score = float(sum(float(item) for item in rewards))
-        reward_values = [float(item) for item in rewards]
     else:
         reward = _first(rewards)
         base_score = float(reward or 0.0)
-        reward_values = [base_score]
-
-    terminal_reason = _first(info.get("alfworld_terminal_reason"))
-    success = terminal_reason == "success" or any(value >= 10.0 for value in reward_values)
     repeat_count = _first(info.get("alfworld_repeated_action_penalty_count", 0))
     try:
         repeat_count = max(0, int(repeat_count or 0))
@@ -54,9 +50,7 @@ def compute_score(
         repeat_count = 0
 
     # Apply the aggregate penalty exactly once, after the whole trajectory is
-    # available. Successful trajectories are exempt from repeated-action costs.
-    repeated_penalty = 0.0 if success else (
-        REPEATED_ACTION_PENALTY * repeat_count
-        - REPEATED_ACTION_PENALTY_INCREMENT * repeat_count * (repeat_count - 1) / 2
-    )
+    # available. Per-step tool_rewards do not contain repeated-action costs.
+    success = _first(info.get("alfworld_terminal_reason")) == "success"
+    repeated_penalty = 0.0 if success else REPEATED_ACTION_PENALTY * repeat_count
     return base_score + repeated_penalty

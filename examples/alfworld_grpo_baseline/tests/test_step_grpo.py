@@ -160,7 +160,7 @@ def test_only_missing_and_invalid_actions_are_penalized(success):
     )
 
 
-@pytest.mark.parametrize("success,expected", [(True, 9.6), (False, -0.4)])
+@pytest.mark.parametrize("success,expected", [(True, 9.6), (False, -0.6)])
 def test_legacy_backend_accumulates_aligned_penalties_per_trajectory(
     success, expected
 ):

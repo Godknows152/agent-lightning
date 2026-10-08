@@ -316,7 +316,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
     ALFWORLD_NO_TOOL_CALL_PENALTY = -0.2
     ALFWORLD_INVALID_TOOL_CALL_PENALTY = -0.2
-    ALFWORLD_REPEATED_ACTION_PENALTY = 0.0
+    ALFWORLD_REPEATED_ACTION_PENALTY = -0.1
 
     def _record_alfworld_penalty(
         self,
@@ -333,7 +333,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         but schema-invalid decision or an action rejected by the environment.
         Each missing or invalid action costs -0.2 and consumes one decision
         without ending the trajectory. Repeated valid actions are counted
-        across the whole trajectory for telemetry but receive no penalty.
+        across the whole trajectory; the trajectory reward applies their cost
+        once at finalization. The step backend chooses its own cost separately.
         """
         if kind == "no_tool_call":
             count_key = "alfworld_no_tool_call_penalty_count"
@@ -665,8 +666,8 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             agent_data.action_history.append(action)
             if not metrics.get("error"):
                 # Count every occurrence after the first one, regardless of
-                # whether it is consecutive. This is telemetry only: repeated
-                # valid actions no longer incur a reward penalty.
+                # whether it is consecutive. Keep costs out of tool_rewards:
+                # each backend applies its own repeated-action reward once.
                 prior_occurrences = agent_data.successful_action_history.count(action)
                 if prior_occurrences > 0:
                     extra_fields = agent_data.extra_fields

@@ -411,7 +411,7 @@ def test_generated_tokens_preserved_and_feedback_precedes_next_generation():
     (["go to desk 1", "go to desk 2", "go to desk 1"], [1, 1, 1], 1),
     (["look"] * 16, [1] * 16, 15),
 ])
-def test_trajectory_action_repeat_counts_are_telemetry_only(
+def test_trajectory_action_repeats_are_charged_once_at_finalization(
     actions, expected_rewards, repeat_count
 ):
     loop = make_loop(max_steps=50)
@@ -443,10 +443,10 @@ def test_trajectory_action_repeat_counts_are_telemetry_only(
     assert data.extra_fields.get("alfworld_no_tool_call_penalty_count", 0) == actions.count(None)
     from alfworld_baseline.reward import compute_score
 
-    # Repetition counts never change the accumulated trajectory score.
+    # Nonconsecutive repeats accumulate once, independently of other penalties.
     assert compute_score(
         "alfworld", extra_info={**data.extra_fields, "tool_rewards": data.tool_rewards}
-    ) == pytest.approx(sum(expected_rewards))
+    ) == pytest.approx(sum(expected_rewards) - 0.1 * repeat_count)
     other = make_data(loop)
     asyncio.run(step(other, "look"))
     assert other.tool_rewards == [1.0]
@@ -480,12 +480,12 @@ def test_pending_state_resets_consecutive_action_streak(monkeypatch):
 
 
 @pytest.mark.parametrize("prior", [1, 2, 4, 5, 6, 15])
-def test_repeat_penalty_is_zero_for_every_repeated_occurrence(prior):
+def test_repeat_penalty_is_flat_for_every_repeated_occurrence(prior):
     loop = make_loop()
     data = make_data(loop)
     value = loop._record_alfworld_penalty(data, "repeated_action", append_reward=True, prior_occurrences=prior)
-    assert value == 0.0
-    assert data.tool_rewards == [0.0]
+    assert value == -0.1
+    assert data.tool_rewards == [-0.1]
     assert data.extra_fields["alfworld_repeated_action_penalty_count"] == 1
 
 def test_repeated_action_penalty_remains_independent_of_no_call_penalty():
@@ -493,6 +493,6 @@ def test_repeated_action_penalty_remains_independent_of_no_call_penalty():
     data = make_data(loop)
     penalties = [loop._record_alfworld_penalty(data, "repeated_action", append_reward=False,
                                               prior_occurrences=i) for i in range(1, 16)]
-    assert sum(penalties) == 0.0
+    assert sum(penalties) == pytest.approx(-1.5)
     assert loop.ALFWORLD_NO_TOOL_CALL_PENALTY == -0.2
-    assert sum(penalties) > loop.ALFWORLD_NO_TOOL_CALL_PENALTY
+    assert loop.ALFWORLD_REPEATED_ACTION_PENALTY == -0.1
