@@ -4,6 +4,9 @@
 trainer:
   resume_mode: auto
   resume_from_path: null
+  # Keep this separate backend's existing budget independent of the 2B profile.
+  total_epochs: 1
+  total_training_steps: 150
 
 ray_kwargs:
   ray_init:

@@ -10,7 +10,9 @@ CONFIG_NAME="alfworld_config_2gpu"
 SEED="${SEED:-0}"
 RUN_KIND="full"
 FOREGROUND="${ALFWORLD_FOREGROUND:-0}"
-TOTAL_STEPS="${ALFWORLD_TOTAL_STEPS:-150}"
+# Full runs use the YAML budget unless explicitly overridden. null derives it
+# from total_epochs and the training dataset; smoke/pilot still cap their steps.
+TOTAL_STEPS="${ALFWORLD_TOTAL_STEPS:-}"
 TRAINING_BACKEND="${ALFWORLD_TRAINING_BACKEND:-trajectory}"
 backend_overrides=()
 case "${TRAINING_BACKEND}" in
@@ -63,7 +65,7 @@ Environment:
   ALFWORLD_TRAINING_BACKEND=trajectory|gigpo_grpo  Episode GRPO (default) or local-cost step GRPO
   SEED=0|1|2                 Output/checkpoint seed directory (default: 0)
   ALFWORLD_FOREGROUND=1      Keep launcher attached; default is background
-  ALFWORLD_TOTAL_STEPS=150   Full-run step count
+  ALFWORLD_TOTAL_STEPS=N     Optional step cap override; unset uses YAML, null uses epochs
   ALFWORLD_SWANLAB_MODE=cloud|offline|local
   ALFWORLD_SWANLAB_LOG_DIR=/path/to/swanlab
   ALFWORLD_LOG_DIR=/path/to/log
@@ -257,12 +259,14 @@ overrides=(
   # Hydra needs its own quoted string values for Chinese paths and experiment names.
   "trainer.default_local_dir=\"${OUTPUT_DIR}\""
   "trainer.experiment_name=\"${EXPERIMENT_NAME}\""
-  "trainer.total_training_steps=${TOTAL_STEPS}"
   "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_MODE=${SWANLAB_MODE}"
   "ray_kwargs.ray_init.runtime_env.env_vars.SWANLAB_LOG_DIR=\"${SWANLAB_LOG_DIR}\""
   "ray_kwargs.ray_init.runtime_env.env_vars.VERL_LOG_DIR=\"${LOG_DIR}\""
   "variables.SEED=${SEED}"
 )
+if [[ -n "${TOTAL_STEPS}" ]]; then
+  overrides+=("trainer.total_training_steps=${TOTAL_STEPS}")
+fi
 # Native veRL's ``resume_mode=auto`` resolves the latest checkpoint in
 # ``trainer.default_local_dir``. The ALFWorld entry validates checkpoint shards
 # and reconnects SwanLab using the persisted run ID.

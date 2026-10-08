@@ -45,6 +45,31 @@ def test_unspecified_name_keeps_existing_default(tmp_path):
     assert launch_name(tmp_path) == "alfworld_qwen35_2b_v1_seed0"
 
 
+@pytest.mark.parametrize("kind,explicit,expected", [
+    ("full", None, None), ("full", "42", "42"), ("full", "null", "null"),
+    ("smoke", None, "1"), ("pilot", None, "5"), ("pilot", "7", "7"),
+])
+def test_launcher_preserves_yaml_budget_and_diagnostic_caps(tmp_path, kind, explicit, expected):
+    script = (ROOT / "scripts/run_alfworld_grpo_2gpu.sh").read_text()
+    assignment = next(line for line in script.splitlines() if line.startswith("TOTAL_STEPS="))
+    diagnostic = 'if [[ "${RUN_KIND}" == "smoke" ]]; then' + script.split(
+        'if [[ "${RUN_KIND}" == "smoke" ]]; then', 1
+    )[1].split('\nif [[ "${TRAINING_BACKEND}"', 1)[0]
+    overrides = "overrides=(\n" + script.split("\noverrides=(\n", 1)[1].split("# Native veRL", 1)[0]
+    env = dict(os.environ, RUN_KIND=kind, ROOT=str(tmp_path), MODEL_PROFILE="qwen35_2b",
+               SEED="0", OUTPUT_DIR=str(tmp_path), LOG_DIR=str(tmp_path),
+               SWANLAB_LOG_DIR=str(tmp_path), SWANLAB_MODE="offline", EXPERIMENT_NAME="test")
+    env.pop("ALFWORLD_TOTAL_STEPS", None)
+    if explicit is not None:
+        env["ALFWORLD_TOTAL_STEPS"] = explicit
+    args = subprocess.check_output(
+        ["bash", "-eu", "-c", assignment + "\n" + diagnostic + "\n" + overrides
+         + '\nprintf "%s\\n" "${overrides[@]}"'], env=env, text=True,
+    ).splitlines()
+    step_args = [arg for arg in args if arg.startswith("trainer.total_training_steps=")]
+    assert step_args == ([] if expected is None else [f"trainer.total_training_steps={expected}"])
+
+
 @pytest.mark.parametrize("resume_overlay", [False, True])
 def test_native_tracking_uses_composed_run_identity(tmp_path, monkeypatch, resume_overlay):
     with initialize_config_dir(config_dir=str(CONFIG_DIR), version_base=None):
@@ -59,6 +84,8 @@ def test_native_tracking_uses_composed_run_identity(tmp_path, monkeypatch, resum
         assert cfg.ray_kwargs.ray_init._node_ip_address == os.environ.get("ALFWORLD_RAY_NODE_IP", "10.246.1.30")
     else:
         assert cfg.trainer.resume_mode == "auto"
+        assert cfg.trainer.total_epochs == 3
+        assert cfg.trainer.total_training_steps is None
         assert cfg.trainer.experiment_name == launch_name(CONFIG_DIR)
     if resume_overlay:
         (tmp_path / "latest_checkpointed_iteration.txt").write_text("20")

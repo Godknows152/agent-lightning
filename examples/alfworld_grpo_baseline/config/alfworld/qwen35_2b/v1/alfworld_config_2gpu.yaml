@@ -50,11 +50,17 @@ actor_rollout_ref:
 
   actor:
     optim:
-      lr: 3.0e-5
+      lr: 3.0e-6
+      lr_scheduler_type: cosine
+      # Warm up for 20% of training, then decay from 3e-6 to 1e-6 over a half-cosine.
+      min_lr_ratio: 0.3333333333333333
+      num_cycles: 0.5
+      lr_warmup_steps: -1
+      lr_warmup_steps_ratio: 0.2
     calculate_entropy: true
     # Regularize against the frozen initial policy.
     use_kl_loss: true
-    entropy_coeff: 0.01
+    entropy_coeff: 0.001
     kl_loss_coef: 0.001
     kl_loss_type: low_var_kl
     ppo_mini_batch_size: 16
@@ -81,10 +87,13 @@ actor_rollout_ref:
     use_fused_kernels: false
 
 trainer:
-  experiment_name: 0927_22点19新建
+  experiment_name: 1001_success_repeat_exempt_from150
   resume_mode: auto
+  total_epochs: 3
+  # Native veRL derives the budget from dataset size and train_batch_size.
+  total_training_steps: null
   # This experiment has its own checkpoint and tracking directory.
-  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/0927_22点19新建
+  default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/1001_success_repeat_exempt_from150
 
 algorithm:
   # Apply reference KL in the actor loss only, not a second time in rewards.
