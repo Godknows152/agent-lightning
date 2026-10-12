@@ -32,6 +32,11 @@ class ALFWorldActorRolloutRefWorker(ActorRolloutRefWorker):
 class ALFWorldWorkerMixin:
     def _init_resource_pool_mgr(self) -> None:
         super()._init_resource_pool_mgr()
+        worker_cls = ALFWorldActorRolloutRefWorker
+        if self.config.actor_rollout_ref.get("branch_entropy", {}).get("enabled", False):
+            from .branch_entropy_engine import BranchEntropyActorWorker
+
+            worker_cls = BranchEntropyActorWorker
         for role in (Role.ActorRollout, Role.ActorRolloutRef):
             if role in self.role_worker_mapping:
-                self.role_worker_mapping[role] = ray.remote(ALFWorldActorRolloutRefWorker)
+                self.role_worker_mapping[role] = ray.remote(worker_cls)

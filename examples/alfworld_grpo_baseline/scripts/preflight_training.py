@@ -82,6 +82,8 @@ def main() -> int:
     with initialize_config_dir(config_dir=str(args.config_dir.resolve()), version_base=None):
         cfg = compose(config_name=args.config_name, overrides=overrides)
     validate_native_step_config(cfg)
+    from alfworld_baseline.branch_entropy import validate_branch_entropy_config
+    validate_branch_entropy_config(cfg)
     from alfworld_baseline.full_finetuning import validate_full_finetuning
     validate_full_finetuning(cfg)
     if args.resume_config:

@@ -56,6 +56,7 @@ class ALFWorldTaskRunner:
         from verl.trainer.ppo.v1 import AgentLoopManagerTQ, get_trainer_cls
         from alfworld_baseline.validation_logging import ALFWorldValidationLoggingMixin
         from alfworld_baseline.workers import ALFWorldWorkerMixin
+        from alfworld_baseline.branch_entropy_engine import BranchEntropyTrainerMixin
 
         base_trainer = get_trainer_cls(config.trainer.v1.trainer_mode)
         if OmegaConf.select(config, "variables.TRAINING_BACKEND", default="trajectory") == "gigpo_grpo":
@@ -64,7 +65,7 @@ class ALFWorldTaskRunner:
             from alfworld_baseline import step_advantage  # noqa: F401
         trainer_cls = type(
             "ALFWorldTrainer",
-            (ALFWorldWorkerMixin, ALFWorldMetricsMixin, ALFWorldValidationLoggingMixin, base_trainer),
+            (ALFWorldWorkerMixin, BranchEntropyTrainerMixin, ALFWorldMetricsMixin, ALFWorldValidationLoggingMixin, base_trainer),
             {},
         )
         config.transfer_queue.enable = True
@@ -106,6 +107,9 @@ def main(config):
     from alfworld_baseline.full_finetuning import validate_full_finetuning
     validate_full_finetuning(config)
     validate_native_step_config(config)
+    from alfworld_baseline.branch_entropy import validate_branch_entropy_config
+
+    validate_branch_entropy_config(config)
     configure_environment_driven_rollout(config)
     # Validate the effective config, including CLI overrides, before starting Ray.
     omega_conf_to_dataclass(config.actor_rollout_ref.rollout)

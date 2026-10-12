@@ -33,6 +33,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         config = getattr(self, "config", {})
+        self._branch_entropy_enabled = config.get("actor_rollout_ref", {}).get("branch_entropy", {}).get("enabled", False)
         variables = config.get("variables", {}) if hasattr(config, "get") else {}
         prompt_name = variables.get("PROMPT_PROFILE", "gigpo")
         self._prompt_profile = get_prompt_profile(str(prompt_name))
@@ -581,6 +582,15 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             )
             agent_data.alfworld_xml_decision = decision
             agent_data.alfworld_pending_action = decision.action
+            if getattr(self, "_branch_entropy_enabled", False):
+                from .branch_entropy import FIELD, locate_action_branches
+
+                # Snapshot the legal commands BEFORE executing the selected action.
+                agent_data.step_outputs[-1].extra_fields[FIELD] = locate_action_branches(
+                    self.tokenizer, prompt, list(response_ids),
+                    decision.action if decision.status == "valid" else None,
+                    list(agent_data.alfworld_current_actions),
+                )
             agent_data.tool_calls = [] if decision.status != "valid" else [FunctionCall(
                 name="alfworld_action", arguments=json.dumps({"action": decision.action})
             )]

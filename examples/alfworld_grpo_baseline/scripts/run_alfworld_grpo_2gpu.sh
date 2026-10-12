@@ -44,6 +44,7 @@ case "${MODEL_PROFILE}" in
 esac
 
 # Resolve the versioned model override as well as the shared model profile.
+CONFIG_PATH="${ALFWORLD_CONFIG_PATH:-${CONFIG_PATH}}"
 MODEL_PATH="$("${PYTHON_BIN}" - "${CONFIG_PATH}" "${CONFIG_NAME}" <<'PYMODEL'
 import sys
 from hydra import compose, initialize_config_dir
@@ -61,6 +62,7 @@ Usage:
 
 Environment:
   ALFWORLD_MODEL_PROFILE=qwen25_1_5b|qwen35_2b|qwen35_9b  Select an isolated model profile
+  ALFWORLD_CONFIG_PATH=/absolute/config/directory  Select an opt-in versioned configuration
   ALFWORLD_SFT_MODEL=/path/to/full/model  Override the standalone SFT checkpoint
   ALFWORLD_TRAINING_BACKEND=trajectory|gigpo_grpo  Episode GRPO (default) or local-cost step GRPO
   SEED=0|1|2                 Output/checkpoint seed directory (default: 0)
