@@ -8,9 +8,18 @@ from verl.single_controller.base.decorator import Dispatch, register
 from verl.trainer.ppo.utils import Role
 from verl.workers.engine_workers import ActorRolloutRefWorker
 
+from .gpu_mapping import install_cuda_device_mapping
+
+# Import runs in both the trainer and the remote colocated worker processes.
+install_cuda_device_mapping()
+
 
 class ALFWorldActorRolloutRefWorker(ActorRolloutRefWorker):
     def __init__(self, config: DictConfig, role: str, **kwargs: Any) -> None:
+        if config.get("reference_resident", False):
+            from .reference_engine import ResidentReferenceWorker
+
+            self.ref_worker_cls = ResidentReferenceWorker
         if "rollout" in role and config.rollout.name == "sglang":
             from verl.workers.rollout.base import _ROLLOUT_REGISTRY
 
@@ -20,6 +29,11 @@ class ALFWorldActorRolloutRefWorker(ActorRolloutRefWorker):
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def init_model(self) -> None:
         super().init_model()
+        if self.ref is not None and self.config.get("reference_resident", False):
+            if self.ref.engine.optimizer is not None or not self.ref.engine.engine_config.forward_only:
+                raise RuntimeError("Resident reference must remain inference-only without an optimizer")
+            if any(not parameter.is_cuda for parameter in self.ref.engine.module.parameters()):
+                raise RuntimeError("Resident reference has parameters outside CUDA")
         if self.actor is not None and self.config.model.lora_rank == 0:
             parameters = list(self.actor.engine.module.named_parameters())
             frozen = [name for name, parameter in parameters if not parameter.requires_grad]
