@@ -4,6 +4,10 @@
 
 ## 两套可选奖励与优势后端（2026-09-23）
 
+另有独立的 [动作分叉熵实验配置](ACTION_BRANCH_ENTROPY.md)：在 thinking 中首次出现最终动作的
+合法候选 token 分叉上增加 loss 正则，使用 action-explicit SFT 全模型，保留原轨迹 GRPO 奖励。
+入口为 `scripts/alfworld/qwen35_2b_branch_entropy.sh`，原入口默认关闭该功能。
+
 原入口仍默认使用 `trajectory`，新增入口使用 `gigpo_grpo`。两者共用环境、模型和严格 XML
 协议，但奖励分配、优势计算及默认输出目录独立。
 

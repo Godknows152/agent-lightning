@@ -1,0 +1,474 @@
+{
+  "date": "2026-10-12",
+  "purpose": "Step-60 engineering-only throughput tuning for no_branch_entropy_1012",
+  "checkpoint": "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/no_branch_entropy_1012/global_step_60",
+  "swanlab_run_id": "pvcq0m01",
+  "devices": [
+    0,
+    1
+  ],
+  "baseline_steps_41_60": {
+    "step_mean_seconds": 488.8704,
+    "gen_mean_seconds": 198.876,
+    "ref_mean_seconds": 58.1827,
+    "actor_mean_seconds": 223.2044
+  },
+  "capture": {
+    "step": 61,
+    "rows": 5900,
+    "sequence_length_min": 399,
+    "sequence_length_mean": 613.8081,
+    "sequence_length_max": 1217,
+    "sha256": "03a71ed5a3f894d9b44e302cef235a75176386416fcd70a63ed8debc9506f5d8"
+  },
+  "method": {
+    "native_engine": "FSDPEngineWithLMHead",
+    "loss": "native ppo_loss including unchanged entropy and KL",
+    "global_optimizer_minibatch_rows": 128,
+    "ordinary_entropy_coefficient": 0.001,
+    "branch_entropy_enabled": false,
+    "reserved_rollout_gib": 3,
+    "allocator_expandable_segments": true,
+    "checkpoint_reload_before_each_dataset": true,
+    "warmup_excluded": true,
+    "timed_repetitions": 2,
+    "gradients": "First representative 128-row update, 256 evenly spaced elements per local gradient parameter",
+    "warning": "BF16 and CUDA kernels are not bitwise deterministic; later minibatch losses vary slightly even in repeated baseline runs.",
+    "harness_sha256": "fc1cdadee5a6f587733f6dc81c1dc2489a66c8b97112c169496f61486c4f155b"
+  },
+  "trials": {
+    "baseline24k": {
+      "name": "baseline24k",
+      "tokens": 24576,
+      "gradient_checkpointing": true,
+      "rows": 5900,
+      "sequence_length_max": 1217,
+      "results": [
+        {
+          "dataset": "representative512",
+          "repetition": 0,
+          "seconds": 19.21417808532715,
+          "allocated_gib": 51.146034240722656,
+          "reserved_gib": 57.716796875,
+          "losses": [
+            0.06319037824869156,
+            0.06237483024597168,
+            0.04693300276994705,
+            0.06200611591339111
+          ],
+          "grad_norms": [
+            2.125,
+            2.34375,
+            1.7265625,
+            2.015625
+          ]
+        },
+        {
+          "dataset": "longest128",
+          "repetition": 0,
+          "seconds": 7.679031848907471,
+          "allocated_gib": 49.0437126159668,
+          "reserved_gib": 57.345703125,
+          "losses": [
+            0.018348392099142075
+          ],
+          "grad_norms": [
+            2.734375
+          ]
+        },
+        {
+          "dataset": "representative512",
+          "repetition": 1,
+          "seconds": 19.362335205078125,
+          "allocated_gib": 51.146034240722656,
+          "reserved_gib": 57.716796875,
+          "losses": [
+            0.06319037824869156,
+            0.06238902360200882,
+            0.0470673143863678,
+            0.06207301467657089
+          ],
+          "grad_norms": [
+            2.125,
+            2.4375,
+            1.859375,
+            2.09375
+          ]
+        },
+        {
+          "dataset": "longest128",
+          "repetition": 1,
+          "seconds": 7.634913921356201,
+          "allocated_gib": 49.0437126159668,
+          "reserved_gib": 57.345703125,
+          "losses": [
+            0.018348392099142075
+          ],
+          "grad_norms": [
+            2.734375
+          ]
+        },
+        {
+          "dataset": "gradient_check128",
+          "repetition": -1,
+          "seconds": 4.739418983459473,
+          "allocated_gib": 42.8591423034668,
+          "reserved_gib": 50.078125,
+          "losses": [
+            0.06319037824869156
+          ],
+          "grad_norms": [
+            2.125
+          ]
+        }
+      ],
+      "summary": {
+        "representative512": {
+          "seconds_mean": 19.288256645202637,
+          "allocated_gib_max": 51.146034240722656,
+          "reserved_gib_max": 57.716796875
+        },
+        "longest128": {
+          "seconds_mean": 7.656972885131836,
+          "allocated_gib_max": 49.0437126159668,
+          "reserved_gib_max": 57.345703125
+        }
+      }
+    },
+    "tokens32k": {
+      "name": "tokens32k",
+      "tokens": 32768,
+      "gradient_checkpointing": true,
+      "rows": 5900,
+      "sequence_length_max": 1217,
+      "results": [
+        {
+          "dataset": "representative512",
+          "repetition": 0,
+          "seconds": 19.64799690246582,
+          "allocated_gib": 51.146034240722656,
+          "reserved_gib": 57.716796875,
+          "losses": [
+            0.06319037824869156,
+            0.06222637742757797,
+            0.04693101346492767,
+            0.06204187870025635
+          ],
+          "grad_norms": [
+            2.125,
+            2.40625,
+            1.8046875,
+            2.0625
+          ]
+        },
+        {
+          "dataset": "longest128",
+          "repetition": 0,
+          "seconds": 7.165665626525879,
+          "allocated_gib": 63.72056579589844,
+          "reserved_gib": 71.78125,
+          "losses": [
+            0.018348384648561478
+          ],
+          "grad_norms": [
+            2.734375
+          ]
+        },
+        {
+          "dataset": "representative512",
+          "repetition": 1,
+          "seconds": 19.577085494995117,
+          "allocated_gib": 51.146034240722656,
+          "reserved_gib": 57.697265625,
+          "losses": [
+            0.06319037824869156,
+            0.06230299174785614,
+            0.04693180322647095,
+            0.061991360038518906
+          ],
+          "grad_norms": [
+            2.125,
+            2.453125,
+            1.734375,
+            2.109375
+          ]
+        },
+        {
+          "dataset": "longest128",
+          "repetition": 1,
+          "seconds": 7.213329792022705,
+          "allocated_gib": 63.72056579589844,
+          "reserved_gib": 71.7421875,
+          "losses": [
+            0.018348384648561478
+          ],
+          "grad_norms": [
+            2.734375
+          ]
+        },
+        {
+          "dataset": "gradient_check128",
+          "repetition": -1,
+          "seconds": 4.967662334442139,
+          "allocated_gib": 42.85944747924805,
+          "reserved_gib": 50.01953125,
+          "losses": [
+            0.06319037824869156
+          ],
+          "grad_norms": [
+            2.125
+          ]
+        }
+      ],
+      "summary": {
+        "representative512": {
+          "seconds_mean": 19.61254119873047,
+          "allocated_gib_max": 51.146034240722656,
+          "reserved_gib_max": 57.716796875
+        },
+        "longest128": {
+          "seconds_mean": 7.189497709274292,
+          "allocated_gib_max": 63.72056579589844,
+          "reserved_gib_max": 71.78125
+        }
+      },
+      "gradient_comparison": {
+        "0": {
+          "sample_elements": 12544,
+          "cosine": 0.9997851236085425,
+          "relative_l2": 0.020735173739348623,
+          "max_abs": 1.33514404296875e-05
+        },
+        "1": {
+          "sample_elements": 12544,
+          "cosine": 0.9997752827434009,
+          "relative_l2": 0.0212345697277264,
+          "max_abs": 4.57763671875e-05
+        }
+      }
+    },
+    "no_gc12k": {
+      "name": "no_gc12k",
+      "tokens": 12288,
+      "gradient_checkpointing": false,
+      "rows": 5900,
+      "sequence_length_max": 1217,
+      "results": [
+        {
+          "dataset": "representative512",
+          "repetition": 0,
+          "seconds": 18.26030921936035,
+          "allocated_gib": 67.54360961914062,
+          "reserved_gib": 75.078125,
+          "losses": [
+            0.06319037079811096,
+            0.06235629320144653,
+            0.04692176729440689,
+            0.06217481940984726
+          ],
+          "grad_norms": [
+            2.125,
+            2.40625,
+            1.796875,
+            2.078125
+          ]
+        },
+        {
+          "dataset": "longest128",
+          "repetition": 0,
+          "seconds": 7.867415904998779,
+          "allocated_gib": 62.73783874511719,
+          "reserved_gib": 70.1875,
+          "losses": [
+            0.018348395824432373
+          ],
+          "grad_norms": [
+            2.734375
+          ]
+        },
+        {
+          "dataset": "representative512",
+          "repetition": 1,
+          "seconds": 18.227672576904297,
+          "allocated_gib": 67.54360961914062,
+          "reserved_gib": 75.0390625,
+          "losses": [
+            0.06319037079811096,
+            0.06248820573091507,
+            0.04698412865400314,
+            0.062201131135225296
+          ],
+          "grad_norms": [
+            2.125,
+            2.3125,
+            1.796875,
+            2.09375
+          ]
+        },
+        {
+          "dataset": "longest128",
+          "repetition": 1,
+          "seconds": 7.939079284667969,
+          "allocated_gib": 62.73783874511719,
+          "reserved_gib": 70.1875,
+          "losses": [
+            0.018348395824432373
+          ],
+          "grad_norms": [
+            2.734375
+          ]
+        },
+        {
+          "dataset": "gradient_check128",
+          "repetition": -1,
+          "seconds": 4.926372528076172,
+          "allocated_gib": 66.44744873046875,
+          "reserved_gib": 73.943359375,
+          "losses": [
+            0.06319037079811096
+          ],
+          "grad_norms": [
+            2.125
+          ]
+        }
+      ],
+      "summary": {
+        "representative512": {
+          "seconds_mean": 18.243990898132324,
+          "allocated_gib_max": 67.54360961914062,
+          "reserved_gib_max": 75.078125
+        },
+        "longest128": {
+          "seconds_mean": 7.903247594833374,
+          "allocated_gib_max": 62.73783874511719,
+          "reserved_gib_max": 70.1875
+        }
+      },
+      "gradient_comparison": {
+        "0": {
+          "sample_elements": 12544,
+          "cosine": 0.9997949730640097,
+          "relative_l2": 0.0203646711800809,
+          "max_abs": 2.09808349609375e-05
+        },
+        "1": {
+          "sample_elements": 12544,
+          "cosine": 0.9998414290944121,
+          "relative_l2": 0.017818785501921754,
+          "max_abs": 2.288818359375e-05
+        }
+      }
+    }
+  },
+  "decision": "Keep the original 24576-token actor budget and gradient checkpointing. 32768 does not improve representative throughput; disabling checkpointing at 12288 saves only about 2.5% of estimated whole-step time and uses substantially more memory.",
+  "permanent_config_change": {
+    "trainer.resume_mode": [
+      "disable",
+      "auto"
+    ]
+  },
+  "scope": "Actor dynamic microbatch budget and activation recomputation only. Not an exhaustive search of all system optimizations.",
+  "decision_estimated_whole_step_gain_no_checkpoint": 0.024718781917963728,
+  "cleanup": {
+    "temporary_paths_removed": [
+      "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/.runtime/throughput_step60_trials_20261012",
+      "/home/LXJ/Python_Projects/Agent_Lightning/outputs/2026-10-12/21-56-51",
+      "/home/LXJ/tmp/ray/session_2026-10-12_21-56-52_349613_364423",
+      "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/no_branch_entropy_1012/full/alfworld_v1_seed0_20261012_221951.log",
+      "/home/LXJ/tmp/ray/session_2026-10-12_22-20-24_062718_442039",
+      "/home/LXJ/Python_Projects/Agent_Lightning/outputs/2026-10-12/22-20-23"
+    ],
+    "trial_processes_remaining": 0
+  },
+  "resume_startup_repair": {
+    "failed_pid": 442039,
+    "error": "torch_memory_saver pause cudaHostAlloc invalid argument; kernel __gup_longterm_locked order-8 allocation failure on NUMA node 0",
+    "repair": "POSIX_FADV_DONTNEED on 8 files belonging to this experiment (SFT safetensors and step60 actor .pt), 17.44 GiB total; no global cache flush, no kernel settings changed",
+    "verification": "512 MiB and 1 GiB pinned host allocation + checked H2D transfers passed on both GPU 0 and GPU 1",
+    "training_state": "Failure occurred before checkpoint restore or any optimizer update; resume remains at step60"
+  },
+  "resume_verified": {
+    "pid": 473422,
+    "verified_at": "2026-10-12T22:32:25.982320+08:00",
+    "checkpoint_step": 60,
+    "active_step": 61,
+    "optimizer_rng_scheduler_restored_both_ranks": true,
+    "cloud_state": "RUNNING",
+    "url": "https://swanlab.cn/@Godknows/ALFWorldRL/runs/pvcq0m01",
+    "log": "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/no_branch_entropy_1012/full/alfworld_v1_seed0_20261012_222542.log",
+    "runtime_config_diff": [
+      "trainer.resume_mode",
+      "trainer.resume_from_path"
+    ],
+    "completion_scope": "Background resume verified in active rollout; no long-running supervision requested.",
+    "existing_step61": "Already present before stop, retained by standard SwanLab resume; recomputed step61 is local, new cloud metrics continue from step62.",
+    "later_outcome": "Failed at 22:33:54 during reference forward, before any resumed optimizer step; startup-only verification was insufficient."
+  },
+  "resume_failure_followup": {
+    "failure_stage": "FSDP reference lazy init: flat_param._local_shard.pin_memory()",
+    "requested_pinned_bytes": 2147483648,
+    "kernel_evidence": "order-10 GFP_KERNEL contiguous metadata allocation failure; Cannot map 0x80000 pages",
+    "cloud_misclassification": "Native veRL Tracking.finish ignored exit_code for SwanLab and sent success on failure",
+    "repairs": [
+      "ALFWorld-local terminal-state forwarding for SwanLab",
+      "Opt-in GPU-resident reference engine; native model loading, BF16, sharding and inference unchanged"
+    ],
+    "system_actions": [
+      "One-time clean page-cache reclaim (drop_caches=1)",
+      "One-time memory compaction",
+      "One-time reclaimable metadata-cache reclaim (drop_caches=2)"
+    ],
+    "system_result": "Large pinned blocks remain scarce; use resident reference instead of depending on large host-pinned allocations. No persistent sysctl changes.",
+    "runtime_config_diff": [
+      {
+        "key": "actor_rollout_ref.reference_resident",
+        "old": null,
+        "new": true
+      },
+      {
+        "key": "actor_rollout_ref.ref.fsdp_config.param_offload",
+        "old": true,
+        "new": false
+      },
+      {
+        "key": "trainer.resume_from_path",
+        "old": null,
+        "new": "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/no_branch_entropy_1012/global_step_60"
+      },
+      {
+        "key": "trainer.resume_mode",
+        "old": "disable",
+        "new": "resume_path"
+      }
+    ],
+    "validation": {
+      "cpu_tests_passed": 26,
+      "pinned_probe": "2 GiB host allocation and checked H2D transfer succeeded for both visible GPUs after reclaim and compaction; resident reference avoids dependence on this large allocation",
+      "startup_pid": 577011,
+      "checkpoint_restored_both_ranks": true,
+      "model_optimizer_rng_scheduler_restored": true,
+      "verification_pending": null
+    },
+    "full_step_verified": {
+      "verified_at": "2026-10-12T23:30:12.117279+08:00",
+      "pid": 577011,
+      "checkpoint_step": 60,
+      "completed_step": 61,
+      "active_step": 62,
+      "log": "/home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/log/alfworld/qwen35_2b/no_branch_entropy_1012/full/alfworld_v1_seed0_20261012_231418.log",
+      "metrics": {
+        "training/global_step": 61.0,
+        "actor/grad_norm": 2.2940104166666666,
+        "actor/lr": 1.37593984962406e-06,
+        "timing_s/step": 581.2557433089241,
+        "timing_s/ref": 62.37512899655849,
+        "timing_s/update_actor": 242.5778986159712,
+        "perf/max_memory_allocated_gb": 55.68459367752075
+      },
+      "reference_resident": true,
+      "tests_passed": 26,
+      "run_id": "pvcq0m01",
+      "verification_scope": "Full resumed training step including reference inference, actor optimizer updates and local scalar logging completed; next rollout started."
+    }
+  }
+}
