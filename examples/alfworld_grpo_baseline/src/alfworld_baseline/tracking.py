@@ -4,6 +4,28 @@ import json
 from pathlib import Path
 
 
+def finish_tracking(tracking, *, error: BaseException | None = None) -> None:
+    """Preserve failures when finishing native veRL's SwanLab backend.
+
+    Native tracking forwards exit codes to some backends, but calls SwanLab
+    without its terminal state. Finish that backend explicitly and let native
+    tracking close the remaining backends exactly once.
+    """
+    if getattr(tracking, "_finished", False):
+        return
+    swanlab = getattr(tracking, "logger", {}).pop("swanlab", None)
+    try:
+        if swanlab is not None:
+            if error is None:
+                swanlab.finish(state="success")
+            elif isinstance(error, (KeyboardInterrupt, SystemExit)):
+                swanlab.finish(state="aborted")
+            else:
+                swanlab.finish(state="crashed", error=f"{type(error).__name__}: {error}")
+    finally:
+        tracking.finish(exit_code=0 if error is None else 1)
+
+
 @contextmanager
 def swanlab_resume(config):
     """Pass an explicit run identity without changing native trainer code.

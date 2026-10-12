@@ -18,6 +18,34 @@ CONFIG_DIR = ROOT / "config/alfworld/qwen35_2b/v1"
 BACKEND = Path(os.environ.get("ALFWORLD_VERL_ROOT", "/home/LXJ/Python_Projects/verl"))
 
 
+@pytest.mark.parametrize("error,state,exit_code", [
+    (None, "success", 0),
+    (RuntimeError("reference pinned allocation failed"), "crashed", 1),
+    (KeyboardInterrupt(), "aborted", 1),
+])
+def test_native_tracking_preserves_terminal_state(monkeypatch, error, state, exit_code):
+    from alfworld_baseline.tracking import finish_tracking
+
+    calls = []
+    fake = SimpleNamespace(init=lambda **kw: None, finish=lambda **kw: calls.append(kw))
+    monkeypatch.setitem(sys.modules, "swanlab", fake)
+    monkeypatch.delenv("SWANLAB_API_KEY", raising=False)
+    spec = importlib.util.spec_from_file_location("tracking_finish_test", BACKEND / "verl/utils/tracking.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    tracking = module.Tracking("test", "test", default_backend=["swanlab"])
+    other_calls = []
+    tracking.logger["wandb"] = SimpleNamespace(finish=lambda **kw: other_calls.append(kw))
+    finish_tracking(tracking, error=error)
+    finish_tracking(tracking, error=error)
+    tracking.finish()
+    expected = {"state": state}
+    if state == "crashed":
+        expected["error"] = "RuntimeError: reference pinned allocation failed"
+    assert calls == [expected]
+    assert other_calls == [{"exit_code": exit_code}]
+
+
 def launch_name(config_dir: Path, kind: str = "full") -> str:
     # Execute the actual name-selection block, excluding preflight/launch code.
     script = (ROOT / "scripts/run_alfworld_grpo_2gpu.sh").read_text()

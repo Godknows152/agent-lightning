@@ -72,7 +72,7 @@ class ALFWorldTaskRunner:
         OmegaConf.resolve(config)
         tq.init(config.transfer_queue)
         trainer = None
-        succeeded = False
+        failure = None
         try:
             trainer = trainer_cls(config=config)
             trainer.init()
@@ -87,12 +87,15 @@ class ALFWorldTaskRunner:
             from alfworld_baseline.tracking import swanlab_resume
             with swanlab_resume(config):
                 trainer.fit(manager)
-            succeeded = True
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             try:
                 tracking = getattr(trainer, "logger", None)
                 if tracking is not None:
-                    tracking.finish(exit_code=0 if succeeded else 1)
+                    from alfworld_baseline.tracking import finish_tracking
+                    finish_tracking(tracking, error=failure)
             finally:
                 tq.close()
 
