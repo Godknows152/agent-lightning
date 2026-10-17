@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from typing import Any, Literal
@@ -53,6 +54,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         self._thinking_enabled = bool(
             self.apply_chat_template_kwargs.get("enable_thinking", self._gigpo_prompt)
         )
+        self._thinking_action_once_reward = float(variables.get("THINKING_ACTION_ONCE_REWARD", 0.0))
+        if not math.isfinite(self._thinking_action_once_reward) or self._thinking_action_once_reward < 0:
+            raise ValueError("THINKING_ACTION_ONCE_REWARD must be finite and nonnegative")
+        if self._thinking_action_once_reward and not (self._thinking_enabled and self._xml_actions):
+            raise ValueError("Thinking action rewards require thinking and XML actions")
         if self._thinking_enabled and not self._text_actions:
             self.tool_parser = ThinkingToolParser(self.tool_parser, self.tokenizer)
         tool = self.tools.get("alfworld_action")
@@ -104,6 +110,15 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
 
         extra = dict(data.extra_fields, tool_rewards=list(data.tool_rewards))
         score = compute_score("alfworld", extra_info=extra)
+        reward_info = {"score": score}
+        if "alfworld_thinking_action_reward" in extra:
+            bonus = float(extra["alfworld_thinking_action_reward"])
+            extra["alfworld_base_reward"] = score - bonus
+            reward_info.update(
+                base_reward=score - bonus,
+                thinking_action_reward=bonus,
+                success=float(extra.get("alfworld_terminal_reason") == "success"),
+            )
         # Native V1 normalizes final rows once per session, then broadcasts
         # the resulting advantage to all steps. Every row keeps its actual
         # inference prompt and original generated IDs/log probabilities.
@@ -113,7 +128,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             output.extra_fields.update(
                 alfworld_step_index=index,
                 alfworld_is_final_step=index == len(data.step_outputs) - 1,
-                reward_extra_info={"score": score},
+                reward_extra_info=dict(reward_info),
             )
             if index == len(data.step_outputs) - 1:
                 output.metrics = type(output.metrics)(**data.metrics)
@@ -576,12 +591,36 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             return AgentState.PROCESSING_TOOLS
 
         if getattr(self, "_xml_actions", False):
+            response_text = self.tokenizer.decode(response_ids, skip_special_tokens=False)
             decision = parse_xml_decision(
-                self.tokenizer.decode(response_ids, skip_special_tokens=False),
+                response_text,
                 enable_thinking=self._thinking_enabled,
             )
             agent_data.alfworld_xml_decision = decision
             agent_data.alfworld_pending_action = decision.action
+            coefficient = getattr(self, "_thinking_action_once_reward", 0.0)
+            if coefficient:
+                from .thinking_action_reward import count_thinking_action_mentions
+
+                mentions = count_thinking_action_mentions(
+                    response_text, decision.action if decision.status == "valid" else None
+                )
+                matched_once = int(mentions == 1)
+                bonus = coefficient * matched_once
+                # This is a per-decision bonus, accumulated once per episode.
+                # Task success and admissibility do not gate the requested
+                # textual consistency condition; original penalties still apply.
+                fields = agent_data.extra_fields
+                fields["alfworld_thinking_action_reward"] = (
+                    float(fields.get("alfworld_thinking_action_reward", 0.0)) + bonus
+                )
+                fields["alfworld_thinking_action_once_count"] = (
+                    int(fields.get("alfworld_thinking_action_once_count", 0)) + matched_once
+                )
+                agent_data.step_outputs[-1].extra_fields.update(
+                    alfworld_thinking_action_mention_count=mentions,
+                    alfworld_thinking_action_step_reward=bonus,
+                )
             if getattr(self, "_branch_entropy_enabled", False):
                 from .branch_entropy import FIELD, locate_action_branches
 

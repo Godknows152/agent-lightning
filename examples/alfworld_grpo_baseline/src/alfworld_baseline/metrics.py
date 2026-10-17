@@ -97,4 +97,17 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
             "alfworld/valid_action_count/mean": float(valid_tool_calls.mean()),
         }
     )
+    if "alfworld_thinking_action_reward" in non_tensor_batch:
+        bonuses = np.asarray(non_tensor_batch["alfworld_thinking_action_reward"], dtype=np.float64).reshape(-1)
+        base_rewards = np.asarray(non_tensor_batch["alfworld_base_reward"], dtype=np.float64).reshape(-1)
+        result.update(
+            {
+                "alfworld_reward/thinking_action_once_total": float(bonuses.sum()),
+                "alfworld_reward/thinking_action_once_mean": float(bonuses.mean()),
+                "alfworld_reward/base_reward_mean": float(base_rewards.mean()),
+                "alfworld_reward/thinking_action_once_count": _sum_count_field(
+                    non_tensor_batch.get("alfworld_thinking_action_once_count", 0)
+                ),
+            }
+        )
     return result

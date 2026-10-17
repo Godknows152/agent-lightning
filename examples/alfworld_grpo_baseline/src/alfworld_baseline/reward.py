@@ -33,6 +33,8 @@ def compute_score(
     this trajectory costs -0.1, whether consecutive or not. The first execution
     is free. Successful trajectories are exempt from repeated-action costs;
     their missing/invalid-action penalties still apply.
+    Opt-in thinking/action consistency bonuses are accumulated once per decision
+    by the agent loop and added once to this episode score, on success or failure.
     """
     if data_source != "alfworld":
         raise ValueError(f"ALFWorld reward received unexpected data_source={data_source!r}")
@@ -53,4 +55,5 @@ def compute_score(
     # available. Per-step tool_rewards do not contain repeated-action costs.
     success = _first(info.get("alfworld_terminal_reason")) == "success"
     repeated_penalty = 0.0 if success else REPEATED_ACTION_PENALTY * repeat_count
-    return base_score + repeated_penalty
+    thinking_bonus = float(_first(info.get("alfworld_thinking_action_reward", 0.0)) or 0.0)
+    return base_score + repeated_penalty + thinking_bonus
