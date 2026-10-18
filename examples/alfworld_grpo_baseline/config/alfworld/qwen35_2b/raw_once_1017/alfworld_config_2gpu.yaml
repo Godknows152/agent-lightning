@@ -1,4 +1,4 @@
-# Raw release model; baseline settings plus +0.1 for exactly one thinking action mention.
+# Raw release model; baseline settings plus +0.1 for at least two thinking action mentions.
 # Ordinary token entropy remains 0.001; action branch entropy remains disabled.
 hydra:
   searchpath:
@@ -13,7 +13,7 @@ variables:
   PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v3
   SFT_ADAPTER: null
   SFT_MODEL: ${variables.BASE_MODEL}
-  THINKING_ACTION_ONCE_REWARD: 0.1
+  THINKING_ACTION_REPEAT_REWARD: 0.1
   SWANLAB_NEW_RUN_ON_RESUME: false
 data:
   apply_chat_template_kwargs:

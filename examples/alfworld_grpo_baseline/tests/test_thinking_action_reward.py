@@ -70,11 +70,14 @@ def test_bonus_accumulates_once_and_preserves_native_step_data(coefficient, expe
         assert "alfworld_thinking_action_reward" not in outputs[-1].extra_fields
 
 
-def test_missing_or_malformed_xml_does_not_earn_bonus():
+@pytest.mark.parametrize("mode", ["once", "repeat"])
+def test_missing_or_malformed_xml_does_not_earn_bonus(mode):
     loop, calls, released, _ = episode()
     loop._thinking_enabled = True
-    loop._thinking_action_once_reward = 1.0
-    pending = iter(["look without closing thought", "look</think>" + CALL + CALL, "look</think>No XML"])
+    setattr(loop, f"_thinking_action_{mode}_reward", 1.0)
+    thinking = "look" if mode == "once" else "look, look"
+    pending = iter([thinking + " without closing thought", thinking + "</think>" + CALL + CALL,
+                    thinking + "</think>No XML"])
 
     async def generate(**kwargs):
         ids = loop.tokenizer.encode(next(pending))
@@ -87,6 +90,39 @@ def test_missing_or_malformed_xml_does_not_earn_bonus():
     assert released == ["instance"]
     assert all(out.reward_score == pytest.approx(-.6) for out in outputs)
     assert outputs[-1].extra_fields["alfworld_thinking_action_reward"] == 0
+
+
+@pytest.mark.parametrize("mentions", [0, 1, 2, 3, 8])
+def test_repeat_bonus_is_capped_per_decision_and_accumulates_per_episode(mentions):
+    loop, calls, released, _ = episode()
+    loop._thinking_enabled = True
+    loop._thinking_action_repeat_reward = 0.1
+    text = ", ".join(["look"] * mentions) + "</think>" + CALL
+
+    async def generate(**kwargs):
+        ids = loop.tokenizer.encode(text)
+        return SimpleNamespace(token_ids=ids, log_probs=[-.1] * len(ids),
+                               num_preempted=0, routed_experts=None)
+
+    loop.server_manager.generate = AsyncMock(side_effect=generate)
+    outputs = asyncio.run(loop.run({}, raw_prompt=[]))
+    expected_step_bonus = 0.1 if mentions >= 2 else 0.0
+    assert calls == ["look"] * 3
+    assert released == ["instance"]
+    assert all(out.extra_fields["alfworld_thinking_action_mention_count"] == mentions for out in outputs)
+    assert all(out.extra_fields["alfworld_thinking_action_step_reward"] == expected_step_bonus for out in outputs)
+    assert all(out.reward_score == pytest.approx(10 + 3 * expected_step_bonus) for out in outputs)
+    assert all(out.extra_fields["tool_rewards"] == [0.0, 0.0, 10.0] for out in outputs)
+    final = outputs[-1].extra_fields
+    assert final["alfworld_thinking_action_repeat_count"] == (3 if mentions >= 2 else 0)
+    assert "alfworld_thinking_action_once_count" not in final
+    metrics = compute_alfworld_rollout_metrics(SimpleNamespace(
+        non_tensor_batch={key: [value] for key, value in final.items()}
+    ))
+    assert metrics["alfworld_reward/thinking_action_repeat_total"] == pytest.approx(3 * expected_step_bonus)
+    assert metrics["alfworld_reward/thinking_action_repeat_count"] == (3 if mentions >= 2 else 0)
+    assert metrics["alfworld_reward/base_reward_mean"] == 10
+    assert "alfworld_reward/thinking_action_once_total" not in metrics
 
 
 def test_bonus_keeps_failure_penalties_and_does_not_require_success():
@@ -111,7 +147,8 @@ def test_raw_profile_only_changes_requested_baseline_settings(monkeypatch):
     baseline, raw = configs
     assert raw.actor_rollout_ref.model.path == raw.variables.BASE_MODEL
     assert raw.variables.SFT_ADAPTER is None
-    assert raw.variables.THINKING_ACTION_ONCE_REWARD == 0.1
+    assert raw.variables.THINKING_ACTION_REPEAT_REWARD == 0.1
+    assert raw.variables.get("THINKING_ACTION_ONCE_REWARD", 0) == 0
     assert raw.variables.SWANLAB_NEW_RUN_ON_RESUME is False
     assert raw.trainer.experiment_name == "原生无熵正则_1017"
     assert raw.trainer.resume_mode == "auto"
@@ -119,6 +156,6 @@ def test_raw_profile_only_changes_requested_baseline_settings(monkeypatch):
     for key in ("variables.SFT_ADAPTER", "variables.SFT_MODEL", "trainer.experiment_name",
                 "trainer.default_local_dir", "trainer.resume_mode"):
         OmegaConf.update(raw, key, OmegaConf.select(baseline, key))
-    del raw.variables.THINKING_ACTION_ONCE_REWARD
+    del raw.variables.THINKING_ACTION_REPEAT_REWARD
     del raw.variables.SWANLAB_NEW_RUN_ON_RESUME
     assert OmegaConf.to_container(raw, resolve=True) == OmegaConf.to_container(baseline, resolve=True)

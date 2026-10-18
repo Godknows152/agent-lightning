@@ -55,9 +55,18 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             self.apply_chat_template_kwargs.get("enable_thinking", self._gigpo_prompt)
         )
         self._thinking_action_once_reward = float(variables.get("THINKING_ACTION_ONCE_REWARD", 0.0))
-        if not math.isfinite(self._thinking_action_once_reward) or self._thinking_action_once_reward < 0:
-            raise ValueError("THINKING_ACTION_ONCE_REWARD must be finite and nonnegative")
-        if self._thinking_action_once_reward and not (self._thinking_enabled and self._xml_actions):
+        self._thinking_action_repeat_reward = float(variables.get("THINKING_ACTION_REPEAT_REWARD", 0.0))
+        for name, coefficient in (
+            ("THINKING_ACTION_ONCE_REWARD", self._thinking_action_once_reward),
+            ("THINKING_ACTION_REPEAT_REWARD", self._thinking_action_repeat_reward),
+        ):
+            if not math.isfinite(coefficient) or coefficient < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        if self._thinking_action_once_reward and self._thinking_action_repeat_reward:
+            raise ValueError("Choose either once or repeat thinking action rewards, not both")
+        if (self._thinking_action_once_reward or self._thinking_action_repeat_reward) and not (
+            self._thinking_enabled and self._xml_actions
+        ):
             raise ValueError("Thinking action rewards require thinking and XML actions")
         if self._thinking_enabled and not self._text_actions:
             self.tool_parser = ThinkingToolParser(self.tool_parser, self.tokenizer)
@@ -598,15 +607,19 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
             )
             agent_data.alfworld_xml_decision = decision
             agent_data.alfworld_pending_action = decision.action
-            coefficient = getattr(self, "_thinking_action_once_reward", 0.0)
+            repeat_coefficient = getattr(self, "_thinking_action_repeat_reward", 0.0)
+            coefficient = repeat_coefficient or getattr(self, "_thinking_action_once_reward", 0.0)
             if coefficient:
                 from .thinking_action_reward import count_thinking_action_mentions
 
                 mentions = count_thinking_action_mentions(
                     response_text, decision.action if decision.status == "valid" else None
                 )
-                matched_once = int(mentions == 1)
-                bonus = coefficient * matched_once
+                matched = int(mentions >= 2 if repeat_coefficient else mentions == 1)
+                bonus = coefficient * matched
+                count_key = "alfworld_thinking_action_repeat_count" if repeat_coefficient else (
+                    "alfworld_thinking_action_once_count"
+                )
                 # This is a per-decision bonus, accumulated once per episode.
                 # Task success and admissibility do not gate the requested
                 # textual consistency condition; original penalties still apply.
@@ -614,9 +627,7 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 fields["alfworld_thinking_action_reward"] = (
                     float(fields.get("alfworld_thinking_action_reward", 0.0)) + bonus
                 )
-                fields["alfworld_thinking_action_once_count"] = (
-                    int(fields.get("alfworld_thinking_action_once_count", 0)) + matched_once
-                )
+                fields[count_key] = int(fields.get(count_key, 0)) + matched
                 agent_data.step_outputs[-1].extra_fields.update(
                     alfworld_thinking_action_mention_count=mentions,
                     alfworld_thinking_action_step_reward=bonus,
