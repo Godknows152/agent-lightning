@@ -1,4 +1,4 @@
-# Raw release model; baseline settings plus +1 for exactly one thinking action mention.
+# Raw release model; baseline settings plus +0.1 for exactly one thinking action mention.
 # Ordinary token entropy remains 0.001; action branch entropy remains disabled.
 hydra:
   searchpath:
@@ -13,7 +13,8 @@ variables:
   PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v3
   SFT_ADAPTER: null
   SFT_MODEL: ${variables.BASE_MODEL}
-  THINKING_ACTION_ONCE_REWARD: 1.0
+  THINKING_ACTION_ONCE_REWARD: 0.1
+  SWANLAB_NEW_RUN_ON_RESUME: false
 data:
   apply_chat_template_kwargs:
     enable_thinking: true
@@ -79,7 +80,7 @@ actor_rollout_ref:
     coefficient: 0.001
 trainer:
   experiment_name: 原生无熵正则_1017
-  resume_mode: disable
+  resume_mode: auto
   total_epochs: 3
   total_training_steps: null
   default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/原生无熵正则_1017

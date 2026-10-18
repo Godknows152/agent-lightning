@@ -33,7 +33,7 @@ def test_matches_only_complete_action_in_closed_thinking(thinking, action, expec
     assert count_thinking_action_mentions(thinking + CALL, action) == expected
 
 
-@pytest.mark.parametrize("coefficient,expected_score", [(0.0, 10.0), (1.0, 11.0)])
+@pytest.mark.parametrize("coefficient,expected_score", [(0.0, 10.0), (0.1, 10.1), (1.0, 11.0)])
 def test_bonus_accumulates_once_and_preserves_native_step_data(coefficient, expected_score):
     loop, calls, released, _ = episode()
     loop._thinking_enabled = True
@@ -54,17 +54,17 @@ def test_bonus_accumulates_once_and_preserves_native_step_data(coefficient, expe
     assert all(out.reward_score == pytest.approx(expected_score) for out in outputs)
     assert all(out.extra_fields["tool_rewards"] == [0.0, 0.0, 10.0] for out in outputs)
     if coefficient:
-        assert [out.extra_fields["alfworld_thinking_action_step_reward"] for out in outputs] == [1, 0, 0]
+        assert [out.extra_fields["alfworld_thinking_action_step_reward"] for out in outputs] == [coefficient, 0, 0]
         assert [out.extra_fields["alfworld_thinking_action_mention_count"] for out in outputs] == [1, 2, 0]
         final = outputs[-1].extra_fields
         assert final["alfworld_thinking_action_once_count"] == 1
         assert final["reward_extra_info"] == {
-            "score": 11.0, "base_reward": 10.0, "thinking_action_reward": 1.0, "success": 1.0,
+            "score": expected_score, "base_reward": 10.0, "thinking_action_reward": coefficient, "success": 1.0,
         }
         metrics = compute_alfworld_rollout_metrics(SimpleNamespace(
             non_tensor_batch={key: [value] for key, value in final.items()}
         ))
-        assert metrics["alfworld_reward/thinking_action_once_total"] == 1
+        assert metrics["alfworld_reward/thinking_action_once_total"] == coefficient
         assert metrics["alfworld_reward/base_reward_mean"] == 10
     else:
         assert "alfworld_thinking_action_reward" not in outputs[-1].extra_fields
@@ -111,12 +111,14 @@ def test_raw_profile_only_changes_requested_baseline_settings(monkeypatch):
     baseline, raw = configs
     assert raw.actor_rollout_ref.model.path == raw.variables.BASE_MODEL
     assert raw.variables.SFT_ADAPTER is None
-    assert raw.variables.THINKING_ACTION_ONCE_REWARD == 1
+    assert raw.variables.THINKING_ACTION_ONCE_REWARD == 0.1
+    assert raw.variables.SWANLAB_NEW_RUN_ON_RESUME is False
     assert raw.trainer.experiment_name == "原生无熵正则_1017"
-    assert raw.trainer.resume_mode == "disable"
+    assert raw.trainer.resume_mode == "auto"
     # Normalize only intentional overrides, then compare every resolved field.
     for key in ("variables.SFT_ADAPTER", "variables.SFT_MODEL", "trainer.experiment_name",
                 "trainer.default_local_dir", "trainer.resume_mode"):
         OmegaConf.update(raw, key, OmegaConf.select(baseline, key))
     del raw.variables.THINKING_ACTION_ONCE_REWARD
+    del raw.variables.SWANLAB_NEW_RUN_ON_RESUME
     assert OmegaConf.to_container(raw, resolve=True) == OmegaConf.to_container(baseline, resolve=True)

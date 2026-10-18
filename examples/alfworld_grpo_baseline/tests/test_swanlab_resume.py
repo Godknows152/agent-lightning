@@ -178,6 +178,62 @@ def test_new_run_identity_is_saved_before_training_and_patch_is_restored(tmp_pat
     assert 'resume' not in calls[0]
 
 
+@pytest.mark.parametrize("mode", ["auto", "resume_path"])
+def test_explicit_new_run_preserves_name_checkpoint_step_and_previous_identity(tmp_path, monkeypatch, mode):
+    from alfworld_baseline.tracking import swanlab_resume
+
+    cfg = OmegaConf.create({
+        "variables": {"SWANLAB_NEW_RUN_ON_RESUME": True},
+        "trainer": {"logger": ["swanlab"], "default_local_dir": str(tmp_path),
+                    "experiment_name": "原生无熵正则_1017", "resume_mode": mode,
+                    "resume_from_path": str(tmp_path / "global_step_40")},
+    })
+    marker = tmp_path / ".swanlab_experiment.json"
+    previous = {"experiment_name": cfg.trainer.experiment_name, "run_id": "old-id"}
+    marker.write_text(json.dumps(previous))
+    (tmp_path / "latest_checkpointed_iteration.txt").write_text("40")
+    calls, logs = [], []
+
+    def init(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(id=kwargs["id"])
+
+    fake = SimpleNamespace(init=init, log=lambda data, step: logs.append((data, step)), finish=lambda: None)
+    monkeypatch.setitem(sys.modules, "swanlab", fake)
+    with swanlab_resume(cfg):
+        fake.init(project="ALFWorldRL", experiment_name=cfg.trainer.experiment_name)
+    new = json.loads(marker.read_text())
+    assert new["run_id"] != previous["run_id"]
+    assert new["experiment_name"] == previous["experiment_name"]
+    assert calls[0]["resume"] == "never"
+    history = json.loads(next((tmp_path / "swanlab_identity_history").glob("*.json")).read_text())
+    assert history == {"previous": previous, "current": new, "resume_from_path": str(tmp_path / "global_step_40")}
+    assert logs == [({"training/resumed_from_step": 40}, 40)]
+    assert (tmp_path / "latest_checkpointed_iteration.txt").read_text() == "40"
+    assert fake.init is init
+    # Ordinary future restarts reconnect to this new identity, without resetting again.
+    cfg.variables.SWANLAB_NEW_RUN_ON_RESUME = False
+    with swanlab_resume(cfg):
+        fake.init(project="ALFWorldRL", experiment_name=cfg.trainer.experiment_name)
+    assert calls[-1]["id"] == new["run_id"]
+    assert calls[-1]["resume"] == "must"
+    assert len(logs) == 1
+
+
+def test_new_tracking_run_requires_checkpoint_resume(tmp_path, monkeypatch):
+    from alfworld_baseline.tracking import swanlab_resume
+
+    cfg = OmegaConf.create({
+        "variables": {"SWANLAB_NEW_RUN_ON_RESUME": True},
+        "trainer": {"logger": ["swanlab"], "default_local_dir": str(tmp_path),
+                    "experiment_name": "run", "resume_mode": "disable"},
+    })
+    monkeypatch.setitem(sys.modules, "swanlab", SimpleNamespace(init=lambda **kw: pytest.fail("unexpected init")))
+    with pytest.raises(ValueError, match="requires an existing checkpoint"):
+        with swanlab_resume(cfg):
+            pass
+
+
 @pytest.mark.parametrize('case', ['missing_identity', 'wrong_name', 'orphan_identity', 'disable_existing'])
 def test_resume_rejects_invalid_identity_before_sdk_init(tmp_path, monkeypatch, case):
     from alfworld_baseline.tracking import swanlab_resume
