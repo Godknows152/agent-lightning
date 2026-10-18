@@ -196,7 +196,9 @@ def test_explicit_new_run_preserves_name_checkpoint_step_and_previous_identity(t
 
     def init(**kwargs):
         calls.append(kwargs)
-        return SimpleNamespace(id=kwargs["id"])
+        if kwargs.get("resume") == "never":
+            assert "id" not in kwargs  # Actual SwanLab 0.9 SDK contract.
+        return SimpleNamespace(id=kwargs.get("id", "new-id"))
 
     fake = SimpleNamespace(init=init, log=lambda data, step: logs.append((data, step)), finish=lambda: None)
     monkeypatch.setitem(sys.modules, "swanlab", fake)
@@ -206,6 +208,7 @@ def test_explicit_new_run_preserves_name_checkpoint_step_and_previous_identity(t
     assert new["run_id"] != previous["run_id"]
     assert new["experiment_name"] == previous["experiment_name"]
     assert calls[0]["resume"] == "never"
+    assert "id" not in calls[0]
     history = json.loads(next((tmp_path / "swanlab_identity_history").glob("*.json")).read_text())
     assert history == {"previous": previous, "current": new, "resume_from_path": str(tmp_path / "global_step_40")}
     assert logs == [({"training/resumed_from_step": 40}, 40)]

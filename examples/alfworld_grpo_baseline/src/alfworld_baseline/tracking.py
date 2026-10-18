@@ -2,7 +2,6 @@
 from contextlib import contextmanager
 import json
 from pathlib import Path
-import uuid
 
 
 def finish_tracking(tracking, *, error: BaseException | None = None) -> None:
@@ -61,14 +60,19 @@ def swanlab_resume(config):
         if not source.exists() or json.loads(source.read_text()) != identity:
             raise ValueError("Checkpoint and output directory must have the same SwanLab identity")
     original_init = swanlab.init
-    expected_id = uuid.uuid4().hex[:8] if new_run else (identity["run_id"] if identity else None)
+    expected_id = identity["run_id"] if identity and not new_run else None
 
     def init(**kwargs):
-        if expected_id:
-            kwargs.update(id=expected_id, resume="never" if new_run else "must")
+        if new_run:
+            # SwanLab 0.9 forbids an explicit ID with resume="never".
+            kwargs.pop("id", None)
+            kwargs.update(resume="never")
+        elif expected_id:
+            kwargs.update(id=expected_id, resume="must")
         run = original_init(**kwargs)
         run_id = getattr(run, "id", None)
-        if not run_id or (expected_id and run_id != expected_id):
+        if (not run_id or (expected_id and run_id != expected_id)
+                or (new_run and run_id == identity["run_id"])):
             swanlab.finish()
             raise RuntimeError("SwanLab did not return the requested run ID")
         root.mkdir(parents=True, exist_ok=True)
