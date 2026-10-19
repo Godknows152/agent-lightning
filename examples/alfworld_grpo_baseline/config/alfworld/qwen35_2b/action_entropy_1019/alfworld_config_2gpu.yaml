@@ -1,5 +1,5 @@
 # New training from merged raw-RL step150; no thinking/action consistency bonus.
-# First exact thinking mention only; native legal-branch entropy coefficient 0.0005.
+# First non-listing exact thinking mention only; native legal-branch entropy coefficient 0.0005.
 hydra:
   searchpath:
   - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
@@ -77,9 +77,10 @@ actor_rollout_ref:
   branch_entropy:
     enabled: true
     coefficient: 0.0005
+    mention_selection: first_non_listing
 trainer:
   experiment_name: 新动作熵1019
-  resume_mode: disable
+  resume_mode: auto
   total_epochs: 3
   total_training_steps: null
   default_local_dir: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/新动作熵1019

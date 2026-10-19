@@ -385,7 +385,8 @@ def test_unsupported_config_fails_before_ray(path, value):
         validate_branch_entropy_config(cfg)
 
 
-def test_loop_snapshots_state_and_queue_retains_metadata(tokenizer, monkeypatch):
+@pytest.mark.parametrize("selection", ["first", "first_non_listing"])
+def test_loop_snapshots_state_and_queue_retains_metadata(tokenizer, monkeypatch, selection):
     from test_native_step_pipeline import episode
     from verl.experimental.agent_loop.agent_loop import AgentLoopWorker
     from verl.trainer.ppo.v1 import AgentLoopWorkerTQ
@@ -393,10 +394,13 @@ def test_loop_snapshots_state_and_queue_retains_metadata(tokenizer, monkeypatch)
 
     loop, _, _, _ = episode()
     loop._branch_entropy_enabled = loop._thinking_enabled = True
+    loop._branch_mention_selection = selection
     loop.tokenizer = tokenizer
     loop.prompt_length = 2048
     loop.response_length = 768
-    _, prompt, response = align(tokenizer, "I will look.\n", "look", ["look", "inventory"])
+    _, prompt, response = align(
+        tokenizer, "Available actions:\n- look\n- inventory\n\nI will look.\n", "look", ["look", "inventory"]
+    )
     loop.apply_chat_template = AsyncMock(return_value=prompt)
     loop.server_manager.generate = AsyncMock(
         return_value=SimpleNamespace(
@@ -411,6 +415,7 @@ def test_loop_snapshots_state_and_queue_retains_metadata(tokenizer, monkeypatch)
         ("look", "inventory"),
     )
     outputs = asyncio.run(loop.run({}, raw_prompt=[]))
+    assert outputs[0].extra_fields[FIELD]["selected_mention_index"] == (2 if selection == "first_non_listing" else 1)
     assert len(outputs[0].extra_fields[FIELD]["nodes"]) == 1
     assert outputs[1].extra_fields[FIELD]["nodes"] == []  # next environment only allows 'look'
     assert all(output.response_ids == response and output.reward_score == 10 for output in outputs)
@@ -455,7 +460,8 @@ def test_trainer_attaches_weights_preserving_transfer_metadata(monkeypatch):
         extra_info={"sentinel": 7},
         fields=["input_ids", "extra_fields", "response_mask"],
     )
-    metadata = {FIELD: {"status": "matched", "nodes": [{"position": 0, "token_ids": [1, 2]}]}}
+    metadata = {FIELD: {"status": "matched", "nodes": [{"position": 0, "token_ids": [1, 2]}],
+                        "skipped_listing_count": 1, "selected_mention_index": 2}}
     monkeypatch.setattr(
         tq,
         "kv_batch_get",
@@ -482,3 +488,35 @@ def test_trainer_attaches_weights_preserving_transfer_metadata(monkeypatch):
     assert result.extra_info["branch_entropy_normalizer"] == 1
     assert stored["fields"]["branch_entropy_weight"].tolist() == [1.0, 0.5, 0.5, 0.0]
     assert metrics["alfworld_branch/matched_count"] == 3
+    assert metrics["alfworld_branch/listing_skipped_row_count"] == 3
+    assert metrics["alfworld_branch/listing_skipped_mention_count"] == 3
+    assert metrics["alfworld_branch/later_mention_selected_count"] == 3
+    assert metrics["alfworld_branch/only_listing_mentions_count"] == 0
+
+
+def test_non_listing_alignment_preserves_rollout_and_selects_later_tokens(tokenizer):
+    thought = "Available actions:\n- 'go to cabinet 1'\n- 'look'\n\nI choose go to cabinet 1.\n"
+    actions = ['go to cabinet 1', 'look']
+    old, prompt, response = align(tokenizer, thought, actions[0], actions)
+    snapshot = list(response)
+    new = locate_action_branches(
+        tokenizer, prompt, response, actions[0], actions, mention_selection='first_non_listing',
+    )
+    assert old['status'] == new['status'] == 'matched'
+    assert new['selected_mention_index'] == 2
+    assert new['skipped_listing_count'] == 1
+    assert min(n['position'] for n in new['nodes']) > max(n['position'] for n in old['nodes'])
+    assert response == snapshot
+    assert all(n['position'] < response.index(tokenizer.convert_tokens_to_ids('</think>')) for n in new['nodes'])
+
+
+def test_all_lists_never_align_to_xml_action(tokenizer):
+    thought = "Available actions:\n- 'go to cabinet 1'\n- 'look'\n"
+    actions = ['go to cabinet 1', 'look']
+    _, prompt, response = align(tokenizer, thought, actions[0], actions)
+    metadata = locate_action_branches(
+        tokenizer, prompt, response, actions[0], actions, mention_selection='first_non_listing',
+    )
+    assert metadata['status'] == 'only_listing_mentions'
+    assert metadata['nodes'] == []
+    assert metadata['skipped_listing_count'] == 1

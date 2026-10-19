@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections import Counter
 import math
-import re
 from typing import Any
 
 from omegaconf import OmegaConf
+
+from .action_mentions import MENTION_SELECTIONS, select_action_mention
 
 FIELD = "alfworld_branch_entropy"
 
@@ -20,6 +21,9 @@ def validate_branch_entropy_config(config: Any) -> None:
 
     if not get("actor_rollout_ref.branch_entropy.enabled", False):
         return
+    selection = get("actor_rollout_ref.branch_entropy.mention_selection", "first")
+    if selection not in MENTION_SELECTIONS:
+        raise ValueError(f"Unsupported branch entropy mention_selection: {selection}")
     coefficient = float(get("actor_rollout_ref.branch_entropy.coefficient", 0))
     if not math.isfinite(coefficient) or coefficient < 0:
         raise ValueError("branch_entropy.coefficient must be finite and nonnegative")
@@ -58,9 +62,13 @@ def locate_action_branches(
     response_ids: list[int],
     action: str | None,
     admissible_actions: list[str],
+    *,
+    mention_selection: str = "first",
 ) -> dict[str, Any]:
     """Build a context-tokenized trie and retain branches on the sampled action path.
 
+    ``mention_selection`` defaults to the legacy first exact mention. The opt-in
+    first_non_listing mode skips recognized candidate lists before trie alignment.
     Positions index *target response tokens*, not logits. The engine subtracts one
     after adding prompt length. Token IDs are never substituted into the rollout.
     Candidates include the observed continuation's first boundary token, allowing
@@ -91,9 +99,10 @@ def locate_action_branches(
     if open_tag < 0 and prompt_text.rfind("<think>") <= prompt_text.rfind("</think>"):
         return {**result, "status": "no_thinking"}
     start = open_tag + len("<think>") if open_tag >= 0 else 0
-    match = re.search(r"(?<![\w])" + re.escape(action) + r"(?![\w])", response_text[start:close])
+    match, mention_info = select_action_mention(response_text[start:close], action, actions, mention_selection)
+    result.update(mention_info)
     if match is None:
-        return {**result, "status": "no_mention"}
+        return {**result, "status": "only_listing_mentions" if mention_info["mention_count"] else "no_mention"}
 
     text = prompt_text + response_text
     begin = len(prompt_text) + start + match.start()

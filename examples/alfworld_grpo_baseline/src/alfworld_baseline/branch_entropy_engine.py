@@ -230,11 +230,21 @@ class BranchEntropyTrainerMixin:
             "not_admissible",
             "no_thinking",
             "no_mention",
+            "only_listing_mentions",
             "token_mismatch",
             "unstable_prefix",
             "ambiguous_boundary",
         ):
             metrics[f"alfworld_branch/{status}_count"] = counts[status]
+        metrics["alfworld_branch/listing_skipped_row_count"] = sum(
+            row.get("skipped_listing_count", 0) > 0 for row in real
+        )
+        metrics["alfworld_branch/listing_skipped_mention_count"] = sum(
+            row.get("skipped_listing_count", 0) for row in real
+        )
+        metrics["alfworld_branch/later_mention_selected_count"] = sum(
+            row.get("selected_mention_index", 0) > 1 for row in real
+        )
         metrics["alfworld_branch/match_fraction"] = counts["matched"] / len(real)
         metrics["alfworld_branch/eligible_fraction"] = sum(bool(row["nodes"]) for row in real) / len(real)
         metrics["alfworld_branch/node_count"] = sum(len(row["nodes"]) for row in real)
