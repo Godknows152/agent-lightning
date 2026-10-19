@@ -84,6 +84,8 @@ def main() -> int:
     validate_native_step_config(cfg)
     from alfworld_baseline.branch_entropy import validate_branch_entropy_config
     validate_branch_entropy_config(cfg)
+    from alfworld_baseline.checkpoint_retention import validate_checkpoint_retention
+    validate_checkpoint_retention(cfg)
     from alfworld_baseline.full_finetuning import validate_full_finetuning
     validate_full_finetuning(cfg)
     if args.resume_config:

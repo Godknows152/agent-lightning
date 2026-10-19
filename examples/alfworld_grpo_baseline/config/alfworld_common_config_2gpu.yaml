@@ -105,7 +105,11 @@ trainer:
   logger:
     - console
     - swanlab
-  max_actor_ckpt_to_keep: 6
+  # Best validation checkpoint plus the most recent checkpoints, five in total.
+  max_actor_ckpt_to_keep: 5
+  keep_best_checkpoint: true
+  # null selects val-core/alfworld/reward/mean@<validation rollout count>.
+  best_checkpoint_metric: null
   # ALFWorld logs its two task-specific penalty counters through the isolated
   # rollout-metrics hook; do not enable generic restoration penalty telemetry.
   enable_penalty_logging: false
