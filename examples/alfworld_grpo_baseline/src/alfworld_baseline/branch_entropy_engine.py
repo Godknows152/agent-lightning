@@ -123,6 +123,38 @@ class BranchEntropyEngine(FSDPEngineWithLMHead):
         model_config.model_type = "language_model"
         super().__init__(model_config, *args, **kwargs)
 
+    def _build_lr_scheduler(self, optimizer: torch.optim.Optimizer) -> Any:
+        config = self.optimizer_config
+        initial_ratio = getattr(config, "init_lr_ratio", 0.0)
+        if not initial_ratio:
+            return super()._build_lr_scheduler(optimizer)
+        from verl.utils.torch_functional import get_cosine_schedule_with_warmup
+
+        if config.lr_scheduler_type != "cosine":
+            raise ValueError("Nonzero init_lr_ratio requires the cosine scheduler")
+        warmup = config.lr_warmup_steps
+        if warmup is None or warmup <= 0:
+            warmup = int(config.lr_warmup_steps_ratio * config.total_training_steps)
+        if not 0 < warmup < config.total_training_steps:
+            raise ValueError("Nonzero initial warmup requires 0 < warmup steps < total steps")
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer=optimizer,
+            num_warmup_steps=warmup,
+            num_training_steps=config.total_training_steps,
+            min_lr_ratio=config.min_lr_ratio,
+            num_cycles=config.num_cycles,
+            init_lr_ratio=initial_ratio,
+            zero_indexed_step=config.zero_indexed_step,
+        )
+        if self.rank == 0:
+            print(
+                f"ALFWorld cosine LR: initial_lr={scheduler.get_last_lr()[0]:.12g}, "
+                f"peak_lr={config.lr:.12g}, warmup_steps={warmup}, "
+                f"total_steps={config.total_training_steps}",
+                flush=True,
+            )
+        return scheduler
+
     def prepare_model_outputs(
         self,
         output: Any,

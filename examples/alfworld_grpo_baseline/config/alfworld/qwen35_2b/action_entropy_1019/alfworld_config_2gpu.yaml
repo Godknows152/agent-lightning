@@ -46,12 +46,14 @@ actor_rollout_ref:
     log_prob_max_token_len_per_gpu: 65536
   actor:
     optim:
+      _target_: alfworld_baseline.optimizer_config.ALFWorldFSDPOptimizerConfig
       lr: 3.0e-06
+      init_lr_ratio: 0.0  # Native scheduler; zero warmup starts directly at peak lr.
       lr_scheduler_type: cosine
       min_lr_ratio: 0.3333333333333333
       num_cycles: 0.5
-      lr_warmup_steps: -1
-      lr_warmup_steps_ratio: 0.2
+      lr_warmup_steps: 0
+      lr_warmup_steps_ratio: 0.0
     calculate_entropy: true
     use_kl_loss: true
     entropy_coeff: 0.001
