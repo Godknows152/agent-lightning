@@ -1,5 +1,5 @@
-# New training from merged raw-RL step150; no thinking/action consistency bonus.
-# First non-listing exact thinking mention only; native legal-branch entropy coefficient 0.0005.
+# Initialized from merged raw-RL step150; resumed at step190 with entropy-eligibility reward.
+# First non-listing case-insensitive thinking mention; native legal-branch entropy coefficient 0.0007.
 hydra:
   searchpath:
   - file:///home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/config
@@ -12,7 +12,7 @@ variables:
   NUM_ROLLOUTS: 8
   PROMPT_VERSION: alfworld_gigpo_qwen3_xml_v3
   SFT_ADAPTER: null
-  SFT_MODEL: /home/LXJ/Python_Projects/Agent_Lightning/examples/alfworld_grpo_baseline/outputs/qwen3.5_2B/新动作熵1019/base_model_step150
+  SFT_MODEL: /home/LXJ/Python_Projects/Models/Qwen3.5-2B-ALFWorld-raw-RL-step150
   THINKING_ACTION_REPEAT_REWARD: 0.0
   BRANCH_ENTROPY_ELIGIBLE_REWARD: 0.05
   SWANLAB_NEW_RUN_ON_RESUME: false
