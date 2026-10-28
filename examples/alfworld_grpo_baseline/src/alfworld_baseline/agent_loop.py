@@ -59,9 +59,11 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         )
         self._thinking_action_once_reward = float(variables.get("THINKING_ACTION_ONCE_REWARD", 0.0))
         self._thinking_action_repeat_reward = float(variables.get("THINKING_ACTION_REPEAT_REWARD", 0.0))
+        self._branch_entropy_eligible_reward = float(variables.get("BRANCH_ENTROPY_ELIGIBLE_REWARD", 0.0))
         for name, coefficient in (
             ("THINKING_ACTION_ONCE_REWARD", self._thinking_action_once_reward),
             ("THINKING_ACTION_REPEAT_REWARD", self._thinking_action_repeat_reward),
+            ("BRANCH_ENTROPY_ELIGIBLE_REWARD", self._branch_entropy_eligible_reward),
         ):
             if not math.isfinite(coefficient) or coefficient < 0:
                 raise ValueError(f"{name} must be finite and nonnegative")
@@ -123,14 +125,17 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
         extra = dict(data.extra_fields, tool_rewards=list(data.tool_rewards))
         score = compute_score("alfworld", extra_info=extra)
         reward_info = {"score": score}
-        if "alfworld_thinking_action_reward" in extra:
-            bonus = float(extra["alfworld_thinking_action_reward"])
-            extra["alfworld_base_reward"] = score - bonus
-            reward_info.update(
-                base_reward=score - bonus,
-                thinking_action_reward=bonus,
-                success=float(extra.get("alfworld_terminal_reason") == "success"),
-            )
+        bonus_fields = {
+            "thinking_action_reward": "alfworld_thinking_action_reward",
+            "branch_entropy_eligible_reward": "alfworld_branch_entropy_eligible_reward",
+        }
+        bonuses = {name: float(extra[field]) for name, field in bonus_fields.items() if field in extra}
+        extra["alfworld_base_reward"] = score - sum(bonuses.values())
+        reward_info.update(
+            base_reward=extra["alfworld_base_reward"],
+            **bonuses,
+            success=float(extra.get("alfworld_terminal_reason") == "success"),
+        )
         # Native V1 normalizes final rows once per session, then broadcasts
         # the resulting advantage to all steps. Every row keeps its actual
         # inference prompt and original generated IDs/log probabilities.
@@ -639,12 +644,31 @@ class ALFWorldToolAgentLoop(ToolAgentLoop):
                 from .branch_entropy import FIELD, locate_action_branches
 
                 # Snapshot the legal commands BEFORE executing the selected action.
-                agent_data.step_outputs[-1].extra_fields[FIELD] = locate_action_branches(
+                branch_info = locate_action_branches(
                     self.tokenizer, prompt, list(response_ids),
                     decision.action if decision.status == "valid" else None,
                     list(agent_data.alfworld_current_actions),
                     mention_selection=getattr(self, "_branch_mention_selection", "first"),
                 )
+                step_fields = agent_data.step_outputs[-1].extra_fields
+                step_fields[FIELD] = branch_info
+                eligible_coefficient = getattr(self, "_branch_entropy_eligible_reward", 0.0)
+                if eligible_coefficient:
+                    # Reuse the actual alignment result, including token/trie checks.
+                    # A matched mention with only one candidate has no entropy node.
+                    eligible = int(branch_info["status"] == "matched" and bool(branch_info["nodes"]))
+                    bonus = eligible_coefficient * eligible
+                    fields = agent_data.extra_fields
+                    fields["alfworld_branch_entropy_eligible_reward"] = (
+                        float(fields.get("alfworld_branch_entropy_eligible_reward", 0.0)) + bonus
+                    )
+                    fields["alfworld_branch_entropy_eligible_count"] = (
+                        int(fields.get("alfworld_branch_entropy_eligible_count", 0)) + eligible
+                    )
+                    step_fields.update(
+                        alfworld_branch_entropy_eligible=bool(eligible),
+                        alfworld_branch_entropy_eligible_step_reward=bonus,
+                    )
             agent_data.tool_calls = [] if decision.status != "valid" else [FunctionCall(
                 name="alfworld_action", arguments=json.dumps({"action": decision.action})
             )]

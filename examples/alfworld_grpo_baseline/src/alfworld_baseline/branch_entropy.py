@@ -19,7 +19,13 @@ def validate_branch_entropy_config(config: Any) -> None:
     def get(path: str, default: Any = None) -> Any:
         return OmegaConf.select(config, path, default=default)
 
-    if not get("actor_rollout_ref.branch_entropy.enabled", False):
+    eligible_reward = float(get("variables.BRANCH_ENTROPY_ELIGIBLE_REWARD", 0.0))
+    if not math.isfinite(eligible_reward) or eligible_reward < 0:
+        raise ValueError("BRANCH_ENTROPY_ELIGIBLE_REWARD must be finite and nonnegative")
+    enabled = get("actor_rollout_ref.branch_entropy.enabled", False)
+    if eligible_reward and (not enabled or float(get("actor_rollout_ref.branch_entropy.coefficient", 0)) <= 0):
+        raise ValueError("BRANCH_ENTROPY_ELIGIBLE_REWARD requires enabled branch entropy with a positive coefficient")
+    if not enabled:
         return
     selection = get("actor_rollout_ref.branch_entropy.mention_selection", "first")
     if selection not in MENTION_SELECTIONS:

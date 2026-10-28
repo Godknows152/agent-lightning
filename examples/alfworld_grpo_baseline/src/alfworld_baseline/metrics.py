@@ -111,4 +111,15 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
                 ),
             }
         )
+    if "alfworld_branch_entropy_eligible_reward" in non_tensor_batch:
+        bonuses = np.asarray(non_tensor_batch["alfworld_branch_entropy_eligible_reward"], dtype=np.float64).reshape(-1)
+        base_rewards = np.asarray(non_tensor_batch["alfworld_base_reward"], dtype=np.float64).reshape(-1)
+        result.update({
+            "alfworld_reward/branch_entropy_eligible_total": float(bonuses.sum()),
+            "alfworld_reward/branch_entropy_eligible_mean": float(bonuses.mean()),
+            "alfworld_reward/branch_entropy_eligible_count": _sum_count_field(
+                non_tensor_batch.get("alfworld_branch_entropy_eligible_count", 0)
+            ),
+            "alfworld_reward/base_reward_mean": float(base_rewards.mean()),
+        })
     return result
