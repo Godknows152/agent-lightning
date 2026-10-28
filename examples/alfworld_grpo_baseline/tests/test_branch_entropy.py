@@ -85,6 +85,38 @@ def test_real_tokenizer_first_mention_shared_prefixes_numbers_and_dedup(tokenize
     assert all(n["position"] < response.index(tokenizer.convert_tokens_to_ids("</think>")) for n in metadata["nodes"])
 
 
+@pytest.mark.parametrize("observed,alternative", [
+    ("Go to cabinet 1", " Look"),
+    ("GO TO CABINET 1", " LOOK"),
+    ("Go To Cabinet 1", " Look"),
+    ("go to CABINET 1", " look"),
+    ("gO to cabinet 1", " lOok"),
+])
+def test_case_variants_align_to_original_tokens_at_earlier_plan(tokenizer, observed, alternative):
+    action = "go to cabinet 1"
+    thought = f"I should:\n1. {observed} because the target is there.\nI choose {action}.\n"
+    prompt = tokenizer.encode("<|im_start|>assistant\n<think>\n", add_special_tokens=False)
+    response = tokenizer.encode(thought + xml(action), add_special_tokens=False)
+    original = response.copy()
+    metadata = locate_action_branches(
+        tokenizer, prompt, response, action,
+        [action, "go to cabinet 2", "go to drawer 1", "look"],
+        mention_selection="first_non_listing",
+    )
+    assert metadata["status"] == "matched"
+    assert metadata["selected_mention_index"] == 1
+    assert metadata["mention_count"] == 2
+    assert response == original
+    # Alternative branches inherit the same spelling style, not a lower-case
+    # alternative competing against a capitalized sampled token.
+    first = metadata["nodes"][0]
+    alternative_ids = tokenizer.encode(alternative, add_special_tokens=False)
+    assert alternative_ids[0] in first["token_ids"]
+    assert response[first["position"]] in first["token_ids"]
+    first_end = len(tokenizer.encode(thought[:thought.index(" because")], add_special_tokens=False))
+    assert all(node["position"] < first_end for node in metadata["nodes"])
+
+
 @pytest.mark.parametrize(
     "thought,action,actions,status",
     [

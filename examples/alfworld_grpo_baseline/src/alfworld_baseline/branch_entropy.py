@@ -8,7 +8,7 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
-from .action_mentions import MENTION_SELECTIONS, select_action_mention
+from .action_mentions import MENTION_SELECTIONS, render_action_case, select_action_mention
 
 FIELD = "alfworld_branch_entropy"
 
@@ -67,7 +67,7 @@ def locate_action_branches(
 ) -> dict[str, Any]:
     """Build a context-tokenized trie and retain branches on the sampled action path.
 
-    ``mention_selection`` defaults to the legacy first exact mention. The opt-in
+    ``mention_selection`` defaults to the first case-insensitive full mention. The opt-in
     first_non_listing mode skips recognized candidate lists before trie alignment.
     Positions index *target response tokens*, not logits. The engine subtracts one
     after adding prompt length. Token IDs are never substituted into the rollout.
@@ -106,7 +106,8 @@ def locate_action_branches(
 
     text = prompt_text + response_text
     begin = len(prompt_text) + start + match.start()
-    end = begin + len(action)
+    end = len(prompt_text) + start + match.end()
+    observed = match.group()
     actual_ids = prompt_ids + response_ids
     encoded = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
     offsets = encoded["offset_mapping"]
@@ -116,9 +117,10 @@ def locate_action_branches(
 
     paths: dict[str, list[int]] = {}
     for candidate in actions:
-        candidate_end = begin + len(candidate)
+        rendered = render_action_case(candidate, observed)
+        candidate_end = begin + len(rendered)
         encoded_candidate = tokenizer(
-            text[:begin] + candidate + text[end:],
+            text[:begin] + rendered + text[end:],
             add_special_tokens=False,
             return_offsets_mapping=True,
         )
