@@ -166,5 +166,6 @@ class ALFWorldCheckpointRetentionMixin:
         best = best_checkpoint(root, metric, self.use_critic)
         if best is not None:
             metrics["checkpoint/best_step"] = best["step"]
-            metrics["checkpoint/best_validation_reward"] = best["value"]
+            name = "best_validation_success_rate" if "/success/" in metric else "best_validation_reward"
+            metrics[f"checkpoint/{name}"] = best["value"]
         return metrics

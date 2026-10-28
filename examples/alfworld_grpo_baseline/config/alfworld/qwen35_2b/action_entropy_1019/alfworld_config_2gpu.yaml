@@ -16,6 +16,7 @@ variables:
   THINKING_ACTION_REPEAT_REWARD: 0.0
   BRANCH_ENTROPY_ELIGIBLE_REWARD: 0.05
   SWANLAB_NEW_RUN_ON_RESUME: false
+  VALIDATION_TASK_METRICS: true
 data:
   apply_chat_template_kwargs:
     enable_thinking: true
@@ -82,6 +83,7 @@ actor_rollout_ref:
     coefficient: 0.0007
     mention_selection: first_non_listing
 trainer:
+  best_checkpoint_metric: val-core/alfworld/success/mean@1
   experiment_name: 新动作熵1019
   resume_mode: auto
   total_epochs: 3

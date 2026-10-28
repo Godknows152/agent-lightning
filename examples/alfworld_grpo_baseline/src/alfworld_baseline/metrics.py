@@ -59,6 +59,13 @@ def compute_alfworld_rollout_metrics(batch: Any) -> dict[str, int | float]:
         for name, count in termination_counts.items()
     }
     result["alfworld_termination/total_trajectories"] = int(len(reasons))
+    # The native metrics mixin supplies final, non-padding rows only: each
+    # trajectory has equal weight, independent of its number of decisions.
+    if len(reasons):
+        result["critic/success_rate"] = termination_counts["success"] / len(reasons)
+    if "alfworld_base_reward" in non_tensor_batch:
+        base_rewards = np.asarray(non_tensor_batch["alfworld_base_reward"], dtype=np.float64).reshape(-1)
+        result["critic/base_reward/mean"] = float(base_rewards.mean())
 
     for field, metric_name in _PENALTY_COUNT_FIELDS.items():
         result[metric_name] = _sum_count_field(non_tensor_batch.get(field))

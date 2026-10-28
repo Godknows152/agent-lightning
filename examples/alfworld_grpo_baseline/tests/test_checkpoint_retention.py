@@ -65,7 +65,7 @@ class NativeSaveHarness:
         shards(Path(local))
 
     def _validate(self):
-        return {METRIC: self.value}
+        return {self.config.trainer.get("best_checkpoint_metric") or METRIC: self.value}
 
 
 class Trainer(ALFWorldCheckpointRetentionMixin, NativeSaveHarness):
@@ -146,4 +146,19 @@ def test_async_save_is_rejected(tmp_path):
     trainer.config.actor_rollout_ref.actor.checkpoint.async_save = True
     with pytest.raises(ValueError, match="synchronous"):
         validate_checkpoint_retention(trainer.config)
+
+
+def test_success_selection_ignores_old_reward_metric_and_keeps_highest_success(tmp_path):
+    checkpoint(tmp_path, 10, 100)  # Old shaped reward is incomparable to success rate.
+    trainer = Trainer(tmp_path)
+    metric = "val-core/alfworld/success/mean@1"
+    trainer.config.trainer.best_checkpoint_metric = metric
+    for step, value in [(20, .3), (30, .2)]:
+        trainer.global_steps = step
+        trainer.value = value
+        trainer._save_checkpoint()
+        result = trainer._validate()
+    assert best_checkpoint(tmp_path, metric)["step"] == 20
+    assert result["checkpoint/best_validation_success_rate"] == .3
+    assert "checkpoint/best_validation_reward" not in result
 

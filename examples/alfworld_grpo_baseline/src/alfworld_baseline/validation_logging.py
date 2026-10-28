@@ -31,7 +31,7 @@ def trajectory_samples(
 
 
 class ALFWorldValidationLoggingMixin:
-    """Replace final-step previews with episode previews, leaving native metrics intact.
+    """Display episode previews and optionally promote task metrics over shaped reward.
 
     Native V1 calls the preview hook with final rows before calling the dump hook
     with every row. Defer the preview until the full data is available. A configured
@@ -44,6 +44,27 @@ class ALFWorldValidationLoggingMixin:
             return super()._validate()
         finally:
             self._alfworld_full_validation = False
+
+    def _val_metrics_update(
+        self, data_sources, sample_uids, reward_extra_infos_dict, sample_turns, expected_acc_counts=None,
+    ) -> dict[str, float]:
+        metrics = super()._val_metrics_update(
+            data_sources, sample_uids, reward_extra_infos_dict, sample_turns,
+            expected_acc_counts=expected_acc_counts,
+        )
+        if not self.config.get("variables", {}).get("VALIDATION_TASK_METRICS", False):
+            return metrics
+        n = self.config.actor_rollout_ref.rollout.val_kwargs.n
+        # Keep shaped reward as an auxiliary diagnostic, not a task-quality metric.
+        for key in list(metrics):
+            if key.startswith("val-core/alfworld/reward/"):
+                metrics[key.replace("val-core/", "val-aux/", 1)] = metrics.pop(key)
+        for name in ("success", "base_reward"):
+            source = f"val-aux/alfworld/{name}/mean@{n}"
+            if source not in metrics:
+                raise ValueError(f"Missing explicit validation task metric: {source}")
+            metrics[f"val-core/alfworld/{name}/mean@{n}"] = metrics.pop(source)
+        return metrics
 
     def _maybe_log_val_generations(self, inputs: list[str], outputs: list[str], scores: list[float]) -> None:
         if not getattr(self, "_alfworld_full_validation", False):
